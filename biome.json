@@ -1,0 +1,14 @@
+{
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "lineWidth": 120
+  },
+  "linter": {
+    "enabled": true
+  },
+  "files": {
+    "includes": ["app/**/*"]
+  },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } }
+}
