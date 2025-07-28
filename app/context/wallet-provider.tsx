@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PropsWithChildren } from "react";
 import colors from "tailwindcss/colors";
 import { type State, WagmiProvider } from "wagmi";
-import AddressAvatar from "../components/AddressAvatar";
+import AddressAvatar from "../components/address-avatar";
 import { WALLETCONNECT_CONFIG } from "../utils/wallet";
 
 interface Props extends PropsWithChildren {
@@ -24,8 +24,8 @@ export function WalletProvider(props: Props) {
           modalSize="compact"
           avatar={CustomAvatar}
           theme={lightTheme({
-            accentColor: colors.red[500],
-            accentColorForeground: colors.gray[900],
+            accentColor: colors.red[600],
+            accentColorForeground: colors.amber[900],
             borderRadius: "small",
             fontStack: "system",
             overlayBlur: "small",

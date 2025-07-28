@@ -2,7 +2,7 @@ import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration }
 
 import type { Route } from "./+types/root";
 import "./app.css";
-import { WalletProvider } from "./context/WalletProvider";
+import { WalletProvider } from "./context/wallet-provider";
 
 export const links: Route.LinksFunction = () => [];
 

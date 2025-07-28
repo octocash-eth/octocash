@@ -1,0 +1,68 @@
+import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { WalletTable } from "~/components/wallet-table";
+import { SITE_DESCRIPTION, SITE_NAME } from "~/data/site";
+import { useConnectedAddresses } from "~/hooks/use-connected-addresses";
+import { SupportedChains } from "./supported-chains";
+
+export function meta() {
+  return [{ title: SITE_NAME }, { name: "description", content: SITE_DESCRIPTION }];
+}
+
+export default function Home() {
+  const connectedAddresses = useConnectedAddresses();
+
+  return (
+    <div className="flex flex-col min-h-svh bg-gradient-to-br from-blue-50 to-purple-50">
+      {/* Header */}
+      <header className="w-full p-4">
+        <div className="flex items-center justify-between w-full max-w-7xl mx-auto">
+          <div className="flex items-center gap-2">
+            <div className="rounded flex items-center justify-center">
+              <span className="text-white font-bold text-lg">🐙</span>
+            </div>
+            <h1 className="text-xl font-bold text-red-600">{SITE_NAME}</h1>
+          </div>
+          {connectedAddresses.length > 0 ? (
+            <div>
+              <ConnectButton />
+            </div>
+          ) : null}
+        </div>
+      </header>
+
+      {connectedAddresses.length > 0 ? (
+        <div className="flex-1 p-4">
+          <div className="w-full max-w-7xl mx-auto">
+            <WalletTable connectedAddresses={connectedAddresses} />
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 flex flex-col items-center justify-center p-4">
+          <div className="w-full max-w-4xl mx-auto text-center">
+            {/* Main Content */}
+            <div className="flex flex-col lg:flex-row items-center justify-center gap-8 mb-12">
+              {/* Mascot Image */}
+              <div className="flex-shrink-0 animate-bounce [animation-duration:5s]">
+                <span className="text-[220px]">🐙</span>
+              </div>
+
+              {/* Main Text Content */}
+              <div className="flex flex-col items-center lg:items-start text-center lg:text-left">
+                <h2 className="text-4xl lg:text-5xl font-bold text-red-600 mb-4">{SITE_NAME}</h2>
+                <p className="text-lg text-gray-600 mb-8 max-w-md">{SITE_DESCRIPTION}</p>
+
+                {/* Connect Wallet Button */}
+                <div className="mb-8">
+                  <ConnectButton />
+                </div>
+              </div>
+            </div>
+
+            {/* Supported Chains Section */}
+            <SupportedChains />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
