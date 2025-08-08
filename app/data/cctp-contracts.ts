@@ -1,6 +1,6 @@
 import { arbitrum, avalanche, base, linea, mainnet, optimism, polygon, unichain } from "viem/chains";
 
-export const tokenAddresses = {
+export const tokenAddresses: Record<number, `0x${string}`> = {
   [mainnet.id]: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
   [avalanche.id]: "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
   [optimism.id]: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",

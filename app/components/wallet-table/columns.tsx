@@ -16,19 +16,21 @@ import {
 
 import { supportedChains } from "~/data/supported-chains";
 import AddressAvatar from "../address-avatar";
-import { zeroAddress } from "viem";
+import { zeroAddress, type Address } from "viem";
+import { useEnsName } from "wagmi";
 
 export type WalletData = {
   id: string;
-  wallet: string;
+  wallet: Address;
   token: string;
-  tokenName?: string;
-  tokenAddress?: string;
+  tokenName: string;
+  tokenAddress: Address;
   chain: string;
   amount: string;
   amountInUsd: number;
-  amountToConsolidate?: number;
+  amountToConsolidate?: string;
   iconUrl?: string;
+  decimals: number;
 };
 
 // Format the amount for display in the input
@@ -170,7 +172,7 @@ export const columns: ColumnDef<WalletData>[] = [
     cell: ({ row }) => (
       <div className="font-medium text-left flex items-center gap-2">
         <AddressAvatar addressOrEns={row.getValue("wallet") as string} size={20} />
-        {formatAddress(row.getValue("wallet"))}
+        <AddressDisplay address={row.getValue("wallet")} />
       </div>
     ),
     filterFn: (row, id, value) => {
@@ -274,7 +276,7 @@ export const columns: ColumnDef<WalletData>[] = [
           className="text-right font-medium flex items-center justify-end gap-2 cursor-pointer bg-transparent border-none p-0 w-full"
           onClick={handleCellClick}
           onKeyDown={handleKeyDown}
-          aria-label={isSelected ? "Modify consolidateion amount" : "Select row to set consolidateion amount"}
+          aria-label={isSelected ? "Modify amount to consolidate" : "Select row to set amount to consolidate"}
         >
           {isSelected ? (
             <>
@@ -360,7 +362,7 @@ export const columns: ColumnDef<WalletData>[] = [
                   const tokenAddress = row.original.tokenAddress;
                   const chainName = row.getValue("chain") as string;
                   if (tokenAddress) {
-                    window.open(getExplorerUrl(chainName, tokenAddress), "_blank");
+                    window.open(getExplorerUrl(chainName, tokenAddress, wallet.wallet), "_blank");
                   }
                 }}
               >
@@ -373,3 +375,9 @@ export const columns: ColumnDef<WalletData>[] = [
     },
   },
 ];
+
+function AddressDisplay({ address }: { address: Address }) {
+  const { data: ensName } = useEnsName({ address, chainId: 1 });
+  const shortAddress = formatAddress(address);
+  return <span>{ensName || shortAddress}</span>;
+}

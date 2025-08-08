@@ -1,7 +1,7 @@
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import * as React from "react";
 import type { Account, Chain, HttpTransport, WalletClient } from "viem";
-import { getAddress, isAddress } from "viem";
+import { getAddress, isAddress, parseUnits } from "viem";
 import { useWalletClient } from "wagmi";
 import { Button } from "~/components/ui/button";
 import {
@@ -16,9 +16,11 @@ import {
 import { Input } from "~/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import type { WalletData } from "~/components/wallet-table/columns";
-import { useCrossChainTransfer } from "~/hooks/use-cross-chain-transfer";
+import { useConsolidate } from "~/hooks/use-consolidate";
+import { ConsolidationStep, type TokenAmount } from "~/lib/consolidation";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { supportedChains } from "~/data/supported-chains";
+import { tokenAddresses } from "~/data/cctp-contracts";
 
 interface ConsolidateTokensModalProps {
   walletData: WalletData[];
@@ -50,7 +52,7 @@ export function ConsolidateTokensModal({
       });
   }, [rowSelection, walletData, consolidateAmounts]);
 
-  const { executeTransfers, currentStep } = useCrossChainTransfer();
+  const { executeConsolidation, currentStep } = useConsolidate();
   const { data: walletClient } = useWalletClient();
 
   // Calculate estimated USDC amount (with a 0.5% fee)
@@ -68,39 +70,36 @@ export function ConsolidateTokensModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Here you would implement the actual transaction logic
-    console.log("Consolidateing tokens to:", {
-      destinationWallet,
-      destinationToken: "USDC",
-      destinationChain,
-      estimatedAmount,
-      consolidatedTokens,
-    });
 
     if (!walletClient) {
       console.error("Wallet not connected");
       return;
     }
-    const sourceChainIds = consolidatedTokens.map((token) =>
-      Number(availableChains.find((chain) => chain.name === token.chain)?.chainId),
-    );
-    const destinationChainId = Number(availableChains.find((chain) => chain.chainId === Number(destinationChain))?.chainId);
 
     if (!isAddress(destinationWallet)) {
       console.error("Invalid destination wallet address");
       return;
     }
 
-    const destinationAddress = getAddress(destinationWallet);
+    const sourceTokens = consolidatedTokens.map((token) => ({
+      amount: parseUnits(token.amountToConsolidate, token.decimals),
+      chainId: Number(availableChains.find((chain) => chain.name === token.chain)?.chainId),
+      token: token.tokenAddress,
+      walletAddress: token.wallet,
+    }));
 
-    const amounts = consolidatedTokens.map((token) => token.amountToConsolidate.toString());
+    const destinationChainId = Number(availableChains.find((chain) => chain.chainId === Number(destinationChain))?.chainId);
+    const destinationToken: TokenAmount = {
+      amount: 0n,
+      chainId: destinationChainId,
+      token: tokenAddresses[destinationChainId as keyof typeof tokenAddresses],
+      walletAddress: getAddress(destinationWallet),
+    }
 
     try {
-      await executeTransfers(
-        sourceChainIds,
-        destinationChainId,
-        destinationAddress,
-        amounts,
+      await executeConsolidation(
+        sourceTokens,
+        destinationToken,
         walletClient as WalletClient<HttpTransport, Chain, Account>,
       );
       setOpen(false);
@@ -245,35 +244,49 @@ export function ConsolidateTokensModal({
             </div>
             <div className="text-xs text-muted-foreground">Includes a 0.5% conversion fee</div>
           </div>
-          {currentStep === "burning" && (
+          {currentStep === ConsolidationStep.SWAPPING && (
             <Alert>
               <AlertCircle className="h-4 w-4" />
-              <AlertTitle>Step 1/3</AlertTitle>
+              <AlertTitle>Step 1/5</AlertTitle>
+              <AlertDescription>Swapping tokens…</AlertDescription>
+            </Alert>
+          )}
+          {currentStep === ConsolidationStep.BURNING && (
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Step 2/5</AlertTitle>
               <AlertDescription>Bridging tokens…</AlertDescription>
             </Alert>
           )}
-          {currentStep === "waiting-attestation" && (
+          {currentStep === ConsolidationStep.WAITING_ATTESTATION && (
             <Alert>
               <AlertCircle className="h-4 w-4" />
-              <AlertTitle>Step 2/3</AlertTitle>
+              <AlertTitle>Step 3/5</AlertTitle>
               <AlertDescription>Waiting for attestation…</AlertDescription>
             </Alert>
           )}
-          {currentStep === "minting" && (
+          {currentStep === ConsolidationStep.MINTING && (
             <Alert>
               <AlertCircle className="h-4 w-4" />
-              <AlertTitle>Step 3/3</AlertTitle>
+              <AlertTitle>Step 4/5</AlertTitle>
               <AlertDescription>Claiming tokens…</AlertDescription>
             </Alert>
           )}
-          {currentStep === "completed" && (
+          {currentStep === ConsolidationStep.SWAPPING_BACK && (
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Step 5/5</AlertTitle>
+              <AlertDescription>Swapping tokens…</AlertDescription>
+            </Alert>
+          )}
+          {currentStep === ConsolidationStep.COMPLETED && (
             <Alert>
               <CheckCircle2 className="h-4 w-4" />
               <AlertTitle>Success</AlertTitle>
               <AlertDescription>Tokens consolidated successfully</AlertDescription>
             </Alert>
           )}
-          {currentStep === "error" && (
+          {currentStep === ConsolidationStep.ERROR && (
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>Error</AlertTitle>

@@ -42,7 +42,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
 
       setConsolidateAmounts((prev) => ({
         ...prev,
-        [rowId]: value,
+        [rowId]: String(value),
       }));
     };
 

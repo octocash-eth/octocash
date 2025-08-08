@@ -176,6 +176,7 @@ export async function fetchTokenBalances(
                 amount: balance,
                 amountInUsd: amountInUsd,
                 iconUrl: token.icon_url,
+                decimals: Number(token.decimals),
               });
             } catch (error) {
               console.error(`Error processing token ${token.address}:`, error);
