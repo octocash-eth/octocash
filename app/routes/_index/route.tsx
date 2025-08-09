@@ -1,4 +1,5 @@
 import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { SiteHeader } from "~/components/site-header";
 import { WalletTable } from "~/components/wallet-table";
 import { SITE_DESCRIPTION, SITE_NAME } from "~/data/site";
 import { useConnectedAddresses } from "~/hooks/use-connected-addresses";
@@ -13,22 +14,7 @@ export default function Home() {
 
   return (
     <div className="flex flex-col min-h-svh bg-gradient-to-br from-blue-50 to-purple-50">
-      {/* Header */}
-      <header className="w-full p-4">
-        <div className="flex items-center justify-between w-full max-w-7xl mx-auto">
-          <div className="flex items-center gap-2">
-            <div className="rounded flex items-center justify-center">
-              <span className="text-white font-bold text-lg">🐙</span>
-            </div>
-            <h1 className="text-xl font-bold text-red-600">{SITE_NAME}</h1>
-          </div>
-          {connectedAddresses.length > 0 ? (
-            <div>
-              <ConnectButton />
-            </div>
-          ) : null}
-        </div>
-      </header>
+      <SiteHeader />
 
       {connectedAddresses.length > 0 ? (
         <div className="flex-1 p-4">

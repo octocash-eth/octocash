@@ -5,6 +5,7 @@ import { chains } from "~/data/supported-chains";
 import { executeCCTP } from "~/lib/cctp";
 import { type ConsolidationProgressCallback, ConsolidationStep, type TokenAmount } from "~/lib/consolidation";
 import { ensureSufficientGas } from "~/lib/gas";
+import { addConsolidationRecord } from "~/lib/history";
 import { tokenAddresses } from "../data/cctp-contracts";
 
 /**
@@ -138,6 +139,8 @@ export function useConsolidate() {
     destinationToken: TokenAmount,
     walletClient: WalletClient<HttpTransport, Chain, Account>,
   ) => {
+    const startedAt = Date.now();
+    const recordId = `${startedAt}-${Math.random().toString(36).slice(2, 8)}`;
     try {
       if (!publicClient) {
         throw new Error("Public client not found");
@@ -180,9 +183,25 @@ export function useConsolidate() {
         ConsolidationStep.SWAPPING_BACK,
       );
       setCurrentStep(ConsolidationStep.COMPLETED);
+
+      addConsolidationRecord({
+        id: recordId,
+        timestamp: startedAt,
+        sourceTokens,
+        destinationToken,
+        status: "completed",
+      });
     } catch (err) {
       setCurrentStep(ConsolidationStep.ERROR);
       setError(err instanceof Error ? err.message : "Consolidation failed");
+      addConsolidationRecord({
+        id: recordId,
+        timestamp: startedAt,
+        sourceTokens,
+        destinationToken,
+        status: "error",
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
       throw err;
     }
   };

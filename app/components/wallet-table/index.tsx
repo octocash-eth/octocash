@@ -55,24 +55,22 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
 
   // Initialize consolidate amounts when rows are selected
   React.useEffect(() => {
-    const newConsolidateAmounts: Record<string, string> = {};
+    setConsolidateAmounts((previous) => {
+      let hasChanges = false;
+      const next: Record<string, string> = { ...previous };
 
-    Object.entries(rowSelection).forEach(([rowId, isSelected]) => {
-      if (isSelected && walletData[parseInt(rowId)]) {
-        // If not already set, initialize with max amount
-        if (consolidateAmounts[rowId] === undefined) {
-          newConsolidateAmounts[rowId] = walletData[parseInt(rowId)].amount;
-        } else {
-          newConsolidateAmounts[rowId] = consolidateAmounts[rowId];
+      Object.entries(rowSelection).forEach(([rowId, isSelected]) => {
+        if (isSelected && walletData[parseInt(rowId)]) {
+          if (next[rowId] === undefined) {
+            next[rowId] = walletData[parseInt(rowId)].amount;
+            hasChanges = true;
+          }
         }
-      }
-    });
+      });
 
-    setConsolidateAmounts((prev) => ({
-      ...newConsolidateAmounts,
-      ...prev,
-    }));
-  }, [rowSelection, walletData, consolidateAmounts]);
+      return hasChanges ? next : previous;
+    });
+  }, [rowSelection, walletData]);
 
   // Fetch token balances when component mounts or when connectedAddresses changes
   React.useEffect(() => {

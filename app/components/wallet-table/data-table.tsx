@@ -71,63 +71,54 @@ export function DataTable<TData, TValue>({ columns, data, onRowSelectionChange }
 
   // Update filters when selected addresses change
   React.useEffect(() => {
-    if (selectedAddresses.length === 0) {
-      // If no addresses selected, clear the filter
-      setColumnFilters(columnFilters.filter((filter) => filter.id !== "wallet"));
-    } else {
-      // Set filter to show only selected addresses
-      setColumnFilters((prev) => {
-        const filtered = prev.filter((filter) => filter.id !== "wallet");
-        return [
-          ...filtered,
-          {
-            id: "wallet",
-            value: selectedAddresses,
-          },
-        ];
-      });
-    }
-  }, [selectedAddresses, columnFilters.filter]);
+    setColumnFilters((previous) => {
+      const withoutWallet = previous.filter((filter) => filter.id !== "wallet");
+      if (selectedAddresses.length === 0) {
+        return withoutWallet;
+      }
+      return [
+        ...withoutWallet,
+        {
+          id: "wallet",
+          value: selectedAddresses,
+        },
+      ];
+    });
+  }, [selectedAddresses]);
 
   // Update filters when selected tokens change
   React.useEffect(() => {
-    if (selectedTokens.length === 0) {
-      // If no tokens selected, clear the filter
-      setColumnFilters(columnFilters.filter((filter) => filter.id !== "token"));
-    } else {
-      // Set filter to show only selected tokens
-      setColumnFilters((prev) => {
-        const filtered = prev.filter((filter) => filter.id !== "token");
-        return [
-          ...filtered,
-          {
-            id: "token",
-            value: selectedTokens,
-          },
-        ];
-      });
-    }
-  }, [selectedTokens, columnFilters.filter]);
+    setColumnFilters((previous) => {
+      const withoutToken = previous.filter((filter) => filter.id !== "token");
+      if (selectedTokens.length === 0) {
+        return withoutToken;
+      }
+      return [
+        ...withoutToken,
+        {
+          id: "token",
+          value: selectedTokens,
+        },
+      ];
+    });
+  }, [selectedTokens]);
 
   // Update filters when selected chains change
   React.useEffect(() => {
-    if (selectedChains.length === 0) {
-      // If no chains selected, clear the filter
-      setColumnFilters(columnFilters.filter((filter) => filter.id !== "chain"));
-    } else {
-      // Set filter to show only selected chains
-      setColumnFilters((prev) => {
-        const filtered = prev.filter((filter) => filter.id !== "chain");
-        return [
-          ...filtered,
-          {
-            id: "chain",
-            value: selectedChains,
-          },
-        ];
-      });
-    }
-  }, [selectedChains, columnFilters.filter]);
+    setColumnFilters((previous) => {
+      const withoutChain = previous.filter((filter) => filter.id !== "chain");
+      if (selectedChains.length === 0) {
+        return withoutChain;
+      }
+      return [
+        ...withoutChain,
+        {
+          id: "chain",
+          value: selectedChains,
+        },
+      ];
+    });
+  }, [selectedChains]);
 
   // Update parent component when row selection changes
   React.useEffect(() => {
