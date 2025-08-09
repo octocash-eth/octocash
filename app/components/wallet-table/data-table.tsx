@@ -15,10 +15,10 @@ import {
 } from "@tanstack/react-table";
 import { Coins, Filter, Link, Wallet } from "lucide-react";
 import * as React from "react";
+import { formatAddress } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
-import { formatAddress } from "~/lib/utils";
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];

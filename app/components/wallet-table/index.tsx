@@ -72,7 +72,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
       ...newConsolidateAmounts,
       ...prev,
     }));
-  }, [rowSelection, walletData]);
+  }, [rowSelection, walletData, consolidateAmounts]);
 
   // Fetch token balances when component mounts or when connectedAddresses changes
   React.useEffect(() => {

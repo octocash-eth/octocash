@@ -1,13 +1,16 @@
-import { formatUnits, zeroAddress, type Address } from "viem";
+import { type Address, formatUnits, zeroAddress } from "viem";
 import type { WalletData } from "~/components/wallet-table/columns";
 import { blockExplorers, supportedChains } from "~/data/supported-chains";
 
 // Mapping of chain IDs to readable names
 const chainIdToName: Record<number, string> = {
-  ...supportedChains.reduce((acc, chain) => {
-    acc[chain.id] = chain.name;
-    return acc;
-  }, {} as Record<number, string>),
+  ...supportedChains.reduce(
+    (acc, chain) => {
+      acc[chain.id] = chain.name;
+      return acc;
+    },
+    {} as Record<number, string>,
+  ),
 };
 
 // Function to convert balance with proper decimals
@@ -86,7 +89,7 @@ async function fetchTokenBalancesFromBlockscout(chainId: number, address: string
       exchange_rate: balanceData.exchange_rate,
       value: balanceData.coin_balance,
       icon_url: "https://assets.coingecko.com/coins/images/32440/standard/polygon.png",
-    })
+    });
   } else {
     balances.push({
       symbol: "ETH",
@@ -96,7 +99,7 @@ async function fetchTokenBalancesFromBlockscout(chainId: number, address: string
       exchange_rate: balanceData.exchange_rate,
       value: balanceData.coin_balance,
       icon_url: "https://assets.coingecko.com/coins/images/279/standard/ethereum.png",
-    })
+    });
   }
   const url = `${blockExplorers[chainId as keyof typeof blockExplorers]}/api/v2/addresses/${address}/token-balances`;
   const response = await fetch(url);
@@ -111,14 +114,12 @@ async function fetchTokenBalancesFromBlockscout(chainId: number, address: string
       exchange_rate: token.token.exchange_rate,
       value: token.value,
       icon_url: token.token.icon_url,
-    })
+    });
   }
   return balances;
 }
 
-export async function fetchTokenBalances(
-  addresses: string[]
-): Promise<WalletData[]> {
+export async function fetchTokenBalances(addresses: string[]): Promise<WalletData[]> {
   try {
     // If no addresses provided, return empty array
     if (addresses.length === 0) {
@@ -158,7 +159,11 @@ export async function fetchTokenBalances(
           for (const token of tokenBalances) {
             try {
               // Convert balance with proper decimals
-              const [balance, amountInUsd] = convertBalance(token.value, Number(token.decimals), Number(token.exchange_rate));
+              const [balance, amountInUsd] = convertBalance(
+                token.value,
+                Number(token.decimals),
+                Number(token.exchange_rate),
+              );
 
               // Skip tokens with zero or very small balances
               if (isEffectivelyZero(Number(amountInUsd))) {

@@ -1,10 +1,15 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { ArrowUpDown, ExternalLink, MoreHorizontal } from "lucide-react";
 import * as React from "react";
+import { type Address, zeroAddress } from "viem";
+import { useEnsName } from "wagmi";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import { Input } from "~/components/ui/input";
+
+import { supportedChains } from "~/data/supported-chains";
 import { formatAddress } from "~/lib/utils";
+import AddressAvatar from "../address-avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,11 +18,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-
-import { supportedChains } from "~/data/supported-chains";
-import AddressAvatar from "../address-avatar";
-import { zeroAddress, type Address } from "viem";
-import { useEnsName } from "wagmi";
 
 export type WalletData = {
   id: string;
@@ -49,7 +49,7 @@ function getExplorerUrl(chainName: string, tokenAddress: string, address: string
   if (!chain) {
     return "";
   }
-  if (tokenAddress == zeroAddress) {
+  if (tokenAddress === zeroAddress) {
     return `${chain.explorerUrl}/address/${address}`;
   }
   return `${chain.explorerUrl}/token/${tokenAddress}?a=${address}`;
@@ -104,11 +104,7 @@ export const columns: ColumnDef<WalletData>[] = [
 
       return (
         <div className="text-left flex items-center gap-1">
-          <img 
-            src={row.original.iconUrl}
-            alt={tokenName}
-            className="w-6 h-6 rounded-full"
-          />
+          <img src={row.original.iconUrl} alt={tokenName} className="w-6 h-6 rounded-full" />
           <span>{fullTokenName}</span>
           <span className="text-muted-foreground">{tokenName}</span>
           <a

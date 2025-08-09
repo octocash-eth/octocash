@@ -1,9 +1,10 @@
 import "@rainbow-me/rainbowkit/styles.css";
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
-import { createPublicClient, type Chain } from "viem";
+import { type Chain, createPublicClient } from "viem";
+import { mainnet } from "viem/chains";
 import { type Config, createConfig, http } from "wagmi";
-import { mainnet, avalanche, optimism, arbitrum, base, polygon, unichain, linea } from "wagmi/chains";
 import { SITE_NAME } from "../data/site";
+import { chains } from "../data/supported-chains";
 
 export const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID ?? "";
 
@@ -14,7 +15,7 @@ if (!WALLETCONNECT_PROJECT_ID) {
 export const WALLETCONNECT_CONFIG: Config = getDefaultConfig({
   appName: SITE_NAME,
   projectId: WALLETCONNECT_PROJECT_ID || "dummy",
-  chains: [mainnet, avalanche, optimism, arbitrum, base, polygon, linea],
+  chains: Object.values(chains) as unknown as readonly [Chain, ...Chain[]],
   ssr: false,
 });
 

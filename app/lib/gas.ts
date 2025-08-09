@@ -1,20 +1,13 @@
+import { type Address, type Chain, createPublicClient, formatUnits, http, parseUnits } from "viem";
+import type { usePublicClient } from "wagmi";
 import { getGasThresholdForChain } from "~/data/gas-thresholds";
-import {
-  formatUnits,
-  parseUnits,
-  createPublicClient,
-  http,
-  type Address,
-  type Chain,
-} from "viem";
 import { chains } from "~/data/supported-chains";
 import type { TokenAmount } from "./consolidation";
-import type { usePublicClient } from "wagmi";
 
 async function getNativeBalance(
   _publicClient: ReturnType<typeof usePublicClient>,
   chainId: number,
-  address: Address
+  address: Address,
 ): Promise<bigint> {
   const chain = chains[chainId as keyof typeof chains] as Chain;
   const rpcUrl = chain.rpcUrls.default.http[0];
@@ -26,7 +19,7 @@ async function getNativeBalance(
 export async function ensureSufficientGas(
   publicClient: ReturnType<typeof usePublicClient>,
   tokensIn: TokenAmount[],
-  tokenOut: TokenAmount
+  tokenOut: TokenAmount,
 ): Promise<void> {
   // Check per (chainId, walletAddress) pair among sources, plus destination pair
   type Pair = { chainId: number; address: Address };
@@ -34,8 +27,7 @@ export async function ensureSufficientGas(
   const pairsMap = new Map<string, Pair>();
   for (const t of tokensIn) {
     const key = toKey({ chainId: t.chainId, address: t.walletAddress });
-    if (!pairsMap.has(key))
-      pairsMap.set(key, { chainId: t.chainId, address: t.walletAddress });
+    if (!pairsMap.has(key)) pairsMap.set(key, { chainId: t.chainId, address: t.walletAddress });
   }
   const destKey = toKey({
     chainId: tokenOut.chainId,
@@ -57,7 +49,7 @@ export async function ensureSufficientGas(
       const [chainName, symbol] = [chain.name, chain.nativeCurrency.symbol];
       const human = formatUnits(balanceWei, 18);
       insufficients.push(
-        `Insufficient gas on ${chainName} for ${address}. Balance ${human} ${symbol} < required ${thresholdStr} ${symbol}. Please top up at https://gas.zip`
+        `Insufficient gas on ${chainName} for ${address}. Balance ${human} ${symbol} < required ${thresholdStr} ${symbol}. Please top up at https://gas.zip`,
       );
     }
   }

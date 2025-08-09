@@ -19,5 +19,3 @@ export interface TokenAmount {
 }
 
 export type ConsolidationProgressCallback = (step: ConsolidationStep) => void;
-
-

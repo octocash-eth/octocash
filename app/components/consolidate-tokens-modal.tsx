@@ -16,11 +16,11 @@ import {
 import { Input } from "~/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import type { WalletData } from "~/components/wallet-table/columns";
+import { tokenAddresses } from "~/data/cctp-contracts";
+import { supportedChains } from "~/data/supported-chains";
 import { useConsolidate } from "~/hooks/use-consolidate";
 import { ConsolidationStep, type TokenAmount } from "~/lib/consolidation";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
-import { supportedChains } from "~/data/supported-chains";
-import { tokenAddresses } from "~/data/cctp-contracts";
 
 interface ConsolidateTokensModalProps {
   walletData: WalletData[];
@@ -88,13 +88,15 @@ export function ConsolidateTokensModal({
       walletAddress: token.wallet,
     }));
 
-    const destinationChainId = Number(availableChains.find((chain) => chain.chainId === Number(destinationChain))?.chainId);
+    const destinationChainId = Number(
+      availableChains.find((chain) => chain.chainId === Number(destinationChain))?.chainId,
+    );
     const destinationToken: TokenAmount = {
       amount: 0n,
       chainId: destinationChainId,
       token: tokenAddresses[destinationChainId as keyof typeof tokenAddresses],
       walletAddress: getAddress(destinationWallet),
-    }
+    };
 
     try {
       await executeConsolidation(
@@ -175,7 +177,9 @@ export function ConsolidateTokensModal({
                           {token.token} ({token.chain})
                         </span>
                         {percentageConsolidateed < 100 && (
-                          <span className="text-xs text-muted-foreground">{percentageConsolidateed}% of total balance</span>
+                          <span className="text-xs text-muted-foreground">
+                            {percentageConsolidateed}% of total balance
+                          </span>
                         )}
                       </div>
                       <span className="font-medium">
@@ -290,9 +294,7 @@ export function ConsolidateTokensModal({
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>Error</AlertTitle>
-              <AlertDescription>
-                {error || "Error consolidating tokens"}
-              </AlertDescription>
+              <AlertDescription>{error || "Error consolidating tokens"}</AlertDescription>
             </Alert>
           )}
 

@@ -1,19 +1,11 @@
 import { useState } from "react";
-import {
-  type Account,
-  type Call,
-  type Chain,
-  type HttpTransport,
-  type WalletClient,
-  type Address,
-} from "viem";
+import type { Account, Address, Call, Chain, HttpTransport, WalletClient } from "viem";
 import { usePublicClient } from "wagmi";
-
-import { tokenAddresses } from "../data/cctp-contracts";
 import { chains } from "~/data/supported-chains";
 import { executeCCTP } from "~/lib/cctp";
-import { ConsolidationStep, type TokenAmount, type ConsolidationProgressCallback } from "~/lib/consolidation";
+import { type ConsolidationProgressCallback, ConsolidationStep, type TokenAmount } from "~/lib/consolidation";
 import { ensureSufficientGas } from "~/lib/gas";
+import { tokenAddresses } from "../data/cctp-contracts";
 
 /**
  * Switches to the given chain. If the chain is not supported, it adds it to the wallet.
@@ -39,7 +31,7 @@ const switchChain = async (client: WalletClient<HttpTransport, Chain, Account>, 
  * @returns A function that sends calls to the given chain.
  */
 const prepareSendCalls = (client: WalletClient<HttpTransport, Chain, Account>) => {
-  return async function(txId: string, chainId: number, from: Address, calls: Call[]) {
+  return async (txId: string, chainId: number, from: Address, calls: Call[]) => {
     await switchChain(client, chainId);
     const _calls = await client.sendCalls({
       account: from,
@@ -56,8 +48,8 @@ const prepareSendCalls = (client: WalletClient<HttpTransport, Chain, Account>) =
     }
     console.log(`${txId} Tx: ${tx}`);
     return tx;
-  }
-}
+  };
+};
 
 /**
  * Group tokens by walletAddress and chainId
@@ -65,20 +57,25 @@ const prepareSendCalls = (client: WalletClient<HttpTransport, Chain, Account>) =
  * @returns The grouped tokens.
  */
 function groupTokensByWalletAndChain(tokens: TokenAmount[]): TokenAmount[][] {
-  return Object.values(tokens.reduce((acc, token) => {
-    const key = `${token.walletAddress}-${token.chainId}`;
-    if (!acc[key]) {
-      acc[key] = [];
-    }
-    acc[key].push(token);
-    return acc;
-  }, {} as Record<string, TokenAmount[]>));
+  return Object.values(
+    tokens.reduce(
+      (acc, token) => {
+        const key = `${token.walletAddress}-${token.chainId}`;
+        if (!acc[key]) {
+          acc[key] = [];
+        }
+        acc[key].push(token);
+        return acc;
+      },
+      {} as Record<string, TokenAmount[]>,
+    ),
+  );
 }
 
 const executeSwap = async (
   tokensIn: TokenAmount[],
   tokenOut: TokenAmount,
-  walletClient: WalletClient<HttpTransport, Chain, Account>,
+  _walletClient: WalletClient<HttpTransport, Chain, Account>,
   onProgress?: ConsolidationProgressCallback,
   step: ConsolidationStep = ConsolidationStep.SWAPPING,
 ) => {
@@ -93,7 +90,6 @@ const executeSwap = async (
   for (const token of tokensIn) {
     if (token.token === tokenOut.token) {
       amount += token.amount;
-      continue;
     } else {
       // TODO: Implement the swap
       console.log("token", token);
@@ -106,8 +102,8 @@ const executeSwap = async (
     amount,
     walletAddress: tokenOut.walletAddress,
     chainId: tokenOut.chainId,
-  }
-}
+  };
+};
 
 /**
  * Executes the bridge operation.
@@ -123,13 +119,13 @@ const executeBridge = async (
   onProgress?: ConsolidationProgressCallback,
 ) => {
   const sendCalls = prepareSendCalls(walletClient);
-  const tx = await executeCCTP(tokensIn, tokenOut, sendCalls, onProgress);
+  const _tx = await executeCCTP(tokensIn, tokenOut, sendCalls, onProgress);
   return {
     token: tokenOut.token,
     amount: 0n,
     walletAddress: tokenOut.walletAddress,
     chainId: tokenOut.chainId,
-  }
+  };
 };
 
 export function useConsolidate() {
@@ -161,16 +157,10 @@ export function useConsolidate() {
           amount: 0n,
           walletAddress,
           chainId,
-        }
+        };
         resultingTokens.push(
-          await executeSwap(
-            _tokens,
-            tokenOut,
-            walletClient,
-            setCurrentStep,
-            ConsolidationStep.SWAPPING,
-          ),
-        )
+          await executeSwap(_tokens, tokenOut, walletClient, setCurrentStep, ConsolidationStep.SWAPPING),
+        );
       }
 
       const groupedResultingTokens = groupTokensByWalletAndChain(resultingTokens);
@@ -179,7 +169,7 @@ export function useConsolidate() {
         groupedResultingTokens,
         destinationToken,
         walletClient,
-        setCurrentStep
+        setCurrentStep,
       );
 
       await executeSwap(
@@ -188,7 +178,7 @@ export function useConsolidate() {
         walletClient,
         setCurrentStep,
         ConsolidationStep.SWAPPING_BACK,
-      )
+      );
       setCurrentStep(ConsolidationStep.COMPLETED);
     } catch (err) {
       setCurrentStep(ConsolidationStep.ERROR);

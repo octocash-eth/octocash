@@ -20,12 +20,12 @@ export const supportedChains = Object.entries(chains).map(([chainId, chain]) => 
 }));
 
 export const blockExplorers = {
-  [mainnet.id]: 'https://eth.blockscout.com',
+  [mainnet.id]: "https://eth.blockscout.com",
   // [avalanche.id]: avalanche.blockExplorers.default,
-  [optimism.id]: 'https://explorer.optimism.io',
-  [arbitrum.id]: 'https://arbitrum.blockscout.com',
-  [base.id]: 'https://base.blockscout.com',
-  [polygon.id]: 'https://polygon.blockscout.com',
-  [unichain.id]: 'https://unichain.blockscout.com',
-  [linea.id]: 'https://explorer.linea.build',
+  [optimism.id]: "https://explorer.optimism.io",
+  [arbitrum.id]: "https://arbitrum.blockscout.com",
+  [base.id]: "https://base.blockscout.com",
+  [polygon.id]: "https://polygon.blockscout.com",
+  [unichain.id]: "https://unichain.blockscout.com",
+  [linea.id]: "https://explorer.linea.build",
 };
