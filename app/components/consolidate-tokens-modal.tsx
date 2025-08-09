@@ -52,7 +52,7 @@ export function ConsolidateTokensModal({
       });
   }, [rowSelection, walletData, consolidateAmounts]);
 
-  const { executeConsolidation, currentStep } = useConsolidate();
+  const { executeConsolidation, currentStep, error } = useConsolidate();
   const { data: walletClient } = useWalletClient();
 
   // Calculate estimated USDC amount (with a 0.5% fee)
@@ -290,7 +290,9 @@ export function ConsolidateTokensModal({
             <Alert variant="destructive">
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>Error</AlertTitle>
-              <AlertDescription>Error consolidating tokens</AlertDescription>
+              <AlertDescription>
+                {error || "Error consolidating tokens"}
+              </AlertDescription>
             </Alert>
           )}
 

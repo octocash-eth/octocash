@@ -13,6 +13,7 @@ import { tokenAddresses } from "../data/cctp-contracts";
 import { chains } from "~/data/supported-chains";
 import { executeCCTP } from "~/lib/cctp";
 import { ConsolidationStep, type TokenAmount, type ConsolidationProgressCallback } from "~/lib/consolidation";
+import { ensureSufficientGas } from "~/lib/gas";
 
 /**
  * Switches to the given chain. If the chain is not supported, it adds it to the wallet.
@@ -146,6 +147,9 @@ export function useConsolidate() {
         throw new Error("Public client not found");
       }
 
+      // Pre-flight: ensure gas on each required chain
+      await ensureSufficientGas(publicClient, sourceTokens, destinationToken);
+
       const groupedTokens = groupTokensByWalletAndChain(sourceTokens);
       const resultingTokens: TokenAmount[] = [];
 
@@ -188,7 +192,7 @@ export function useConsolidate() {
       setCurrentStep(ConsolidationStep.COMPLETED);
     } catch (err) {
       setCurrentStep(ConsolidationStep.ERROR);
-      setError("Consolidation failed");
+      setError(err instanceof Error ? err.message : "Consolidation failed");
       throw err;
     }
   };

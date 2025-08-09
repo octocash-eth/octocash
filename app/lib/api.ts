@@ -1,4 +1,4 @@
-import { formatUnits, zeroAddress } from "viem";
+import { formatUnits, zeroAddress, type Address } from "viem";
 import type { WalletData } from "~/components/wallet-table/columns";
 import { blockExplorers, supportedChains } from "~/data/supported-chains";
 
@@ -36,7 +36,7 @@ function isEffectivelyZero(balance: number): boolean {
 interface TokenBalance {
   symbol: string;
   name: string;
-  address: string;
+  address: Address;
   decimals: string;
   exchange_rate: string;
   value: string;
@@ -50,7 +50,7 @@ interface AddressBalanceResponse {
 
 interface TokenBalancesResponse {
   token: {
-    address: string;
+    address: Address;
     address_hash: string;
     circulating_market_cap: string;
     decimals: string;
@@ -168,10 +168,10 @@ export async function fetchTokenBalances(
               // Add to wallet data
               walletData.push({
                 id: `${tokenCounter++}`,
-                wallet: address,
+                wallet: address as Address,
                 token: token.symbol,
                 tokenName: token.name,
-                tokenAddress: token.address,
+                tokenAddress: token.address as Address,
                 chain: chainIdToName[chainId] || `Chain-${chainId}`,
                 amount: balance,
                 amountInUsd: amountInUsd,

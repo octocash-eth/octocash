@@ -16,6 +16,7 @@ export const supportedChains = Object.entries(chains).map(([chainId, chain]) => 
   name: chain.name,
   icon: `/chain-icons/${chain.name.toLowerCase().replace(/\s+/g, "-")}.svg`,
   explorerUrl: chain.blockExplorers.default.url,
+  nativeCurrency: chain.nativeCurrency,
 }));
 
 export const blockExplorers = {
