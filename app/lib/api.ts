@@ -119,6 +119,37 @@ async function fetchTokenBalancesFromBlockscout(chainId: number, address: string
   return balances;
 }
 
+function buildWalletDataFromTokens(tokenBalances: TokenBalance[], address: string, chainId: number): WalletData[] {
+  const results: WalletData[] = [];
+
+  for (const token of tokenBalances) {
+    try {
+      const [balance, amountInUsd] = convertBalance(token.value, Number(token.decimals), Number(token.exchange_rate));
+
+      if (isEffectivelyZero(Number(amountInUsd))) {
+        continue;
+      }
+
+      results.push({
+        id: `${address}-${token.address}-${chainId}`,
+        wallet: address as Address,
+        token: token.symbol,
+        tokenName: token.name,
+        tokenAddress: token.address as Address,
+        chain: chainIdToName[chainId] || `Chain-${chainId}`,
+        amount: balance,
+        amountInUsd: amountInUsd,
+        iconUrl: token.icon_url,
+        decimals: Number(token.decimals),
+      });
+    } catch (error) {
+      console.error(`Error processing token ${token.address}:`, error);
+    }
+  }
+
+  return results;
+}
+
 export async function fetchTokenBalances(addresses: string[]): Promise<WalletData[]> {
   try {
     // If no addresses provided, return empty array
@@ -128,7 +159,6 @@ export async function fetchTokenBalances(addresses: string[]): Promise<WalletDat
     }
 
     const walletData: WalletData[] = [];
-    let tokenCounter = 0;
 
     console.log(
       `Starting to fetch token balances for ${addresses.length} addresses across ${supportedChains.length} networks...`,
@@ -138,62 +168,43 @@ export async function fetchTokenBalances(addresses: string[]): Promise<WalletDat
 
     console.log(`Fetching for chain IDs: ${chainIds.join(", ")}`);
 
-    // Fetch token balances for each address on each chain
-    for (const address of addresses) {
-      for (const chainId of chainIds) {
-        try {
+    // Fire all requests concurrently for all address+chain combinations
+    const results = await Promise.allSettled(
+      addresses.flatMap((address) =>
+        chainIds.map((chainId) => {
           console.log(
             `Fetching tokens for address ${address} on chain ${chainId} (${chainIdToName[chainId] || "Unknown"})...`,
           );
+          return fetchTokenBalancesFromBlockscout(chainId, address)
+            .then((balances) => ({ address, chainId, balances }))
+            .catch((error) => {
+              // Preserve context for error handling after all promises settle
+              throw { error, address, chainId };
+            });
+        }),
+      ),
+    );
 
-          const tokenBalances = await fetchTokenBalancesFromBlockscout(chainId, address);
-
-          if (tokenBalances.length === 0) {
-            console.log(`No tokens found for address ${address} on chain ${chainId}`);
-            continue;
-          }
-
-          console.log(`Received ${tokenBalances.length} tokens for address ${address} on chain ${chainId}`);
-
-          // Process tokens
-          for (const token of tokenBalances) {
-            try {
-              // Convert balance with proper decimals
-              const [balance, amountInUsd] = convertBalance(
-                token.value,
-                Number(token.decimals),
-                Number(token.exchange_rate),
-              );
-
-              // Skip tokens with zero or very small balances
-              if (isEffectivelyZero(Number(amountInUsd))) {
-                continue;
-              }
-
-              // Add to wallet data
-              walletData.push({
-                id: `${tokenCounter++}`,
-                wallet: address as Address,
-                token: token.symbol,
-                tokenName: token.name,
-                tokenAddress: token.address as Address,
-                chain: chainIdToName[chainId] || `Chain-${chainId}`,
-                amount: balance,
-                amountInUsd: amountInUsd,
-                iconUrl: token.icon_url,
-                decimals: Number(token.decimals),
-              });
-            } catch (error) {
-              console.error(`Error processing token ${token.address}:`, error);
-            }
-          }
-        } catch (error) {
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        const { address, chainId, balances } = result.value;
+        if (balances.length === 0) {
+          console.log(`No tokens found for address ${address} on chain ${chainId}`);
+          continue;
+        }
+        console.log(`Received ${balances.length} tokens for address ${address} on chain ${chainId}`);
+        walletData.push(...buildWalletDataFromTokens(balances, address, chainId));
+      } else {
+        const { address, chainId, error } = result.reason as { error: unknown; address?: string; chainId?: number };
+        if (address !== undefined && chainId !== undefined) {
           console.error(`Error processing chain ${chainId} for address ${address}:`, error);
+        } else {
+          console.error(`Error fetching token balances:`, result.reason);
         }
       }
     }
 
-    console.log(`Processed ${tokenCounter} tokens with non-zero balances`);
+    console.log(`Processed ${walletData.length} tokens with non-zero balances`);
 
     // Sort wallet data by USD value (descending)
     walletData.sort((a, b) => b.amountInUsd - a.amountInUsd);
