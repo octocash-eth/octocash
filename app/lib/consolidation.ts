@@ -1,4 +1,4 @@
-import type { Address } from "viem";
+import type { Address, Call, Hex } from "viem";
 
 export enum ConsolidationStep {
   IDLE = "idle",
@@ -19,3 +19,10 @@ export interface TokenAmount {
 }
 
 export type ConsolidationProgressCallback = (step: ConsolidationStep) => void;
+
+export type SendCallsFn = (
+  txId: string,
+  chainId: number,
+  from: Address,
+  calls: Call[],
+) => Promise<[string, { address: Address; data: Hex; topics: Hex[] }[]]>;

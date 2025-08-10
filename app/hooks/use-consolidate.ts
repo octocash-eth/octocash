@@ -1,11 +1,23 @@
 import { useState } from "react";
-import type { Account, Address, Call, Chain, HttpTransport, WalletClient } from "viem";
+import {
+  type Account,
+  type Address,
+  type Call,
+  type Chain,
+  type Hex,
+  type HttpTransport,
+  type Log,
+  parseAbi,
+  parseEventLogs,
+  type WalletClient,
+} from "viem";
 import { usePublicClient } from "wagmi";
 import { chains } from "~/data/supported-chains";
-import { executeCCTP } from "~/lib/cctp";
+import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "~/lib/cctp";
 import { type ConsolidationProgressCallback, ConsolidationStep, type TokenAmount } from "~/lib/consolidation";
 import { ensureSufficientGas } from "~/lib/gas";
 import { addConsolidationRecord } from "~/lib/history";
+import { executeOdosSwap } from "~/lib/odos";
 import { tokenAddresses } from "../data/cctp-contracts";
 
 /**
@@ -32,7 +44,12 @@ const switchChain = async (client: WalletClient<HttpTransport, Chain, Account>, 
  * @returns A function that sends calls to the given chain.
  */
 const prepareSendCalls = (client: WalletClient<HttpTransport, Chain, Account>) => {
-  return async (txId: string, chainId: number, from: Address, calls: Call[]) => {
+  return async (
+    txId: string,
+    chainId: number,
+    from: Address,
+    calls: Call[],
+  ): Promise<[string, { address: Address; data: Hex; topics: Hex[] }[]]> => {
     await switchChain(client, chainId);
     const _calls = await client.sendCalls({
       account: from,
@@ -44,11 +61,14 @@ const prepareSendCalls = (client: WalletClient<HttpTransport, Chain, Account>) =
       id: _calls.id,
     });
     const tx = status.receipts?.[0]?.transactionHash;
-    if (!tx) {
-      throw new Error(`${txId} transaction failed`);
+
+    if (!tx || status.receipts?.[0]?.status === "reverted") {
+      throw new Error(`${txId} transaction reverted`);
     }
+    // Flatten all logs from all receipts into a single array
+    const logs = status.receipts?.flatMap((r) => r.logs ?? []) ?? [];
     console.log(`${txId} Tx: ${tx}`);
-    return tx;
+    return [tx, logs];
   };
 };
 
@@ -73,10 +93,19 @@ function groupTokensByWalletAndChain(tokens: TokenAmount[]): TokenAmount[][] {
   );
 }
 
+/**
+ * Executes a swap operation.
+ * @param tokensIn - The tokens to swap.
+ * @param tokenOut - The destination token.
+ * @param walletClient - The wallet client.
+ * @param onProgress - The progress callback.
+ * @param step - The step to set.
+ * @returns The resulting token.
+ */
 const executeSwap = async (
   tokensIn: TokenAmount[],
   tokenOut: TokenAmount,
-  _walletClient: WalletClient<HttpTransport, Chain, Account>,
+  walletClient: WalletClient<HttpTransport, Chain, Account>,
   onProgress?: ConsolidationProgressCallback,
   step: ConsolidationStep = ConsolidationStep.SWAPPING,
 ) => {
@@ -87,48 +116,96 @@ const executeSwap = async (
     }
   }
   onProgress?.(step);
-  let amount = 0n;
-  for (const token of tokensIn) {
-    if (token.token === tokenOut.token) {
-      amount += token.amount;
-    } else {
-      // TODO: Implement the swap
-      console.log("token", token);
-      console.log("tokenOut", tokenOut);
-      throw new Error("Swap not implemented");
-    }
+
+  // If the input is already the desired token, skip the swap entirely
+  if (tokensIn.length === 1 && tokensIn[0].token === tokenOut.token) {
+    return {
+      ...tokenOut,
+      amount: tokensIn[0].amount,
+    };
   }
+
+  // Separate token that matches the target token from those that need swapping
+  const matchingToken = tokensIn.find((token) => token.token === tokenOut.token);
+  const tokensToSwap = tokensIn.filter((token) => token.token !== tokenOut.token);
+
+  // Calculate existing amount of target token
+  const existingAmount = matchingToken?.amount ?? 0n;
+
+  // Swap remaining tokens
+  const swapAmount = await executeOdosSwap(tokensToSwap, tokenOut, prepareSendCalls(walletClient));
+
+  return {
+    ...tokenOut,
+    amount: existingAmount + swapAmount,
+  };
+};
+
+/**
+ * Executes the bridge operation.
+ * @param tokensIn - The tokens to bridge.
+ * @param tokenOut - The destination token.
+ * @param walletClient - The wallet client.
+ * @param onProgress - The progress callback.
+ * @returns The resulting token.
+ */
+const executeBridge = async (
+  tokensIn: TokenAmount[],
+  tokenOut: TokenAmount,
+  walletClient: WalletClient<HttpTransport, Chain, Account>,
+  onProgress?: ConsolidationProgressCallback,
+) => {
+  // If the input is already the desired token on the destination chain, skip the bridge entirely
+  if (tokensIn.flat().length === 1 && tokensIn.flat()[0].chainId === tokenOut.chainId) {
+    return {
+      ...tokenOut,
+      amount: tokensIn.flat()[0].amount,
+    };
+  }
+
+  const sendCalls = prepareSendCalls(walletClient);
+
+  // Separate token that matches the target token from those that need bridging
+  const matchingToken = tokensIn.find((token) => token.chainId === tokenOut.chainId);
+  const tokensToBridge = tokensIn.filter((token) => token.chainId !== tokenOut.chainId);
+
+  const existingAmount = matchingToken?.amount ?? 0n;
+
+  onProgress?.(ConsolidationStep.BURNING);
+  const burnTxsAndChainIds: [string, number][] = [];
+  for (const token of tokensToBridge) {
+    const [tx, chainId] = await executeCCTPBurn(token, tokenOut, sendCalls);
+    burnTxsAndChainIds.push([tx, chainId]);
+  }
+
+  onProgress?.(ConsolidationStep.WAITING_ATTESTATION);
+  const attestations = await retrieveAttestations(burnTxsAndChainIds);
+
+  onProgress?.(ConsolidationStep.MINTING);
+  const [_mintTx, logs] = await executeCCTPMint(attestations, tokenOut, sendCalls);
+
+  const txs = parseEventLogs({
+    abi: parseAbi([
+      "event MintAndWithdraw(address indexed mintRecipient, uint256 amount, address indexed mintToken, uint256 feeCollected)",
+    ]),
+    eventName: "MintAndWithdraw",
+    logs: logs as Log[],
+  });
+
+  const tokenOutAmount = txs[0]?.args?.amount ?? 0n;
+
   return {
     token: tokenOut.token,
-    amount,
+    amount: existingAmount + tokenOutAmount,
     walletAddress: tokenOut.walletAddress,
     chainId: tokenOut.chainId,
   };
 };
 
 /**
- * Executes the bridge operation.
- * @param tokensIn - The tokens to bridge, grouped by wallet and chain.
- * @param tokenOut - The destination token.
- * @param walletClient - The wallet client.
- * @returns The resulting token.
+ * Consolidates tokens into a single token.
+ * @returns The consolidation state.
  */
-const executeBridge = async (
-  tokensIn: TokenAmount[][],
-  tokenOut: TokenAmount,
-  walletClient: WalletClient<HttpTransport, Chain, Account>,
-  onProgress?: ConsolidationProgressCallback,
-) => {
-  const sendCalls = prepareSendCalls(walletClient);
-  const _tx = await executeCCTP(tokensIn, tokenOut, sendCalls, onProgress);
-  return {
-    token: tokenOut.token,
-    amount: 0n,
-    walletAddress: tokenOut.walletAddress,
-    chainId: tokenOut.chainId,
-  };
-};
-
 export function useConsolidate() {
   const publicClient = usePublicClient();
   const [currentStep, setCurrentStep] = useState<ConsolidationStep>(ConsolidationStep.IDLE);
@@ -154,11 +231,13 @@ export function useConsolidate() {
 
       for (const _tokens of groupedTokens) {
         const { chainId, walletAddress } = _tokens[0];
+        // If the token is already on the destination chain, send it to the destination wallet (as we skip the bridge step)
+        const walletToSend = chainId === destinationToken.chainId ? destinationToken.walletAddress : walletAddress;
         const usdcToken = tokenAddresses[chainId as keyof typeof tokenAddresses];
         const tokenOut = {
           token: usdcToken,
           amount: 0n,
-          walletAddress,
+          walletAddress: walletToSend,
           chainId,
         };
         resultingTokens.push(
@@ -166,16 +245,9 @@ export function useConsolidate() {
         );
       }
 
-      const groupedResultingTokens = groupTokensByWalletAndChain(resultingTokens);
+      const resultingToken = await executeBridge(resultingTokens, destinationToken, walletClient, setCurrentStep);
 
-      const resultingToken = await executeBridge(
-        groupedResultingTokens,
-        destinationToken,
-        walletClient,
-        setCurrentStep,
-      );
-
-      await executeSwap(
+      const finalToken = await executeSwap(
         [resultingToken],
         destinationToken,
         walletClient,
@@ -188,7 +260,7 @@ export function useConsolidate() {
         id: recordId,
         timestamp: startedAt,
         sourceTokens,
-        destinationToken,
+        destinationToken: finalToken,
         status: "completed",
       });
     } catch (err) {

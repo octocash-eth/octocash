@@ -1,5 +1,5 @@
 import { Link } from "react-router";
-import { formatUnits } from "viem";
+import { formatUnits, zeroAddress } from "viem";
 import { useToken } from "wagmi";
 import { SiteHeader } from "~/components/site-header";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "~/components/ui/table";
@@ -109,15 +109,17 @@ function TokenBalance({ token }: { token: TokenAmount }) {
   const { data: tokenData } = useToken({
     address: token.token,
     chainId: token.chainId,
+    query: {
+      enabled: token.token !== zeroAddress,
+    },
   });
 
-  if (!tokenData) {
+  if (token.token !== zeroAddress && !tokenData) {
     return null;
   }
 
-  const { symbol, decimals } = tokenData;
-
   const chain = chains[token.chainId as keyof typeof chains];
+  const { symbol, decimals } = tokenData ?? chain.nativeCurrency;
 
   return (
     <div className="flex flex-col">
@@ -127,7 +129,7 @@ function TokenBalance({ token }: { token: TokenAmount }) {
         </span>{" "}
         <span className="text-gray-500">({chain.name})</span>
       </span>
-      <span className="text-xs text-gray-600">{truncateAddress(token.token)}</span>
+      <span className="text-xs text-gray-600">{truncateAddress(token.walletAddress)}</span>
     </div>
   );
 }

@@ -1,8 +1,7 @@
-import { type Address, type Call, type Chain, encodeFunctionData, type Hex, parseAbi } from "viem";
+import { type Chain, encodeFunctionData, type Hex, parseAbi } from "viem";
 import { chainIdToDomain, messageTransmitter, tokenAddresses, tokenMessenger } from "~/data/cctp-contracts";
 import { chains } from "~/data/supported-chains";
-import type { ConsolidationProgressCallback, TokenAmount } from "~/lib/consolidation";
-import { ConsolidationStep } from "~/lib/consolidation";
+import type { SendCallsFn, TokenAmount } from "~/lib/consolidation";
 
 const getApproveAndBurnUsdcCalls = async (
   sourceChainId: number,
@@ -48,7 +47,7 @@ const getApproveAndBurnUsdcCalls = async (
   return calls;
 };
 
-const retrieveAttestations = async (transactionHash: string, sourceChainId: number) => {
+const retrieveAttestation = async (transactionHash: string, sourceChainId: number) => {
   const url = `https://iris-api.circle.com/v2/messages/${chainIdToDomain[sourceChainId]}?transactionHash=${transactionHash}`;
 
   while (true) {
@@ -103,52 +102,70 @@ const getMintUsdcCalls = async (
   return calls;
 };
 
-export const executeCCTP = async (
-  tokensIn: TokenAmount[][],
+/**
+ * Executes the CCTP burn step.
+ * @param tokenIn - The token to burn.
+ * @param tokenOut - The token to mint.
+ * @param sendCalls - The function to send calls.
+ * @param onProgress - The function to update the progress.
+ * @returns The transaction hash and the chain ID.
+ */
+export const executeCCTPBurn = async (
+  tokenIn: TokenAmount,
   tokenOut: TokenAmount,
-  sendCalls: (txId: string, chainId: number, from: Address, calls: Call[]) => Promise<string>,
-  onProgress?: ConsolidationProgressCallback,
+  sendCalls: SendCallsFn,
+): Promise<[string, number]> => {
+  if (tokenIn.chainId === tokenOut.chainId) {
+    throw new Error("Token is already on the destination chain");
+  }
+
+  const { chainId: sourceChainId, amount, walletAddress: from } = tokenIn;
+  const { chainId: destinationChainId, walletAddress: destinationAddress } = tokenOut;
+
+  // Execute burn step sequentially
+  const [burnTx] = await sendCalls(
+    "burn",
+    sourceChainId,
+    from,
+    await getApproveAndBurnUsdcCalls(sourceChainId, amount, destinationChainId, destinationAddress),
+  );
+
+  return [burnTx, sourceChainId];
+};
+
+/**
+ * Retrieves the attestations for the given transaction hashes and source chain IDs.
+ * @param transactionHashesAndChainIds - List of transaction hashes and source chain IDs from `executeCCTPBurn()`.
+ * @returns The attestations.
+ */
+export const retrieveAttestations = async (transactionHashesAndChainIds: [string, number][]) => {
+  const attestations: { message: `0x${string}`; attestation: `0x${string}` }[] = [];
+  for (let i = 0; i < transactionHashesAndChainIds.length; i++) {
+    const attestation = await retrieveAttestation(...transactionHashesAndChainIds[i]);
+    attestations.push(attestation);
+  }
+  return attestations;
+};
+
+/**
+ * Executes the CCTP mint step.
+ * @param attestations - List of attestations retrieved from `retrieveAttestations()`.
+ * @param tokenOut - The token to mint.
+ * @param sendCalls - The function to send calls.
+ * @returns The transaction hash and the logs.
+ */
+export const executeCCTPMint = async (
+  attestations: { message: `0x${string}`; attestation: `0x${string}` }[],
+  tokenOut: TokenAmount,
+  sendCalls: SendCallsFn,
 ) => {
-  const burnTxs: string[] = [];
-  onProgress?.(ConsolidationStep.BURNING);
-  for (const tokens of tokensIn) {
-    const sourceChainId = tokens[0].chainId;
-    const amount = tokens[0].amount;
-    const from = tokens[0].walletAddress;
-    const destinationChainId = tokenOut.chainId;
-    const destinationAddress = tokenOut.walletAddress;
-
-    // Execute burn step sequentially
-    const burnTx = await sendCalls(
-      "burn",
-      sourceChainId,
-      from,
-      await getApproveAndBurnUsdcCalls(sourceChainId, amount, destinationChainId, destinationAddress),
-    );
-    burnTxs.push(burnTx);
-  }
-
-  try {
-    onProgress?.(ConsolidationStep.WAITING_ATTESTATION);
-    const attestations: { message: `0x${string}`; attestation: `0x${string}` }[] = [];
-    const sourceChainIds = tokensIn.map((t) => t[0].chainId);
-    for (let i = 0; i < burnTxs.length; i++) {
-      const attestation = await retrieveAttestations(burnTxs[i], sourceChainIds[i]);
-      attestations.push(attestation);
-    }
-
-    // Execute mint step
-    const destinationChainId = tokenOut.chainId;
-    onProgress?.(ConsolidationStep.MINTING);
-    const mintTx = await sendCalls(
-      "mint",
-      destinationChainId,
-      tokenOut.walletAddress,
-      await getMintUsdcCalls(destinationChainId, attestations),
-    );
-    return mintTx;
-  } catch (error) {
-    console.log(`Error: ${error instanceof Error ? error.message : "Unknown error"}`);
-    throw error;
-  }
+  // Execute mint step
+  const destinationChainId = tokenOut.chainId;
+  const [mintTx, mintLogs] = await sendCalls(
+    "mint",
+    destinationChainId,
+    tokenOut.walletAddress,
+    await getMintUsdcCalls(destinationChainId, attestations),
+  );
+  return [mintTx, mintLogs];
 };
