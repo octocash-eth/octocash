@@ -44,12 +44,12 @@ function formatAmountForInput(value: number): string {
   }
 }
 
-function getExplorerUrl(chainName: string, tokenAddress: string, address: string): string {
+function getExplorerUrl(chainName: string, tokenAddress: string | undefined, address: string): string {
   const chain = supportedChains.find((chain) => chain.name === chainName);
   if (!chain) {
     return "";
   }
-  if (tokenAddress === zeroAddress) {
+  if (!tokenAddress || tokenAddress === zeroAddress) {
     return `${chain.explorerUrl}/address/${address}`;
   }
   return `${chain.explorerUrl}/token/${tokenAddress}?a=${address}`;
@@ -165,12 +165,26 @@ export const columns: ColumnDef<WalletData>[] = [
         <ArrowUpDown className="ml-2 h-4 w-4" />
       </Button>
     ),
-    cell: ({ row }) => (
-      <div className="font-medium text-left flex items-center gap-2">
-        <AddressAvatar addressOrEns={row.getValue("wallet") as string} size={20} />
-        <AddressDisplay address={row.getValue("wallet")} />
-      </div>
-    ),
+    cell: ({ row }) => {
+      const walletAddress = row.getValue("wallet") as string;
+      const chainName = row.getValue("chain") as string;
+      const explorerUrl = getExplorerUrl(chainName, undefined, walletAddress);
+      return (
+        <div className="font-medium text-left flex items-center gap-2">
+          <AddressAvatar addressOrEns={row.getValue("wallet") as string} size={20} />
+          <AddressDisplay address={row.getValue("wallet")} />
+          <a
+            href={explorerUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-500 hover:text-blue-700 inline-flex items-center"
+            title={`View on block explorer`}
+          >
+            <ExternalLink className="h-3 w-3 ml-1" />
+          </a>
+        </div>
+      );
+    },
     filterFn: (row, id, value) => {
       const values = value as string[];
       if (values.length === 0) return true;

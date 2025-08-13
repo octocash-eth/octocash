@@ -99,9 +99,9 @@ export async function executeOdosSwap(
 
   const quoteBody = {
     chainId,
-    inputTokens: tokensIn.map((t) => ({
-      tokenAddress: t.token,
-      amount: t.amount.toString(),
+    inputTokens: tokensIn.map((tokenIn) => ({
+      tokenAddress: tokenIn.token,
+      amount: tokenIn.amount.toString(),
     })),
     outputTokens: [
       {

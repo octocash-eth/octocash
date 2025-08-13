@@ -12,13 +12,13 @@ import {
   type WalletClient,
 } from "viem";
 import { usePublicClient } from "wagmi";
+import { tokenAddresses } from "~/data/cctp-contracts";
 import { chains } from "~/data/supported-chains";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "~/lib/cctp";
 import { type ConsolidationProgressCallback, ConsolidationStep, type TokenAmount } from "~/lib/consolidation";
 import { ensureSufficientGas } from "~/lib/gas";
 import { addConsolidationRecord } from "~/lib/history";
 import { executeOdosSwap } from "~/lib/odos";
-import { tokenAddresses } from "../data/cctp-contracts";
 
 /**
  * Switches to the given chain. If the chain is not supported, it adds it to the wallet.
@@ -216,6 +216,7 @@ export function useConsolidate() {
     destinationToken: TokenAmount,
     walletClient: WalletClient<HttpTransport, Chain, Account>,
   ) => {
+    console.log("executeConsolidation", sourceTokens, destinationToken);
     const startedAt = Date.now();
     const recordId = `${startedAt}-${Math.random().toString(36).slice(2, 8)}`;
     try {

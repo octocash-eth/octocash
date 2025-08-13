@@ -1,4 +1,4 @@
-import { type Address, formatUnits, zeroAddress } from "viem";
+import { type Address, formatUnits, getAddress, zeroAddress } from "viem";
 import type { WalletData } from "~/components/wallet-table/columns";
 import { blockExplorers, supportedChains } from "~/data/supported-chains";
 
@@ -53,12 +53,10 @@ interface AddressBalanceResponse {
 
 interface TokenBalancesResponse {
   token: {
-    address: Address;
     address_hash: string;
     circulating_market_cap: string;
     decimals: string;
     exchange_rate: string;
-    holders: string;
     holders_count: string;
     icon_url: string;
     name: string;
@@ -104,12 +102,13 @@ async function fetchTokenBalancesFromBlockscout(chainId: number, address: string
   const url = `${blockExplorers[chainId as keyof typeof blockExplorers]}/api/v2/addresses/${address}/token-balances`;
   const response = await fetch(url);
   const data: TokenBalancesResponse[] = await response.json();
+  console.log(data);
   const filteredData = data.filter((token) => token.token.type === "ERC-20");
   for (const token of filteredData) {
     balances.push({
       symbol: token.token.symbol,
       name: token.token.name,
-      address: token.token.address,
+      address: getAddress(token.token.address_hash),
       decimals: token.token.decimals,
       exchange_rate: token.token.exchange_rate,
       value: token.value,
@@ -203,7 +202,7 @@ export async function fetchTokenBalances(addresses: string[]): Promise<WalletDat
         }
       }
     }
-
+    console.log(walletData);
     console.log(`Processed ${walletData.length} tokens with non-zero balances`);
 
     // Sort wallet data by USD value (descending)
