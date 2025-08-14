@@ -70,38 +70,29 @@ function buildApproveCalls(inputs: TokenAmount[], router: Address): Call[] {
   return calls;
 }
 
-/**
- * Executes the Odos swap.
- * @param tokensIn - The tokens to swap.
- * @param tokenOut - The token to swap to.
- * @param sendCalls - The function to send the calls.
- * @returns The amount of the output token.
- */
-export async function executeOdosSwap(
-  tokensIn: TokenAmount[],
+function buildTransferCall(token: TokenAmount, to: Address): Call {
+  return {
+    to: token.token,
+    data: encodeFunctionData({
+      abi: parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]),
+      args: [to, token.amount],
+    }),
+  };
+}
+
+async function buildOdosCalls(
+  tokensToSwap: TokenAmount[],
   tokenOut: TokenAmount,
-  sendCalls: SendCallsFn,
-): Promise<bigint> {
-  const chainId = tokensIn[0].chainId;
-  const userAddr = tokensIn[0].walletAddress;
-
-  for (const t of tokensIn) {
-    // All tokens must be on the same chain and come from the same wallet
-    if (t.chainId !== chainId || t.walletAddress !== userAddr) {
-      throw new Error("Tokens are not on the same chain and come from the same wallet");
-    }
-  }
-
-  // TokenOut chainId must be the same as the source chainId
-  if (tokenOut.chainId !== chainId) {
-    throw new Error("Swap destination chain must be the same as the source chain");
-  }
+  _sendCalls: SendCallsFn,
+): Promise<Call[]> {
+  const chainId = tokensToSwap[0].chainId;
+  const userAddr = tokensToSwap[0].walletAddress;
 
   const quoteBody = {
     chainId,
-    inputTokens: tokensIn.map((tokenIn) => ({
-      tokenAddress: tokenIn.token,
-      amount: tokenIn.amount.toString(),
+    inputTokens: tokensToSwap.map((token) => ({
+      tokenAddress: token.token,
+      amount: token.amount.toString(),
     })),
     outputTokens: [
       {
@@ -125,9 +116,55 @@ export async function executeOdosSwap(
   };
   const assembled = await fetchJson<OdosAssembleResponse>(ODOS_ASSEMBLE_URL, assembleBody);
   const { to, data, value } = assembled.transaction;
-  const calls: Call[] = [...buildApproveCalls(tokensIn, to), { to, data, value: BigInt(value) }];
+  return [...buildApproveCalls(tokensToSwap, to), { to, data, value: BigInt(value) }];
+}
 
-  const [_tx, logs] = await sendCalls("swap", chainId, userAddr, calls);
+/**
+ * Executes the Odos swap.
+ * @param tokensIn - The tokens to swap.
+ * @param tokenOut - The token to swap to.
+ * @param sendCalls - The function to send the calls.
+ * @returns The amount of the output token.
+ */
+export async function executeOdosSwapOrTransfer(
+  tokensIn: TokenAmount[],
+  tokenOut: TokenAmount,
+  sendCalls: SendCallsFn,
+): Promise<bigint> {
+  const chainId = tokensIn[0].chainId;
+  const wallet = tokensIn[0].walletAddress;
+
+  for (const t of tokensIn) {
+    // All tokens must be on the same chain and come from the same wallet
+    if (t.chainId !== chainId || t.walletAddress !== wallet) {
+      throw new Error("Tokens are not on the same chain or do not come from the same wallet");
+    }
+  }
+
+  // TokenOut chainId must be the same as the source chainId
+  if (tokenOut.chainId !== chainId) {
+    throw new Error("Swap destination chain must be the same as the source chain");
+  }
+
+  const tokensToSwap = tokensIn.filter((token) => token.token !== tokenOut.token);
+  const tokenToTransfer = tokensIn.find(
+    (token) => token.token === tokenOut.token && token.walletAddress !== tokenOut.walletAddress,
+  );
+  const tokenThatStays = tokensIn.find(
+    (token) => token.token === tokenOut.token && token.walletAddress === tokenOut.walletAddress,
+  );
+
+  const calls: Call[] = [];
+
+  if (tokensToSwap.length > 0) {
+    calls.push(...(await buildOdosCalls(tokensToSwap, tokenOut, sendCalls)));
+  }
+
+  if (tokenToTransfer) {
+    calls.push(buildTransferCall(tokenToTransfer, tokenOut.walletAddress));
+  }
+
+  const [_tx, logs] = await sendCalls("swap", chainId, wallet, calls);
 
   const singleSwapLogs = parseEventLogs({
     abi: swapAbi,
@@ -141,7 +178,10 @@ export async function executeOdosSwap(
     logs: logs as Log[],
   });
 
-  const tokenOutAmount = singleSwapLogs[0]?.args?.amountOut || multiSwapLogs[0]?.args?.amountsOut?.[0];
+  const tokenOutAmount =
+    (tokenToTransfer?.amount || 0n) +
+    (tokenThatStays?.amount || 0n) +
+    (singleSwapLogs[0]?.args?.amountOut || multiSwapLogs[0]?.args?.amountsOut?.[0] || 0n);
 
   if (!tokenOutAmount) {
     throw new Error("No output token amount found");

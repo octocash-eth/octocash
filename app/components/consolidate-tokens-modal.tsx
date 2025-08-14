@@ -2,7 +2,7 @@ import { AlertCircle, CheckCircle2 } from "lucide-react";
 import * as React from "react";
 import type { Account, Chain, HttpTransport, WalletClient } from "viem";
 import { getAddress, isAddress, parseUnits } from "viem";
-import { useWalletClient } from "wagmi";
+import { useAccount, useWalletClient } from "wagmi";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
@@ -54,6 +54,7 @@ export function ConsolidateTokensModal({
 
   const { executeConsolidation, currentStep, error } = useConsolidate();
   const { data: walletClient } = useWalletClient();
+  const { addresses } = useAccount();
 
   // Calculate estimated USDC amount (with a 0.5% fee)
   React.useEffect(() => {
@@ -71,7 +72,7 @@ export function ConsolidateTokensModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!walletClient) {
+    if (!walletClient || !addresses) {
       console.error("Wallet not connected");
       return;
     }
@@ -91,17 +92,20 @@ export function ConsolidateTokensModal({
     const destinationChainId = Number(
       availableChains.find((chain) => chain.chainId === Number(destinationChain))?.chainId,
     );
+    const sendTo = getAddress(destinationWallet);
+    const intermediateWallet = addresses.includes(sendTo) ? sendTo : addresses[0];
     const destinationToken: TokenAmount = {
       amount: 0n,
       chainId: destinationChainId,
       token: tokenAddresses[destinationChainId as keyof typeof tokenAddresses],
-      walletAddress: getAddress(destinationWallet),
+      walletAddress: intermediateWallet,
     };
 
     try {
       await executeConsolidation(
         sourceTokens,
         destinationToken,
+        sendTo,
         walletClient as WalletClient<HttpTransport, Chain, Account>,
       );
       setOpen(false);
@@ -280,7 +284,7 @@ export function ConsolidateTokensModal({
             <Alert>
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>Step 5/5</AlertTitle>
-              <AlertDescription>Swapping tokens…</AlertDescription>
+              <AlertDescription>Swapping and/or sending tokens…</AlertDescription>
             </Alert>
           )}
           {currentStep === ConsolidationStep.COMPLETED && (
