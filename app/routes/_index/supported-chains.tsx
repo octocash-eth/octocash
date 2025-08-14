@@ -7,7 +7,7 @@ export function SupportedChains() {
       <div className="flex flex-wrap justify-center gap-4">
         {supportedChains.map((chain) => (
           <div key={chain.id} className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
-            <img src={chain.icon} alt={chain.name} title={chain.name} className="w-8 h-8" />
+            <img src={chain.icon} alt={chain.name} title={chain.name} className="w-8 h-8 rounded-full" />
           </div>
         ))}
       </div>

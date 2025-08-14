@@ -142,7 +142,7 @@ export const columns: ColumnDef<WalletData>[] = [
       const chainIcon = `/chain-icons/${chainName.toLowerCase().replace(/\s+/g, "-")}.svg`;
       return (
         <div className="text-left flex items-center gap-2">
-          <img src={chainIcon} alt={chainName} className="w-6 h-6" />
+          <img src={chainIcon} alt={chainName} className="w-6 h-6 rounded-full" />
           <span>{chainName}</span>
         </div>
       );

@@ -13,13 +13,14 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "~/components/ui/dialog";
-import { Input } from "~/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import type { WalletData } from "~/components/wallet-table/columns";
 import { tokenAddresses } from "~/data/cctp-contracts";
 import { supportedChains } from "~/data/supported-chains";
 import { useConsolidate } from "~/hooks/use-consolidate";
 import { ConsolidationStep, type TokenAmount } from "~/lib/consolidation";
+import AddressAvatar from "./address-avatar";
+import { Combobox } from "./combobox";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 
 interface ConsolidateTokensModalProps {
@@ -40,6 +41,7 @@ export function ConsolidateTokensModal({
   const [destinationWallet, setDestinationWallet] = React.useState("");
   const [destinationChain, setDestinationChain] = React.useState("");
   const [estimatedAmount, setEstimatedAmount] = React.useState(0);
+  const [destinationToken, setDestinationToken] = React.useState("USDC");
   const [open, setOpen] = React.useState(false);
 
   const consolidatedTokens = React.useMemo(() => {
@@ -55,6 +57,11 @@ export function ConsolidateTokensModal({
   const { executeConsolidation, currentStep, error } = useConsolidate();
   const { data: walletClient } = useWalletClient();
   const { addresses } = useAccount();
+
+  const addressOptions = React.useMemo(
+    () => (addresses ?? []).map((address) => ({ value: address, label: address })),
+    [addresses],
+  );
 
   // Calculate estimated USDC amount (with a 0.5% fee)
   React.useEffect(() => {
@@ -204,20 +211,20 @@ export function ConsolidateTokensModal({
             <label htmlFor="destination-wallet" className="text-sm font-medium">
               Destination Wallet
             </label>
-            <Input
-              id="destination-wallet"
-              placeholder="0x…"
+            <Combobox
+              labelFunction={(address) => (
+                <div className="flex items-center gap-2">
+                  <AddressAvatar addressOrEns={address} size={16} />
+                  {address}
+                </div>
+              )}
+              placeholder="0x..."
+              searchPlaceholder="Select or paste an address"
+              options={addressOptions}
               value={destinationWallet}
-              onChange={(e) => setDestinationWallet(e.target.value)}
-              required
+              onValueChange={setDestinationWallet}
+              isValidOption={[isAddress, `"$0" is not an Ethereum address`]}
             />
-          </div>
-
-          <div className="space-y-2">
-            <label htmlFor="destination-token" className="text-sm font-medium">
-              Destination Token
-            </label>
-            <Input id="destination-token" value="USDC" disabled className="bg-muted" />
           </div>
 
           <div className="space-y-2">
@@ -231,11 +238,41 @@ export function ConsolidateTokensModal({
               <SelectContent>
                 {availableChains.map((chain) => (
                   <SelectItem key={chain.chainId} value={chain.chainId.toString()}>
-                    {chain.name}
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={`/chain-icons/${chain.name.toLowerCase().replace(/\s+/g, "-")}.svg`}
+                        alt={`${chain.name} icon`}
+                        className="w-4 h-4 rounded-full"
+                      />
+                      {chain.name}
+                    </div>
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="destination-token" className="text-sm font-medium">
+              Destination Token
+            </label>
+            <Combobox
+              options={[{ value: "USDC" }]}
+              value={destinationToken}
+              onValueChange={setDestinationToken}
+              labelFunction={(token) => (
+                <div className="flex items-center gap-2">
+                  <img
+                    src={"https://assets.coingecko.com/coins/images/6319/small/usdc.png?1696506694"}
+                    alt="USDC"
+                    className="w-4 h-4 rounded-full"
+                  />
+                  {token}
+                </div>
+              )}
+              placeholder="Select or paste a token"
+              searchPlaceholder="Search for a token"
+            />
           </div>
 
           <div className="space-y-2 pt-3 border-t">

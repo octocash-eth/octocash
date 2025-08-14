@@ -16,6 +16,7 @@ import {
 import { Coins, Filter, Link, Wallet } from "lucide-react";
 import * as React from "react";
 import { formatAddress } from "~/lib/utils";
+import AddressAvatar from "../address-avatar";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
@@ -49,13 +50,14 @@ export function DataTable<TData, TValue>({ columns, data, onRowSelectionChange }
 
   // Get unique tokens from the data
   const uniqueTokens = React.useMemo(() => {
-    const tokens = new Set<string>();
+    const tokens = new Map<string, string>();
     data.forEach((item: TData) => {
       if ((item as { token: string }).token) {
-        tokens.add((item as { token: string }).token);
+        const { token, iconUrl } = item as { token: string; iconUrl: string };
+        tokens.set(token, iconUrl);
       }
     });
-    return Array.from(tokens);
+    return Array.from(tokens.entries());
   }, [data]);
 
   // Get unique chains from the data
@@ -195,7 +197,10 @@ export function DataTable<TData, TValue>({ columns, data, onRowSelectionChange }
                       }
                     }}
                   >
-                    {formatAddress(address)}
+                    <div className="flex items-center gap-2">
+                      <AddressAvatar addressOrEns={address} size={16} />
+                      {formatAddress(address)}
+                    </div>
                   </DropdownMenuCheckboxItem>
                 ))
               ) : (
@@ -232,7 +237,7 @@ export function DataTable<TData, TValue>({ columns, data, onRowSelectionChange }
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
               {uniqueTokens.length > 0 ? (
-                uniqueTokens.map((token) => (
+                uniqueTokens.map(([token, url]) => (
                   <DropdownMenuCheckboxItem
                     key={token}
                     checked={selectedTokens.includes(token)}
@@ -244,7 +249,10 @@ export function DataTable<TData, TValue>({ columns, data, onRowSelectionChange }
                       }
                     }}
                   >
-                    {token}
+                    <div className="flex items-center gap-2">
+                      <img src={url} alt={token} className="w-4 h-4" />
+                      {token}
+                    </div>
                   </DropdownMenuCheckboxItem>
                 ))
               ) : (
@@ -292,7 +300,14 @@ export function DataTable<TData, TValue>({ columns, data, onRowSelectionChange }
                       }
                     }}
                   >
-                    {chain}
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={`/chain-icons/${chain.toLowerCase().replace(/\s+/g, "-")}.svg`}
+                        alt={`${chain} icon`}
+                        className="w-4 h-4 rounded-full"
+                      />
+                      {chain}
+                    </div>
                   </DropdownMenuCheckboxItem>
                 ))
               ) : (

@@ -40,7 +40,7 @@ export function SiteHeader() {
         </div>
         {connectedAddresses.length > 0 ? (
           <div>
-            <ConnectButton />
+            <ConnectButton showBalance={false} chainStatus="none" />
           </div>
         ) : null}
       </div>
