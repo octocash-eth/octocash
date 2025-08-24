@@ -15,12 +15,13 @@ import {
 } from "~/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import type { WalletData } from "~/components/wallet-table/columns";
-import { tokenAddresses } from "~/data/cctp-contracts";
 import { supportedChains } from "~/data/supported-chains";
+import { ETH, USDC, WBTC } from "~/data/token-contracts";
 import { useConsolidate } from "~/hooks/use-consolidate";
 import { ConsolidationStep, type TokenAmount } from "~/lib/consolidation";
 import AddressAvatar from "./address-avatar";
 import { Combobox } from "./combobox";
+import { TokenLabel } from "./token-label";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 
 interface ConsolidateTokensModalProps {
@@ -41,7 +42,7 @@ export function ConsolidateTokensModal({
   const [destinationWallet, setDestinationWallet] = React.useState("");
   const [destinationChain, setDestinationChain] = React.useState("");
   const [estimatedAmount, setEstimatedAmount] = React.useState(0);
-  const [destinationToken, setDestinationToken] = React.useState("USDC");
+  const [destinationTokenAddr, setDestinationTokenAddr] = React.useState("");
   const [open, setOpen] = React.useState(false);
 
   const consolidatedTokens = React.useMemo(() => {
@@ -58,6 +59,16 @@ export function ConsolidateTokensModal({
   const { data: walletClient } = useWalletClient();
   const { addresses } = useAccount();
 
+  // Available chains for destination
+  const availableChains = supportedChains.map((chain) => ({
+    name: chain.name,
+    chainId: chain.id,
+  }));
+
+  const destinationChainId = Number(
+    availableChains.find((chain) => chain.chainId === Number(destinationChain))?.chainId,
+  );
+
   const addressOptions = React.useMemo(
     () => (addresses ?? []).map((address) => ({ value: address, label: address })),
     [addresses],
@@ -70,11 +81,11 @@ export function ConsolidateTokensModal({
     setEstimatedAmount(estimatedWithFee);
   }, [totalValueToConsolidate]);
 
-  // Available chains for destination
-  const availableChains = supportedChains.map((chain) => ({
-    name: chain.name,
-    chainId: chain.id,
-  }));
+  React.useEffect(() => {
+    if (destinationChainId) {
+      setDestinationTokenAddr(USDC[destinationChainId as keyof typeof USDC]);
+    }
+  }, [destinationChainId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -96,15 +107,12 @@ export function ConsolidateTokensModal({
       walletAddress: token.wallet,
     }));
 
-    const destinationChainId = Number(
-      availableChains.find((chain) => chain.chainId === Number(destinationChain))?.chainId,
-    );
     const sendTo = getAddress(destinationWallet);
     const intermediateWallet = addresses.includes(sendTo) ? sendTo : addresses[0];
     const destinationToken: TokenAmount = {
       amount: 0n,
       chainId: destinationChainId,
-      token: tokenAddresses[destinationChainId as keyof typeof tokenAddresses],
+      token: getAddress(destinationTokenAddr),
       walletAddress: intermediateWallet,
     };
 
@@ -257,20 +265,16 @@ export function ConsolidateTokensModal({
               Destination Token
             </label>
             <Combobox
-              options={[{ value: "USDC" }]}
-              value={destinationToken}
-              onValueChange={setDestinationToken}
-              labelFunction={(token) => (
-                <div className="flex items-center gap-2">
-                  <img
-                    src={"https://assets.coingecko.com/coins/images/6319/small/usdc.png?1696506694"}
-                    alt="USDC"
-                    className="w-4 h-4 rounded-full"
-                  />
-                  {token}
-                </div>
-              )}
-              placeholder="Select or paste a token"
+              disabled={!destinationChainId}
+              options={[
+                { value: USDC[destinationChainId as keyof typeof USDC] },
+                { value: WBTC[destinationChainId as keyof typeof WBTC] },
+                { value: ETH[destinationChainId as keyof typeof ETH] },
+              ]}
+              value={destinationTokenAddr}
+              onValueChange={setDestinationTokenAddr}
+              labelFunction={(tokenAddress) => <TokenLabel tokenAddress={tokenAddress} chainId={destinationChainId} />}
+              placeholder={destinationChainId ? "Select or paste a token" : "Select a destination chain first"}
               searchPlaceholder="Search for a token"
             />
           </div>
@@ -340,8 +344,20 @@ export function ConsolidateTokensModal({
           )}
 
           <DialogFooter className="pt-4 flex flex-col gap-2">
-            <Button type="submit" className="w-full py-5 text-base">
-              Consolidate
+            <Button
+              type="submit"
+              className="w-full py-5 text-base"
+              disabled={
+                currentStep !== ConsolidationStep.IDLE &&
+                currentStep !== ConsolidationStep.COMPLETED &&
+                currentStep !== ConsolidationStep.ERROR
+              }
+            >
+              {currentStep === ConsolidationStep.IDLE || currentStep === ConsolidationStep.COMPLETED
+                ? "Consolidate"
+                : currentStep === ConsolidationStep.ERROR
+                  ? "Try again"
+                  : "Consolidating…"}
             </Button>
           </DialogFooter>
         </form>

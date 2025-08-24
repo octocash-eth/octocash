@@ -67,7 +67,12 @@ export function useConsolidate() {
         }
       }
 
-      const bridgedToken = await executeBridge(tokensToBeBridged, destinationToken, walletClient, setCurrentStep);
+      const usdcToken = {
+        ...destinationToken,
+        token: tokenAddresses[destinationToken.chainId as keyof typeof tokenAddresses],
+      };
+
+      const bridgedToken = await executeBridge(tokensToBeBridged, usdcToken, walletClient, setCurrentStep);
       const groupedTokensInDestinationChain = groupTokensByWalletAndChain([...tokensInDestinationChain, bridgedToken]);
 
       const resultingTokens: TokenAmount[] = [];

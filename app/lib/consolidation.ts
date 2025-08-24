@@ -10,6 +10,7 @@ import {
   parseEventLogs,
   type WalletClient,
 } from "viem";
+import { tokenAddresses } from "~/data/cctp-contracts";
 import { chains } from "~/data/supported-chains";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import { executeOdosSwapOrTransfer } from "./odos";
@@ -162,6 +163,18 @@ export const executeBridge = async (
   walletClient: WalletClient<HttpTransport, Chain, Account>,
   onProgress?: ConsolidationProgressCallback,
 ) => {
+  for (const token of tokensIn) {
+    if (token.chainId === tokenOut.chainId) {
+      throw new Error("Tokens are already on the same chain");
+    }
+    if (token.token !== tokenAddresses[token.chainId as keyof typeof tokenAddresses]) {
+      throw new Error(`Token ${token.token} on chain ${token.chainId} is not USDC`);
+    }
+  }
+  if (tokenOut.token !== tokenAddresses[tokenOut.chainId as keyof typeof tokenAddresses]) {
+    throw new Error(`Token ${tokenOut.token} on chain ${tokenOut.chainId} is not USDC`);
+  }
+
   if (tokensIn.flat().length === 0) {
     return tokenOut;
   }

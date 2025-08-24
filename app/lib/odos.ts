@@ -164,6 +164,10 @@ export async function executeOdosSwapOrTransfer(
     calls.push(buildTransferCall(tokenToTransfer, tokenOut.walletAddress));
   }
 
+  if (calls.length === 0) {
+    return tokenThatStays?.amount || 0n;
+  }
+
   const [_tx, logs] = await sendCalls("swap", chainId, wallet, calls);
 
   const singleSwapLogs = parseEventLogs({

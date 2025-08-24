@@ -20,6 +20,7 @@ interface ComboboxProps {
   searchPlaceholder?: string;
   className?: string;
   isValidOption?: [(value: string) => boolean, string];
+  disabled?: boolean;
 }
 
 export function Combobox({
@@ -32,6 +33,7 @@ export function Combobox({
   searchPlaceholder = "Search...",
   className,
   isValidOption,
+  disabled,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const [options, setOptions] = React.useState<ComboboxOption[]>(initialOptions);
@@ -94,6 +96,7 @@ export function Combobox({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
+          disabled={disabled}
           variant="outline"
           type="button"
           aria-haspopup="listbox"
