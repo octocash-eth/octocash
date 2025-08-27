@@ -8,7 +8,8 @@ import {
   parseEventLogs,
   zeroAddress,
 } from "viem";
-import type { SendCallsFn, TokenAmount } from "~/lib/consolidation";
+import type { TokenAmount } from "~/lib/consolidation";
+import type { SendCallsFn } from "~/lib/send-calls";
 
 interface OdosQuoteResponse {
   pathId: string;

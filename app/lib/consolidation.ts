@@ -1,9 +1,7 @@
 import {
   type Account,
   type Address,
-  type Call,
   type Chain,
-  type Hex,
   type HttpTransport,
   type Log,
   parseAbi,
@@ -11,9 +9,9 @@ import {
   type WalletClient,
 } from "viem";
 import { tokenAddresses } from "~/data/cctp-contracts";
-import { chains } from "~/data/supported-chains";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import { executeOdosSwapOrTransfer } from "./odos";
+import { prepareSendCalls } from "./send-calls";
 
 export enum ConsolidationStep {
   IDLE = "idle",
@@ -34,65 +32,6 @@ export interface TokenAmount {
 }
 
 export type ConsolidationProgressCallback = (step: ConsolidationStep) => void;
-
-export type SendCallsFn = (
-  txId: string,
-  chainId: number,
-  from: Address,
-  calls: Call[],
-) => Promise<[string, { address: Address; data: Hex; topics: Hex[] }[]]>;
-
-/**
- * Switches to the given chain. If the chain is not supported, it adds it to the wallet.
- * @param client - The wallet client.
- * @param chainId - The chain ID.
- * @returns The wallet client.
- */
-const switchChain = async (client: WalletClient<HttpTransport, Chain, Account>, chainId: number) => {
-  try {
-    console.log("Switching to chain", chainId);
-    await client.switchChain({ id: chainId });
-  } catch (_err) {
-    console.log("Adding chain", chainId);
-    await client.addChain({
-      chain: chains[chainId as keyof typeof chains] as Chain,
-    });
-  }
-};
-
-/**
- * Prepares a function that sends calls to the given chain.
- * @param client - The wallet client.
- * @returns A function that sends calls to the given chain.
- */
-const prepareSendCalls = (client: WalletClient<HttpTransport, Chain, Account>) => {
-  return async (
-    txId: string,
-    chainId: number,
-    from: Address,
-    calls: Call[],
-  ): Promise<[string, { address: Address; data: Hex; topics: Hex[] }[]]> => {
-    await switchChain(client, chainId);
-    const _calls = await client.sendCalls({
-      account: from,
-      chain: chains[chainId as keyof typeof chains] as Chain,
-      forceAtomic: true,
-      calls,
-    });
-    const status = await client.waitForCallsStatus({
-      id: _calls.id,
-    });
-    const tx = status.receipts?.[0]?.transactionHash;
-
-    if (!tx || status.receipts?.[0]?.status === "reverted") {
-      throw new Error(`${txId} transaction reverted`);
-    }
-    // Flatten all logs from all receipts into a single array
-    const logs = status.receipts?.flatMap((r) => r.logs ?? []) ?? [];
-    console.log(`${txId} Tx: ${tx}`);
-    return [tx, logs];
-  };
-};
 
 /**
  * Group tokens by walletAddress and chainId, merging tokens with the same token address, wallet address, and chain id.

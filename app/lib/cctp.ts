@@ -1,7 +1,8 @@
 import { type Chain, encodeFunctionData, type Hex, parseAbi } from "viem";
 import { chainIdToDomain, messageTransmitter, tokenAddresses, tokenMessenger } from "~/data/cctp-contracts";
 import { chains } from "~/data/supported-chains";
-import type { SendCallsFn, TokenAmount } from "~/lib/consolidation";
+import type { TokenAmount } from "~/lib/consolidation";
+import type { SendCallsFn } from "~/lib/send-calls";
 
 const getApproveAndBurnUsdcCalls = async (
   sourceChainId: number,
@@ -47,7 +48,7 @@ const getApproveAndBurnUsdcCalls = async (
   return calls;
 };
 
-const retrieveAttestation = async (transactionHash: string, sourceChainId: number) => {
+export const retrieveAttestation = async (transactionHash: string, sourceChainId: number) => {
   const url = `https://iris-api.circle.com/v2/messages/${chainIdToDomain[sourceChainId]}?transactionHash=${transactionHash}`;
 
   while (true) {
@@ -78,7 +79,7 @@ const retrieveAttestation = async (transactionHash: string, sourceChainId: numbe
   }
 };
 
-const getMintUsdcCalls = async (
+export const getMintUsdcCalls = async (
   destinationChainId: number,
   attestations: { message: `0x${string}`; attestation: `0x${string}` }[],
 ) => {

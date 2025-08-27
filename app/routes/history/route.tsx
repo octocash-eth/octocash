@@ -4,9 +4,10 @@ import { useToken } from "wagmi";
 import { SiteHeader } from "~/components/site-header";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "~/components/ui/table";
 import { SITE_DESCRIPTION, SITE_NAME } from "~/data/site";
-import { chains, supportedChains } from "~/data/supported-chains";
+import { chains } from "~/data/supported-chains";
 import type { TokenAmount } from "~/lib/consolidation";
 import { getConsolidationRecords } from "~/lib/history";
+import ManualClaimDialog from "./manual-claim-dialog";
 
 export function meta() {
   return [{ title: `History — ${SITE_NAME}` }, { name: "description", content: SITE_DESCRIPTION }];
@@ -19,8 +20,6 @@ function truncateAddress(addr: string, visible: number = 4) {
 export default function History() {
   const records = getConsolidationRecords();
 
-  const _chainIdToName = new Map<number, string>(supportedChains.map((c) => [c.id, c.name]));
-
   return (
     <div className="flex flex-col min-h-svh bg-gradient-to-br from-blue-50 to-purple-50">
       <SiteHeader />
@@ -28,9 +27,12 @@ export default function History() {
         <div className="w-full max-w-7xl mx-auto">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-2xl font-bold">Consolidation History</h2>
-            <Link to="/" className="text-sm text-blue-600 hover:underline">
-              Back to Home
-            </Link>
+            <div className="flex items-center gap-2">
+              <ManualClaimDialog />
+              <Link to="/" className="text-sm text-blue-600 hover:underline">
+                Back to Home
+              </Link>
+            </div>
           </div>
 
           {records.length === 0 ? (
