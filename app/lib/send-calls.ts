@@ -19,6 +19,7 @@ export type SendCallsFn = (
   chainId: number,
   from: Address,
   calls: Call[],
+  isAtomic?: boolean,
 ) => Promise<[string, { address: Address; data: Hex; topics: Hex[] }[]]>;
 
 /**
@@ -31,12 +32,13 @@ export const prepareSendCalls = (client: WalletClient<HttpTransport, Chain, Acco
     chainId: number,
     from: Address,
     calls: Call[],
+    isAtomic: boolean = true,
   ): Promise<[string, { address: Address; data: Hex; topics: Hex[] }[]]> => {
     await switchChain(client, chainId);
     const _calls = await client.sendCalls({
       account: from,
       chain: chains[chainId as keyof typeof chains] as Chain,
-      forceAtomic: true,
+      forceAtomic: isAtomic,
       calls,
     });
     const status = await client.waitForCallsStatus({ id: _calls.id });

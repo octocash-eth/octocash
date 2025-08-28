@@ -167,6 +167,7 @@ export const executeCCTPMint = async (
     destinationChainId,
     tokenOut.walletAddress,
     await getMintUsdcCalls(destinationChainId, attestations),
+    false,
   );
   return [mintTx, mintLogs];
 };

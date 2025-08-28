@@ -147,7 +147,7 @@ export const executeBridge = async (
     logs: logs as Log[],
   });
 
-  const tokenOutAmount = txs[0]?.args?.amount ?? 0n;
+  const tokenOutAmount = txs.reduce((sum, tx) => sum + (tx?.args?.amount ?? 0n), 0n);
 
   return {
     token: tokenOut.token,
