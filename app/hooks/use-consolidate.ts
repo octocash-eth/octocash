@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
 import { usePublicClient } from "wagmi";
 import { tokenAddresses } from "~/data/cctp-contracts";
+import { useConsolidationRecords } from "~/hooks/use-consolidation-records";
 import {
   ConsolidationStep,
   executeBridge,
@@ -10,7 +11,6 @@ import {
   type TokenAmount,
 } from "~/lib/consolidation";
 import { ensureSufficientGas } from "~/lib/gas";
-import { addConsolidationRecord } from "~/lib/history";
 
 /**
  * Consolidates tokens into a single token.
@@ -20,6 +20,7 @@ export function useConsolidate() {
   const publicClient = usePublicClient();
   const [currentStep, setCurrentStep] = useState<ConsolidationStep>(ConsolidationStep.IDLE);
   const [error, setError] = useState<string | null>(null);
+  const [, setRecords] = useConsolidationRecords();
 
   /**
    * Executes the consolidation.
@@ -34,9 +35,10 @@ export function useConsolidate() {
     sendTo: Address,
     walletClient: WalletClient<HttpTransport, Chain, Account>,
   ) => {
-    console.log("executeConsolidation", sourceTokens, destinationToken);
-    const startedAt = Date.now();
-    const recordId = `${startedAt}-${Math.random().toString(36).slice(2, 8)}`;
+    const recordId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
       if (!publicClient) {
         throw new Error("Public client not found");
@@ -93,24 +95,30 @@ export function useConsolidate() {
         amount: resultingTokens.reduce((acc, token) => acc + token.amount, 0n),
         walletAddress: sendTo,
       };
-      addConsolidationRecord({
-        id: recordId,
-        timestamp: startedAt,
-        sourceTokens,
-        destinationToken: finalToken,
-        status: "completed",
-      });
+      setRecords((prev) => [
+        {
+          id: recordId,
+          timestamp: Date.now(),
+          sourceTokens,
+          destinationToken: finalToken,
+          status: "completed",
+        },
+        ...prev,
+      ]);
     } catch (err) {
       setCurrentStep(ConsolidationStep.ERROR);
       setError(err instanceof Error ? err.message : "Consolidation failed");
-      addConsolidationRecord({
-        id: recordId,
-        timestamp: startedAt,
-        sourceTokens,
-        destinationToken,
-        status: "error",
-        errorMessage: err instanceof Error ? err.message : String(err),
-      });
+      setRecords((prev) => [
+        {
+          id: recordId,
+          timestamp: Date.now(),
+          sourceTokens,
+          destinationToken,
+          status: "error",
+          errorMessage: err instanceof Error ? err.message : String(err),
+        },
+        ...prev,
+      ]);
       throw err;
     }
   };

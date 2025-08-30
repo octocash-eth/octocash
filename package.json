@@ -33,7 +33,9 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router": "^7.7.1",
+    "superjson": "^2.2.2",
     "tailwind-merge": "^3.3.1",
+    "use-local-storage-state": "^19.5.0",
     "viem": "latest",
     "wagmi": "latest"
   },

@@ -5,8 +5,8 @@ import { SiteHeader } from "~/components/site-header";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "~/components/ui/table";
 import { SITE_DESCRIPTION, SITE_NAME } from "~/data/site";
 import { chains } from "~/data/supported-chains";
+import { useConsolidationRecords } from "~/hooks/use-consolidation-records";
 import type { TokenAmount } from "~/lib/consolidation";
-import { getConsolidationRecords } from "~/lib/history";
 import ManualClaimDialog from "./manual-claim-dialog";
 
 export function meta() {
@@ -18,7 +18,7 @@ function truncateAddress(addr: string, visible: number = 4) {
 }
 
 export default function History() {
-  const records = getConsolidationRecords();
+  const [records] = useConsolidationRecords();
 
   return (
     <div className="flex flex-col min-h-svh bg-gradient-to-br from-blue-50 to-purple-50">
