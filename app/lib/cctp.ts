@@ -1,8 +1,20 @@
-import { type Chain, encodeFunctionData, type Hex, parseAbi } from "viem";
+import { type Address, type Chain, encodeFunctionData, type Hex, parseAbi } from "viem";
 import { chainIdToDomain, messageTransmitter, tokenAddresses, tokenMessenger } from "~/data/cctp-contracts";
 import { chains } from "~/data/supported-chains";
 import type { TokenAmount } from "~/lib/consolidation";
 import type { SendCallsFn } from "~/lib/send-calls";
+
+export type Attestation = {
+  message: `0x${string}`;
+  attestation: `0x${string}`;
+  status: string;
+  decodedMessage: {
+    destinationDomain: string;
+    decodedMessageBody: {
+      amount: string;
+    };
+  };
+};
 
 const getApproveAndBurnUsdcCalls = async (
   sourceChainId: number,
@@ -48,7 +60,7 @@ const getApproveAndBurnUsdcCalls = async (
   return calls;
 };
 
-export const retrieveAttestation = async (transactionHash: string, sourceChainId: number) => {
+const retrieveAttestation = async (transactionHash: string, sourceChainId: number): Promise<Attestation[]> => {
   const url = `https://iris-api.circle.com/v2/messages/${chainIdToDomain[sourceChainId]}?transactionHash=${transactionHash}`;
 
   while (true) {
@@ -64,10 +76,10 @@ export const retrieveAttestation = async (transactionHash: string, sourceChainId
         throw new Error(`API returned status ${response.status}`);
       }
 
-      const responseData = await response.json();
-      if (responseData?.messages?.[0]?.status === "complete") {
+      const responseData = (await response.json()) as { messages: Attestation[] };
+      if (responseData?.messages.every((message) => message.status === "complete")) {
         console.log("Attestation retrieved!", url);
-        return responseData.messages[0];
+        return responseData.messages;
       }
 
       console.log("Waiting for attestation...");
@@ -79,10 +91,7 @@ export const retrieveAttestation = async (transactionHash: string, sourceChainId
   }
 };
 
-export const getMintUsdcCalls = async (
-  destinationChainId: number,
-  attestations: { message: `0x${string}`; attestation: `0x${string}` }[],
-) => {
+export const getMintUsdcCalls = async (destinationChainId: number, attestations: Attestation[]) => {
   const contractConfig = {
     chain: chains[destinationChainId as keyof typeof chains] as Chain,
     address: messageTransmitter[destinationChainId] as `0x${string}`,
@@ -140,10 +149,10 @@ export const executeCCTPBurn = async (
  * @returns The attestations.
  */
 export const retrieveAttestations = async (transactionHashesAndChainIds: [string, number][]) => {
-  const attestations: { message: `0x${string}`; attestation: `0x${string}` }[] = [];
+  const attestations: Attestation[] = [];
   for (let i = 0; i < transactionHashesAndChainIds.length; i++) {
     const attestation = await retrieveAttestation(...transactionHashesAndChainIds[i]);
-    attestations.push(attestation);
+    attestations.push(...attestation);
   }
   return attestations;
 };
@@ -156,18 +165,46 @@ export const retrieveAttestations = async (transactionHashesAndChainIds: [string
  * @returns The transaction hash and the logs.
  */
 export const executeCCTPMint = async (
-  attestations: { message: `0x${string}`; attestation: `0x${string}` }[],
+  attestations: Attestation[],
   tokenOut: TokenAmount,
   sendCalls: SendCallsFn,
-) => {
-  // Execute mint step
+): Promise<[string, (Error | { address: Address; data: Hex; topics: Hex[] }[])[]]> => {
+  if (attestations.length === 0) {
+    throw new Error("No attestations");
+  }
+
+  // Build the calls
+  const calls = await getMintUsdcCalls(tokenOut.chainId, attestations);
   const destinationChainId = tokenOut.chainId;
-  const [mintTx, mintLogs] = await sendCalls(
+
+  // Simulate the calls
+  const [, , simulatedErrors] = await sendCalls(
     "mint",
     destinationChainId,
     tokenOut.walletAddress,
-    await getMintUsdcCalls(destinationChainId, attestations),
-    false,
+    calls,
+    "simulation",
   );
+
+  // If all the calls failed due to nonces already used, do nothing else, the USDC was already minted by somebody else
+  if (simulatedErrors.every((error) => error instanceof Error && error.message.includes("Nonce already used"))) {
+    return ["", []];
+  }
+
+  // Otherwise, send the calls, but remove the calls that failed in the simulation due to nonce already used
+  const [mintTx, mintLogs, mintErrors] = await sendCalls(
+    "mint",
+    destinationChainId,
+    tokenOut.walletAddress,
+    calls.filter(
+      (_call, i) => simulatedErrors[i] instanceof Error && simulatedErrors[i].message.includes("Nonce already used"),
+    ),
+    "non-atomic",
+  );
+
+  // It's still possible USDC being claimed in the meantime, but any other error is unexpected
+  if (mintErrors.some((error) => error instanceof Error && !error.message.includes("Nonce already used"))) {
+    throw new Error("Minting failed");
+  }
   return [mintTx, mintLogs];
 };

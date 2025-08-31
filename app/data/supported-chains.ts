@@ -1,3 +1,4 @@
+import { http } from "viem";
 import { arbitrum, base, linea, mainnet, optimism, polygon, unichain } from "viem/chains";
 
 export const chains = {
@@ -10,6 +11,18 @@ export const chains = {
   [unichain.id]: unichain,
   [linea.id]: linea,
 };
+
+export const transports = import.meta.env.VITE_ALCHEMY_API_KEY
+  ? {
+      [mainnet.id]: http(`https://eth-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
+      [optimism.id]: http(`https://opt-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
+      [arbitrum.id]: http(`https://arb-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
+      [base.id]: http(`https://base-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
+      [polygon.id]: http(`https://polygon-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
+      [unichain.id]: http(`https://unichain-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
+      [linea.id]: http(`https://linea-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
+    }
+  : undefined;
 
 export const supportedChains = Object.entries(chains).map(([chainId, chain]) => ({
   id: Number(chainId),

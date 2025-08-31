@@ -8,23 +8,23 @@ const basePort = 8545;
 const mnemonic = "memory dream rib champion cradle century antenna purchase smart company spoon reason";
 
 export default async function setup() {
-  if (!process.env.ALCHEMY_API_KEY) {
-    throw new Error("ALCHEMY_API_KEY is not set")
+  if (!process.env.VITE_ALCHEMY_API_KEY) {
+    throw new Error("VITE_ALCHEMY_API_KEY is not set")
   }
   const [proolMainnet, proolOptimism, proolBase] = [
     {
       chain: mainnet,
-      forkUrl: `https://eth-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+      forkUrl: `https://eth-mainnet.g.alchemy.com/v2/${process.env.VITE_ALCHEMY_API_KEY}`,
       forkBlockNumber: 23257260,
     },
     {
       chain: optimism,
-      forkUrl: `https://opt-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+      forkUrl: `https://opt-mainnet.g.alchemy.com/v2/${process.env.VITE_ALCHEMY_API_KEY}`,
       forkBlockNumber: 140499492,
     },
     {
       chain: base,
-      forkUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`,
+      forkUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.VITE_ALCHEMY_API_KEY}`,
       forkBlockNumber: 34904190,
     },
   ].map(({ chain, forkUrl, forkBlockNumber }) =>
@@ -97,10 +97,7 @@ export const getTestClients = (chainId: number) => {
 }
 
 export async function reset() {
-  const { testClient } = getTestClients(mainnet.id);
-  const { testClient: optimismTestClient } = getTestClients(optimism.id);
-  const { testClient: baseTestClient } = getTestClients(base.id);
-  await testClient.reset();
-  await optimismTestClient.reset();
-  await baseTestClient.reset();
+  await getTestClients(mainnet.id).testClient.reset();
+  await getTestClients(optimism.id).testClient.reset();
+  await getTestClients(base.id).testClient.reset();
 }

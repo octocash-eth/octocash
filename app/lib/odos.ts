@@ -167,17 +167,18 @@ export async function executeOdosSwapOrTransfer(
   }
 
   const [_tx, logs] = await sendCalls("swap", chainId, wallet, calls);
+  const flattenedLogs = logs.flat();
 
   const singleSwapLogs = parseEventLogs({
     abi: swapAbi,
     eventName: "Swap",
-    logs: logs as Log[],
+    logs: flattenedLogs as Log[],
   });
 
   const multiSwapLogs = parseEventLogs({
     abi: swapAbi,
     eventName: "SwapMulti",
-    logs: logs as Log[],
+    logs: flattenedLogs as Log[],
   });
 
   const tokenOutAmount =

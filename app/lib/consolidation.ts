@@ -1,15 +1,6 @@
-import {
-  type Account,
-  type Address,
-  type Chain,
-  type HttpTransport,
-  type Log,
-  parseAbi,
-  parseEventLogs,
-  type WalletClient,
-} from "viem";
+import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
 import { tokenAddresses } from "~/data/cctp-contracts";
-import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
+import { type Attestation, executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import { executeOdosSwapOrTransfer } from "./odos";
 import { prepareSendCalls } from "./send-calls";
 
@@ -128,21 +119,15 @@ export const executeBridge = async (
   }
 
   onProgress?.(ConsolidationStep.WAITING_ATTESTATION);
-  const attestations = await retrieveAttestations(burnTxsAndChainIds);
+  const attestations: Attestation[] = await retrieveAttestations(burnTxsAndChainIds);
+
+  const tokenOutAmount = attestations.reduce(
+    (sum, attestation) => sum + BigInt(attestation.decodedMessage.decodedMessageBody.amount),
+    0n,
+  );
 
   onProgress?.(ConsolidationStep.MINTING);
-  const [_mintTx, logs] = await executeCCTPMint(attestations, tokenOut, sendCalls);
-
-  const txs = parseEventLogs({
-    abi: parseAbi([
-      "event MintAndWithdraw(address indexed mintRecipient, uint256 amount, address indexed mintToken, uint256 feeCollected)",
-    ]),
-    eventName: "MintAndWithdraw",
-    logs: logs as Log[],
-  });
-
-  const tokenOutAmount = txs.reduce((sum, tx) => sum + (tx?.args?.amount ?? 0n), 0n);
-
+  const [_mintTx, _logs] = await executeCCTPMint(attestations, tokenOut, sendCalls);
   return {
     token: tokenOut.token,
     amount: tokenOutAmount,

@@ -4,7 +4,7 @@ import { type Chain, createPublicClient } from "viem";
 import { mainnet } from "viem/chains";
 import { type Config, createConfig, http } from "wagmi";
 import { SITE_NAME } from "../data/site";
-import { chains } from "../data/supported-chains";
+import { chains, transports } from "../data/supported-chains";
 
 export const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID ?? "";
 
@@ -16,6 +16,7 @@ export const WALLETCONNECT_CONFIG: Config = getDefaultConfig({
   appName: SITE_NAME,
   projectId: WALLETCONNECT_PROJECT_ID || "dummy",
   chains: Object.values(chains) as unknown as readonly [Chain, ...Chain[]],
+  transports,
   ssr: false,
 });
 
