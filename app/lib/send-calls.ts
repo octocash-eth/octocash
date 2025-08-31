@@ -43,10 +43,10 @@ export const prepareSendCalls = (client: WalletClient<HttpTransport, Chain, Acco
     });
     const status = await client.waitForCallsStatus({ id: _calls.id });
     const tx = status.receipts?.[0]?.transactionHash;
-    if (!tx || status.receipts?.[0]?.status === "reverted") {
+    if (!status.receipts || !tx || status.receipts?.[0]?.status === "reverted") {
       throw new Error(`${txId} transaction reverted`);
     }
-    const logs = status.receipts?.flatMap((r) => r.logs ?? []) ?? [];
+    const logs = status.receipts.flatMap((r) => r.logs ?? []);
     return [tx, logs];
   };
 };

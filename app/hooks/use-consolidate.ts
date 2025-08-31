@@ -17,7 +17,7 @@ import { ensureSufficientGas } from "~/lib/gas";
  * @returns The consolidation state.
  */
 export function useConsolidate() {
-  const publicClient = usePublicClient();
+  const _publicClient = usePublicClient();
   const [currentStep, setCurrentStep] = useState<ConsolidationStep>(ConsolidationStep.IDLE);
   const [error, setError] = useState<string | null>(null);
   const [, setRecords] = useConsolidationRecords();
@@ -35,17 +35,10 @@ export function useConsolidate() {
     sendTo: Address,
     walletClient: WalletClient<HttpTransport, Chain, Account>,
   ) => {
-    const recordId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const recordId = crypto.randomUUID();
     try {
-      if (!publicClient) {
-        throw new Error("Public client not found");
-      }
-
       // Pre-flight: ensure gas on each required chain
-      await ensureSufficientGas(publicClient, sourceTokens, destinationToken);
+      await ensureSufficientGas(sourceTokens, destinationToken);
 
       const groupedTokens = groupTokensByWalletAndChain(sourceTokens);
       const tokensInDestinationChain: TokenAmount[] = [];

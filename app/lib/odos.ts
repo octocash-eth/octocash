@@ -58,7 +58,8 @@ function buildApproveCalls(inputs: TokenAmount[], router: Address): Call[] {
     if (seen.has(key)) continue;
     seen.add(key);
     // Skip native coin (it doesn't need to be approved)
-    if (t.token.toLowerCase() === zeroAddress) continue;
+    if (t.token === zeroAddress) continue;
+    // Skip tokens that don't need to be approved
     if (t.amount === 0n) continue;
     calls.push({
       to: t.token,
@@ -81,11 +82,7 @@ function buildTransferCall(token: TokenAmount, to: Address): Call {
   };
 }
 
-async function buildOdosCalls(
-  tokensToSwap: TokenAmount[],
-  tokenOut: TokenAmount,
-  _sendCalls: SendCallsFn,
-): Promise<Call[]> {
+export async function buildOdosCalls(tokensToSwap: TokenAmount[], tokenOut: TokenAmount): Promise<Call[]> {
   const chainId = tokensToSwap[0].chainId;
   const userAddr = tokensToSwap[0].walletAddress;
 
@@ -158,7 +155,7 @@ export async function executeOdosSwapOrTransfer(
   const calls: Call[] = [];
 
   if (tokensToSwap.length > 0) {
-    calls.push(...(await buildOdosCalls(tokensToSwap, tokenOut, sendCalls)));
+    calls.push(...(await buildOdosCalls(tokensToSwap, tokenOut)));
   }
 
   if (tokenToTransfer) {

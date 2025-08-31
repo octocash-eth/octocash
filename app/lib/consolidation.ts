@@ -120,15 +120,9 @@ export const executeBridge = async (
 
   const sendCalls = prepareSendCalls(walletClient);
 
-  // Separate token that matches the target token from those that need bridging
-  const matchingToken = tokensIn.find((token) => token.chainId === tokenOut.chainId);
-  const tokensToBridge = tokensIn.filter((token) => token.chainId !== tokenOut.chainId);
-
-  const existingAmount = matchingToken?.amount ?? 0n;
-
   onProgress?.(ConsolidationStep.BURNING);
   const burnTxsAndChainIds: [string, number][] = [];
-  for (const token of tokensToBridge) {
+  for (const token of tokensIn) {
     const [tx, chainId] = await executeCCTPBurn(token, tokenOut, sendCalls);
     burnTxsAndChainIds.push([tx, chainId]);
   }
@@ -151,7 +145,7 @@ export const executeBridge = async (
 
   return {
     token: tokenOut.token,
-    amount: existingAmount + tokenOutAmount,
+    amount: tokenOutAmount,
     walletAddress: tokenOut.walletAddress,
     chainId: tokenOut.chainId,
   };

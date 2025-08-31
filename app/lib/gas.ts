@@ -1,25 +1,17 @@
-import { type Address, type Chain, createPublicClient, formatUnits, http, parseUnits } from "viem";
-import type { usePublicClient } from "wagmi";
+import { type Address, type Chain, createPublicClient, formatUnits, http, parseUnits, type Transport } from "viem";
 import { getGasThresholdForChain } from "~/data/gas-thresholds";
 import { chains } from "~/data/supported-chains";
 import type { TokenAmount } from "./consolidation";
 
-async function getNativeBalance(
-  _publicClient: ReturnType<typeof usePublicClient>,
-  chainId: number,
-  address: Address,
-): Promise<bigint> {
-  const chain = chains[chainId as keyof typeof chains] as Chain;
-  const rpcUrl = chain.rpcUrls.default.http[0];
-  const client = createPublicClient({ chain, transport: http(rpcUrl) });
-  const balance = await client.getBalance({ address });
-  return balance;
+export async function getNativeBalance(chain: Chain, address: Address, transport?: Transport): Promise<bigint> {
+  const client = createPublicClient({ chain, transport: transport ?? http(chain.rpcUrls.default.http[0]) });
+  return await client.getBalance({ address });
 }
 
 export async function ensureSufficientGas(
-  publicClient: ReturnType<typeof usePublicClient>,
   tokensIn: TokenAmount[],
   tokenOut: TokenAmount,
+  transports?: Record<number, Transport>,
 ): Promise<void> {
   // Check per (chainId, walletAddress) pair among sources, plus destination pair
   type Pair = { chainId: number; address: Address };
@@ -33,17 +25,22 @@ export async function ensureSufficientGas(
     chainId: tokenOut.chainId,
     address: tokenOut.walletAddress,
   });
-  if (!pairsMap.has(destKey))
+  if (!pairsMap.has(destKey)) {
     pairsMap.set(destKey, {
       chainId: tokenOut.chainId,
       address: tokenOut.walletAddress,
     });
+  }
 
   const insufficients: string[] = [];
   for (const { chainId, address } of pairsMap.values()) {
     const thresholdStr = getGasThresholdForChain(chainId);
     const thresholdWei = parseUnits(thresholdStr, 18);
-    const balanceWei = await getNativeBalance(publicClient, chainId, address);
+    const balanceWei = await getNativeBalance(
+      chains[chainId as keyof typeof chains] as Chain,
+      address,
+      transports?.[chainId as keyof typeof transports],
+    );
     if (balanceWei < thresholdWei) {
       const chain = chains[chainId as keyof typeof chains] as Chain;
       const [chainName, symbol] = [chain.name, chain.nativeCurrency.symbol];
