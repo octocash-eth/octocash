@@ -1,6 +1,7 @@
 import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
 import { tokenAddresses } from "~/data/cctp-contracts";
 import { type Attestation, executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
+import { ensureSufficientGas } from "./gas";
 import { executeOdosSwapOrTransfer } from "./odos";
 import { prepareSendCalls } from "./send-calls";
 
@@ -135,3 +136,80 @@ export const executeBridge = async (
     chainId: tokenOut.chainId,
   };
 };
+
+/**
+ * Executes the consolidation.
+ * @param sourceTokens - The tokens to consolidate.
+ * @param destinationToken - The destination token.
+ * @param sendTo - The wallet address to send the consolidated tokens to.
+ * @param walletClient - The wallet client.
+ * @param setCurrentStep - The function to set the current step.
+ * @returns
+ */
+export async function executeConsolidation({
+  sourceTokens,
+  destinationToken,
+  sendTo,
+  walletClient,
+  setCurrentStep,
+}: {
+  sourceTokens: TokenAmount[];
+  destinationToken: TokenAmount;
+  sendTo: Address;
+  walletClient: WalletClient<HttpTransport, Chain, Account>;
+  setCurrentStep: (step: ConsolidationStep) => void;
+}) {
+  // Pre-flight: ensure gas on each required chain
+  await ensureSufficientGas(sourceTokens, destinationToken);
+
+  const groupedTokens = groupTokensByWalletAndChain(sourceTokens);
+  const tokensInDestinationChain: TokenAmount[] = [];
+  const tokensToBeBridged: TokenAmount[] = [];
+
+  for (const _tokens of groupedTokens) {
+    const { chainId, walletAddress } = _tokens[0];
+    if (chainId === destinationToken.chainId) {
+      tokensInDestinationChain.push(..._tokens);
+    } else {
+      const usdcToken = tokenAddresses[chainId as keyof typeof tokenAddresses];
+      const tokenOut = {
+        token: usdcToken,
+        amount: 0n,
+        walletAddress,
+        chainId,
+      };
+      tokensToBeBridged.push(
+        await executeSwapOrTransfer(_tokens, tokenOut, walletClient, setCurrentStep, ConsolidationStep.SWAPPING),
+      );
+    }
+  }
+
+  const usdcToken = {
+    ...destinationToken,
+    token: tokenAddresses[destinationToken.chainId as keyof typeof tokenAddresses],
+  };
+
+  const bridgedToken = await executeBridge(tokensToBeBridged, usdcToken, walletClient, setCurrentStep);
+  const groupedTokensInDestinationChain = groupTokensByWalletAndChain([...tokensInDestinationChain, bridgedToken]);
+
+  const resultingTokens: TokenAmount[] = [];
+  for (const _tokens of groupedTokensInDestinationChain) {
+    const tokenOut: TokenAmount = {
+      ...destinationToken,
+      walletAddress: sendTo,
+    };
+    resultingTokens.push(
+      await executeSwapOrTransfer(_tokens, tokenOut, walletClient, setCurrentStep, ConsolidationStep.SWAPPING_BACK),
+    );
+  }
+
+  setCurrentStep(ConsolidationStep.COMPLETED);
+
+  const finalToken: TokenAmount = {
+    ...destinationToken,
+    amount: resultingTokens.reduce((acc, token) => acc + token.amount, 0n),
+    walletAddress: sendTo,
+  };
+
+  return finalToken;
+}

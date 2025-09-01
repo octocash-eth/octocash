@@ -11,7 +11,9 @@ import {
 import { describe, expect, test, vi } from "vitest";
 import { USDC as tokenAddresses } from "../data/token-contracts";
 import * as cctp from "./cctp";
+import * as consolidation from "./consolidation";
 import { ConsolidationStep, executeBridge, executeSwapOrTransfer, groupTokensByWalletAndChain } from "./consolidation";
+import * as gas from "./gas";
 import * as odos from "./odos";
 
 // Helpers for executeBridge tests
@@ -227,7 +229,12 @@ describe("consolidation", () => {
       const { burnMock, retrieveMock, mintMock, restore } = mockCCTPForBridge(tokenOut, [50n, 70n]);
 
       const onProgress = vi.fn();
-      const walletClient = {} as unknown as WalletClient<HttpTransport, Chain, Account>;
+      const walletClient = {
+        switchChain: vi.fn().mockResolvedValue(undefined),
+        addChain: vi.fn().mockResolvedValue(undefined),
+        sendCalls: vi.fn().mockResolvedValue({ id: "test-id" }),
+        waitForCallsStatus: vi.fn().mockResolvedValue({ status: "success", receipts: [] }),
+      } as unknown as WalletClient<HttpTransport, Chain, Account>;
 
       const result = await executeBridge(tokens, tokenOut, walletClient, onProgress);
 
@@ -248,6 +255,110 @@ describe("consolidation", () => {
       expect(mintMock).toHaveBeenCalledWith(buildAttestations(tokenOut, [50n, 70n]), tokenOut, expect.any(Function));
       expect(result).toEqual({ ...tokenOut, amount: 120n });
 
+      restore();
+    });
+  });
+  describe("executeConsolidation", () => {
+    test("bridges tokens, reports progress, and aggregates minted amount", async () => {
+      const srcChainIdA = 10; // optimism
+      const srcChainIdB = 42161; // arbitrum
+      const destChainId = 1; // mainnet
+
+      const sourceTokens = [
+        // Off-destination chain group A (wallet W1 on chain 10)
+        {
+          token: "0xA" as Address,
+          walletAddress: "0x00000000000000000000000000000000000000a1" as Address,
+          chainId: srcChainIdA,
+          amount: 2n,
+        },
+        {
+          token: "0xB" as Address,
+          walletAddress: "0x00000000000000000000000000000000000000a1" as Address,
+          chainId: srcChainIdA,
+          amount: 3n,
+        },
+        // Off-destination chain group B (wallet W2 on chain 42161)
+        {
+          token: "0xC" as Address,
+          walletAddress: "0x00000000000000000000000000000000000000a2" as Address,
+          chainId: srcChainIdB,
+          amount: 7n,
+        },
+        // Already on destination chain (wallet W3 on chain 1)
+        {
+          token: "0xD" as Address,
+          walletAddress: "0x00000000000000000000000000000000000000a3" as Address,
+          chainId: destChainId,
+          amount: 11n,
+        },
+        {
+          token: "0xE" as Address,
+          walletAddress: "0x00000000000000000000000000000000000000a3" as Address,
+          chainId: destChainId,
+          amount: 13n,
+        },
+      ];
+
+      const destinationToken = {
+        token: "0xDEST" as Address,
+        walletAddress: "0x00000000000000000000000000000000000000b0" as Address,
+        chainId: destChainId,
+        amount: 0n,
+      };
+
+      const sendTo = "0x00000000000000000000000000000000000000c0" as Address;
+      const walletClient = {} as unknown as WalletClient<HttpTransport, Chain, Account>;
+
+      const ensureGasMock = vi.spyOn(gas, "ensureSufficientGas").mockResolvedValue();
+
+      // Let executeSwapOrTransfer run, but mock Odos execution to avoid network
+      const odosSpy = vi
+        .spyOn(odos, "executeOdosSwapOrTransfer")
+        .mockImplementation(async (tokensIn) => tokensIn.reduce((acc, t) => acc + t.amount, 0n));
+
+      // Mock CCTP internals used by executeBridge to avoid real send-calls
+      const usdcDestTokenOut = {
+        token: tokenAddresses[destChainId] as Address,
+        walletAddress: destinationToken.walletAddress,
+        chainId: destChainId,
+        amount: 0n,
+      };
+      const { restore } = mockCCTPForBridge(usdcDestTokenOut, [5n, 7n]);
+
+      const setCurrentStep = vi.fn();
+
+      const result = await consolidation.executeConsolidation({
+        sourceTokens,
+        destinationToken,
+        sendTo,
+        walletClient,
+        setCurrentStep,
+      });
+
+      // ensure gas was checked
+      expect(ensureGasMock).toHaveBeenCalledWith(sourceTokens, destinationToken);
+
+      // Odos execution should be called for two pre-bridge and two post-bridge swaps
+      expect(odosSpy).toHaveBeenCalledTimes(4);
+
+      // Progress sequence: two SWAPPING, bridge steps, two SWAPPING_BACK, COMPLETED
+      expect(setCurrentStep.mock.calls.map((c) => c[0])).toEqual([
+        ConsolidationStep.SWAPPING,
+        ConsolidationStep.SWAPPING,
+        ConsolidationStep.BURNING,
+        ConsolidationStep.WAITING_ATTESTATION,
+        ConsolidationStep.MINTING,
+        ConsolidationStep.SWAPPING_BACK,
+        ConsolidationStep.SWAPPING_BACK,
+        ConsolidationStep.COMPLETED,
+      ]);
+
+      // Final amount = (11 + 13) from dest chain group + ((2 + 3) from bridged group A + (7) from bridged group B)
+      expect(result).toEqual({ ...destinationToken, amount: 36n, walletAddress: sendTo });
+
+      ensureGasMock.mockRestore();
+      odosSpy.mockRestore();
       restore();
     });
   });
