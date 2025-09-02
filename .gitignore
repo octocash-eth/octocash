@@ -8,3 +8,9 @@
 
 # Test
 /coverage/
+
+# Package locks
+/package-lock.json
+/yarn.lock
+/pnpm-lock.yaml
+/deno.lock
