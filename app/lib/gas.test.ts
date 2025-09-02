@@ -1,5 +1,5 @@
 import { type Address, parseUnits, type Transport, zeroAddress } from "viem";
-import { mainnet, optimism } from "viem/chains";
+import { degen, mainnet, optimism } from "viem/chains";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { getTestClients, reset } from "../../test/globalSetup";
 import { ensureSufficientGas, getNativeBalance } from "./gas";
@@ -62,6 +62,11 @@ describe("gas", () => {
       expect(balance).toBe(parseUnits("0", 18));
       const balance2 = await getNativeBalance(optimism, "0x19afE793Fb51902883F68f06685aE5277aF13857");
       expect(balance2).toBe(parseUnits("0", 18));
+    });
+    test("should throw an error if the chain is not supported", async () => {
+      await expect(getNativeBalance(degen, "0xc30b007BC349d52850207F78c63b4bd0c823F122")).rejects.toThrow(
+        "Client not found for chain 666666666",
+      );
     });
   });
 

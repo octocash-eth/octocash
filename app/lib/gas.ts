@@ -1,10 +1,17 @@
-import { type Address, type Chain, createPublicClient, formatUnits, http, parseUnits, type Transport } from "viem";
+import { type Config, getPublicClient } from "@wagmi/core";
+import { type Address, type Chain, createPublicClient, formatUnits, parseUnits, type Transport } from "viem";
 import { getGasThresholdForChain } from "~/data/gas-thresholds";
 import { chains } from "~/data/supported-chains";
+import { WALLETCONNECT_CONFIG } from "~/utils/wallet";
 import type { TokenAmount } from "./consolidation";
 
 export async function getNativeBalance(chain: Chain, address: Address, transport?: Transport): Promise<bigint> {
-  const client = createPublicClient({ chain, transport: transport ?? http(chain.rpcUrls.default.http[0]) });
+  const client = transport
+    ? createPublicClient({ chain, transport })
+    : getPublicClient(WALLETCONNECT_CONFIG as Config, { chainId: chain.id });
+  if (!client) {
+    throw new Error(`Client not found for chain ${chain.id}`);
+  }
   return await client.getBalance({ address });
 }
 
