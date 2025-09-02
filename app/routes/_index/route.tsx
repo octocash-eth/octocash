@@ -1,4 +1,4 @@
-import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { GatedConnectButton } from "~/components/gated-connect-button";
 import { SiteHeader } from "~/components/site-header";
 import { WalletTable } from "~/components/wallet-table";
 import { SITE_DESCRIPTION, SITE_NAME } from "~/data/site";
@@ -39,7 +39,7 @@ export default function Home() {
 
                 {/* Connect Wallet Button */}
                 <div className="mb-8">
-                  <ConnectButton />
+                  <GatedConnectButton />
                 </div>
               </div>
             </div>

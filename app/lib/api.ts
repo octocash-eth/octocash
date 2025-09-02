@@ -138,7 +138,7 @@ function buildWalletDataFromTokens(tokenBalances: TokenBalance[], address: strin
         chain: chainIdToName[chainId] || `Chain-${chainId}`,
         amount: balance,
         amountInUsd: amountInUsd,
-        iconUrl: token.icon_url,
+        iconUrl: `https://token-logos.blossom.deno.net/token/${chainId}/${token.address}`,
         decimals: Number(token.decimals),
       });
     } catch (error) {
