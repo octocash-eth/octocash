@@ -62,5 +62,9 @@
   },
   "patchedDependencies": {
     "http-proxy@1.18.1": "patches/http-proxy@1.18.1.patch"
-  }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "bun@1.2.19"
 }
