@@ -1,8 +1,7 @@
 import "@rainbow-me/rainbowkit/styles.css";
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
-import { type Chain, createPublicClient } from "viem";
-import { mainnet } from "viem/chains";
-import { type Config, createConfig, http } from "wagmi";
+import type { Chain } from "viem";
+import type { Config } from "wagmi";
 import { SITE_NAME } from "../data/site";
 import { chains, transports } from "../data/supported-chains";
 
@@ -19,15 +18,3 @@ export const WALLETCONNECT_CONFIG: Config = getDefaultConfig({
   transports,
   ssr: false,
 });
-
-export const mainnetConfig = createConfig({
-  chains: [mainnet],
-  transports: {
-    [mainnet.id]: http(),
-  },
-});
-
-export const publicClient = createPublicClient({
-  chain: mainnet,
-  transport: http(),
-}); // Use this to get ENS addresses

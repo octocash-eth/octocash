@@ -8,23 +8,23 @@ const basePort = 8545;
 const mnemonic = "memory dream rib champion cradle century antenna purchase smart company spoon reason";
 
 export default async function setup() {
-  if (!process.env.VITE_ALCHEMY_API_KEY) {
-    throw new Error("VITE_ALCHEMY_API_KEY is not set")
+  if (!process.env.VITE_DRPC_API_KEY) {
+    throw new Error("VITE_DRPC_API_KEY is not set")
   }
   const [proolMainnet, proolOptimism, proolBase] = [
     {
       chain: mainnet,
-      forkUrl: `https://eth-mainnet.g.alchemy.com/v2/${process.env.VITE_ALCHEMY_API_KEY}`,
+      forkUrl: `https://lb.drpc.org/ethereum/${process.env.VITE_DRPC_API_KEY}`,
       forkBlockNumber: 23257260,
     },
     {
       chain: optimism,
-      forkUrl: `https://opt-mainnet.g.alchemy.com/v2/${process.env.VITE_ALCHEMY_API_KEY}`,
+      forkUrl: `https://lb.drpc.org/optimism/${process.env.VITE_DRPC_API_KEY}`,
       forkBlockNumber: 140499492,
     },
     {
       chain: base,
-      forkUrl: `https://base-mainnet.g.alchemy.com/v2/${process.env.VITE_ALCHEMY_API_KEY}`,
+      forkUrl: `https://lb.drpc.org/base/${process.env.VITE_DRPC_API_KEY}`,
       forkBlockNumber: 34904190,
     },
   ].map(({ chain, forkUrl, forkBlockNumber }) =>

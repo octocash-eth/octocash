@@ -4,7 +4,6 @@ import { isAddress } from "viem";
 import { normalize } from "viem/ens";
 import { useEnsAddress, useEnsAvatar, useEnsName } from "wagmi";
 import { cn } from "../lib/utils";
-import { mainnetConfig } from "../utils/wallet";
 
 const transparentPixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
@@ -17,7 +16,6 @@ function AddressAvatar({ addressOrEns, size }: { addressOrEns: string; size: num
     address: isAddr ? addressOrEns : undefined,
     chainId: 1,
     query: { enabled: !isEnsName && isAddr },
-    config: mainnetConfig,
   });
 
   let normalizedName: string | undefined;
@@ -30,7 +28,6 @@ function AddressAvatar({ addressOrEns, size }: { addressOrEns: string; size: num
     name: normalizedName,
     chainId: 1,
     query: { enabled: !!normalizedName && !isAddr },
-    config: mainnetConfig,
   });
 
   // If normalizedName is an ens name, get the ens avatar
@@ -38,7 +35,6 @@ function AddressAvatar({ addressOrEns, size }: { addressOrEns: string; size: num
     name: normalizedName,
     chainId: 1,
     query: { enabled: !!normalizedName },
-    config: mainnetConfig,
   });
   const address = ensAddress ?? addressOrEns;
   const src = useMemo(() => {

@@ -22,7 +22,17 @@ export const transports = import.meta.env.VITE_ALCHEMY_API_KEY
       [unichain.id]: http(`https://unichain-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
       [linea.id]: http(`https://linea-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
     }
-  : undefined;
+  : import.meta.env.VITE_DRPC_API_KEY
+    ? {
+        [mainnet.id]: http(`https://lb.drpc.org/ethereum/${import.meta.env.VITE_DRPC_API_KEY}`),
+        [optimism.id]: http(`https://lb.drpc.org/optimism/${import.meta.env.VITE_DRPC_API_KEY}`),
+        [arbitrum.id]: http(`https://lb.drpc.org/arbitrum/${import.meta.env.VITE_DRPC_API_KEY}`),
+        [base.id]: http(`https://lb.drpc.org/base/${import.meta.env.VITE_DRPC_API_KEY}`),
+        [polygon.id]: http(`https://lb.drpc.org/polygon/${import.meta.env.VITE_DRPC_API_KEY}`),
+        [unichain.id]: http(`https://lb.drpc.org/unichain/${import.meta.env.VITE_DRPC_API_KEY}`),
+        [linea.id]: http(`https://lb.drpc.org/linea/${import.meta.env.VITE_DRPC_API_KEY}`),
+      }
+    : undefined;
 
 export const supportedChains = Object.entries(chains).map(([chainId, chain]) => ({
   id: Number(chainId),
