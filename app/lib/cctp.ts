@@ -1,14 +1,17 @@
+import { type Config, getPublicClient } from "@wagmi/core";
 import { type Address, type Chain, encodeFunctionData, type Hex, parseAbi } from "viem";
 import { chainIdToDomain, messageTransmitter, tokenAddresses, tokenMessenger } from "~/data/cctp-contracts";
 import { chains } from "~/data/supported-chains";
 import type { TokenAmount } from "~/lib/consolidation";
 import type { SendCallsFn } from "~/lib/send-calls";
+import { WALLETCONNECT_CONFIG } from "~/utils/wallet";
 
 export type Attestation = {
   message: `0x${string}`;
   attestation: `0x${string}`;
   status: string;
   decodedMessage: {
+    nonce: `0x${string}`;
     destinationDomain: string;
     decodedMessageBody: {
       amount: string;
@@ -95,20 +98,38 @@ export const getMintUsdcCalls = async (destinationChainId: number, attestations:
   const contractConfig = {
     chain: chains[destinationChainId as keyof typeof chains] as Chain,
     address: messageTransmitter[destinationChainId] as `0x${string}`,
-    abi: parseAbi(["function receiveMessage(bytes memory message, bytes memory attestation) external"]),
+    abi: parseAbi([
+      "function usedNonces(bytes32) public view returns (uint256)",
+      "function receiveMessage(bytes memory message, bytes memory attestation) external",
+    ]),
   };
 
-  const calls = [];
-  for (const attestation of attestations) {
-    calls.push({
+  const publicClient = getPublicClient(WALLETCONNECT_CONFIG as Config, { chainId: destinationChainId });
+  if (!publicClient) {
+    throw new Error(`Chain ${destinationChainId} not supported`);
+  }
+
+  const usedNonces = await publicClient.multicall({
+    contracts: attestations.map((a) => ({
+      ...contractConfig,
+      functionName: "usedNonces",
+      args: [a.decodedMessage.nonce],
+    })),
+  });
+
+  const calls = attestations
+    .map((attestation, index) => ({ attestation, isUsed: usedNonces[index].result }))
+    .filter(({ isUsed }) => !isUsed) // keep only UNUSED nonces
+    .map(({ attestation }) => ({
       to: contractConfig.address,
       data: encodeFunctionData({
         ...contractConfig,
+        functionName: "receiveMessage",
         args: [attestation.message, attestation.attestation],
       }),
       chain: chains[destinationChainId as keyof typeof chains] as Chain,
-    });
-  }
+    }));
+
   return calls;
 };
 
@@ -168,43 +189,19 @@ export const executeCCTPMint = async (
   attestations: Attestation[],
   tokenOut: TokenAmount,
   sendCalls: SendCallsFn,
-): Promise<[string, (Error | { address: Address; data: Hex; topics: Hex[] }[])[]]> => {
+): Promise<[string, { address: Address; data: Hex; topics: Hex[] }[][]]> => {
   if (attestations.length === 0) {
     throw new Error("No attestations");
   }
 
-  // Build the calls
-  const calls = await getMintUsdcCalls(tokenOut.chainId, attestations);
-  const destinationChainId = tokenOut.chainId;
+  const { chainId, walletAddress } = tokenOut;
+  const calls = await getMintUsdcCalls(chainId, attestations);
 
-  // Simulate the calls
-  const [, , simulatedErrors] = await sendCalls(
-    "mint",
-    destinationChainId,
-    tokenOut.walletAddress,
-    calls,
-    "simulation",
-  );
-
-  // If all the calls failed due to nonces already used, do nothing else, the USDC was already minted by somebody else
-  if (simulatedErrors.every((error) => error instanceof Error && error.message.includes("Nonce already used"))) {
+  if (calls.length === 0) {
     return ["", []];
   }
 
-  // Otherwise, send the calls, but remove the calls that failed in the simulation due to nonce already used
-  const [mintTx, mintLogs, mintErrors] = await sendCalls(
-    "mint",
-    destinationChainId,
-    tokenOut.walletAddress,
-    calls.filter(
-      (_call, i) => simulatedErrors[i] instanceof Error && simulatedErrors[i].message.includes("Nonce already used"),
-    ),
-    "non-atomic",
-  );
+  const [mintTx, mintLogs] = await sendCalls("mint", chainId, walletAddress, calls, "non-atomic");
 
-  // It's still possible USDC being claimed in the meantime, but any other error is unexpected
-  if (mintErrors.some((error) => error instanceof Error && !error.message.includes("Nonce already used"))) {
-    throw new Error("Minting failed");
-  }
   return [mintTx, mintLogs];
 };

@@ -104,22 +104,6 @@ describe("sendCalls", () => {
       expect(logs).toEqual([[]]);
     });
 
-    test("runs a simulation if mode is simulation", async () => {
-      const client = {
-        switchChain: vi.fn().mockResolvedValue(undefined),
-        addChain: vi.fn().mockResolvedValue(undefined),
-        sendCalls: vi.fn().mockResolvedValue({ id: "test-id" }),
-        waitForCallsStatus: vi.fn().mockResolvedValue({ status: "success", receipts: [] }),
-      } as unknown as WalletClient<HttpTransport, Chain, Account>;
-      await expect(
-        prepareSendCalls(client)("test", 1, "0x0000000000000000000000000000000000000000", [], "simulation"),
-      ).resolves.toEqual(["", [], []]);
-      expect(client.switchChain).not.toHaveBeenCalled();
-      expect(client.addChain).not.toHaveBeenCalled();
-      expect(client.sendCalls).not.toHaveBeenCalled();
-      expect(client.waitForCallsStatus).not.toHaveBeenCalled();
-    });
-
     test("allows to send calls in non-atomic mode if mode is non-atomic", async () => {
       const client = {
         switchChain: vi.fn().mockResolvedValue(undefined),
@@ -135,14 +119,7 @@ describe("sendCalls", () => {
       } as unknown as WalletClient<HttpTransport, Chain, Account>;
       await expect(
         prepareSendCalls(client)("test", 1, "0x0000000000000000000000000000000000000000", [], "non-atomic"),
-      ).resolves.toEqual([
-        "0xdeadbeef",
-        [[], []],
-        [
-          undefined,
-          new Error("Transaction reverted", { cause: { transactionHash: "0xdeadbeef", status: "reverted", logs: [] } }),
-        ],
-      ]);
+      ).resolves.toEqual(["0xdeadbeef", [[], []]]);
       expect(client.switchChain).toHaveBeenCalledWith({ id: 1 });
       expect(client.addChain).not.toHaveBeenCalled();
       expect(client.sendCalls).toHaveBeenCalledWith(
@@ -153,18 +130,6 @@ describe("sendCalls", () => {
         }),
       );
       expect(client.waitForCallsStatus).toHaveBeenCalledWith({ id: "test-id" });
-    });
-
-    test("throw error when chain not supported on simulation", async () => {
-      const client = {
-        switchChain: vi.fn().mockResolvedValue(undefined),
-        addChain: vi.fn().mockResolvedValue(undefined),
-        sendCalls: vi.fn().mockResolvedValue({ id: "test-id" }),
-        waitForCallsStatus: vi.fn().mockResolvedValue({ status: "success", receipts: [] }),
-      } as unknown as WalletClient<HttpTransport, Chain, Account>;
-      await expect(
-        prepareSendCalls(client)("test", 1111, "0x0000000000000000000000000000000000000000", [], "simulation"),
-      ).rejects.toThrow("Chain 1111 not supported");
     });
 
     test("throws error when atomic transaction reverted", async () => {

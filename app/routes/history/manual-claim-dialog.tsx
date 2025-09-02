@@ -55,6 +55,11 @@ export function ManualClaimDialog() {
       }
       const { mintTx, logs } = await claim(tx, chainId);
 
+      if (!mintTx) {
+        setSubmitError("USDC was already claimed.");
+        return;
+      }
+
       console.log(mintTx, logs);
 
       setIsOpen(false);
