@@ -13,7 +13,7 @@ export default function Home() {
   const connectedAddresses = useConnectedAddresses();
 
   return (
-    <div className="flex flex-col min-h-svh bg-gradient-to-br from-blue-50 to-purple-50">
+    <div className="flex flex-col min-h-svh bg-gradient-to-br from-background to-accent/10">
       <SiteHeader />
 
       {connectedAddresses.length > 0 ? (
@@ -29,13 +29,13 @@ export default function Home() {
             <div className="flex flex-col lg:flex-row items-center justify-center gap-8 mb-12">
               {/* Mascot Image */}
               <div className="flex-shrink-0 animate-bounce [animation-duration:5s]">
-                <span className="text-[220px]">🐙</span>
+                <img src="/brand/mascot.png" alt="Octocash mascot" className="h-[220px] w-auto" />
               </div>
 
               {/* Main Text Content */}
               <div className="flex flex-col items-center lg:items-start text-center lg:text-left">
-                <h2 className="text-4xl lg:text-5xl font-bold text-red-600 mb-4">{SITE_NAME}</h2>
-                <p className="text-lg text-gray-600 mb-8 max-w-md">{SITE_DESCRIPTION}</p>
+                <h2 className="text-4xl lg:text-5xl font-bold text-primary mb-4">{SITE_NAME}</h2>
+                <p className="text-lg text-muted-foreground mb-8 max-w-md">{SITE_DESCRIPTION}</p>
 
                 {/* Connect Wallet Button */}
                 <div className="mb-8">

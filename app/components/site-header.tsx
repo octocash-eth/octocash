@@ -2,6 +2,7 @@ import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { Link, useLocation } from "react-router";
 import { SITE_NAME } from "~/data/site";
 import { useConnectedAddresses } from "~/hooks/use-connected-addresses";
+import { ThemeToggle } from "./theme-toggle";
 
 export function SiteHeader() {
   const connectedAddresses = useConnectedAddresses();
@@ -13,17 +14,15 @@ export function SiteHeader() {
     <header className="w-full p-4">
       <div className="flex items-center justify-between w-full max-w-7xl mx-auto">
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <div className="rounded flex items-center justify-center">
-              <span className="text-white font-bold text-lg">🐙</span>
-            </div>
-            <h1 className="text-xl font-bold text-red-600">{SITE_NAME}</h1>
-          </div>
+          <Link to="/" className="flex items-center gap-2" aria-label={SITE_NAME}>
+            <img src="/brand/wordmark.svg" alt={SITE_NAME} className="h-7 md:h-8 w-auto block dark:hidden" />
+            <img src="/brand/wordmark-dark.svg" alt={SITE_NAME} className="h-7 md:h-8 w-auto hidden dark:block" />
+          </Link>
           <nav className="flex items-center gap-2 ml-2">
             <Link
               to="/"
               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                isHome ? "bg-white/70 text-red-700" : "text-gray-700 hover:text-red-600"
+                isHome ? "bg-card/70 text-primary" : "text-muted-foreground hover:text-primary"
               }`}
             >
               Home
@@ -31,18 +30,21 @@ export function SiteHeader() {
             <Link
               to="/history"
               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                isHistory ? "bg-white/70 text-red-700" : "text-gray-700 hover:text-red-600"
+                isHistory ? "bg-card/70 text-primary" : "text-muted-foreground hover:text-primary"
               }`}
             >
               History
             </Link>
           </nav>
         </div>
-        {connectedAddresses.length > 0 ? (
-          <div>
-            <ConnectButton showBalance={false} chainStatus="none" />
-          </div>
-        ) : null}
+        <div className="flex items-center gap-2">
+          <ThemeToggle />
+          {connectedAddresses.length > 0 ? (
+            <div>
+              <ConnectButton showBalance={false} chainStatus="none" />
+            </div>
+          ) : null}
+        </div>
       </div>
     </header>
   );

@@ -21,7 +21,7 @@ export default function History() {
   const [records] = useConsolidationRecords();
 
   return (
-    <div className="flex flex-col min-h-svh bg-gradient-to-br from-blue-50 to-purple-50">
+    <div className="flex flex-col min-h-svh bg-gradient-to-br from-background to-accent/10">
       <SiteHeader />
       <main className="flex-1 p-4">
         <div className="w-full max-w-7xl mx-auto">
@@ -36,12 +36,12 @@ export default function History() {
           </div>
 
           {records.length === 0 ? (
-            <div className="text-center py-16 bg-white/70 rounded-md">
-              <p className="text-gray-600">No consolidations yet.</p>
-              <p className="text-gray-500 text-sm">Run a consolidation to see it here.</p>
+            <div className="text-center py-16 bg-card/70 rounded-md">
+              <p className="text-muted-foreground">No consolidations yet.</p>
+              <p className="text-muted-foreground/80 text-sm">Run a consolidation to see it here.</p>
             </div>
           ) : (
-            <div className="bg-white/70 rounded-md p-2">
+            <div className="bg-card/70 rounded-md p-2">
               <Table>
                 <TableCaption>Most recent first</TableCaption>
                 <TableHeader>
@@ -63,7 +63,7 @@ export default function History() {
                             <span className="font-medium">
                               {date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
                             </span>
-                            <span className="text-xs text-gray-500">{r.id}</span>
+                            <span className="text-xs text-muted-foreground/80">{r.id}</span>
                           </div>
                         </TableCell>
                         <TableCell>
@@ -78,7 +78,7 @@ export default function History() {
                           </span>
                         </TableCell>
                         <TableCell>
-                          <div className="text-sm text-gray-700 flex flex-col gap-2">
+                          <div className="text-sm text-muted-foreground flex flex-col gap-2">
                             <span className="font-medium">
                               {r.sourceTokens.length} token(s) across {sourceChains.length} chain(s)
                             </span>
@@ -129,9 +129,9 @@ function TokenBalance({ token }: { token: TokenAmount }) {
         <span className="font-bold">
           {formatUnits(token.amount, decimals)} {symbol}
         </span>{" "}
-        <span className="text-gray-500">({chain.name})</span>
+        <span className="text-muted-foreground/80">({chain.name})</span>
       </span>
-      <span className="text-xs text-gray-600">{truncateAddress(token.walletAddress)}</span>
+      <span className="text-xs text-muted-foreground">{truncateAddress(token.walletAddress)}</span>
     </div>
   );
 }

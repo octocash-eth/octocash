@@ -2,6 +2,7 @@ import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration }
 
 import type { Route } from "./+types/root";
 import "./app.css";
+import { ThemeProvider } from "./components/theme-provider";
 import { WalletProvider } from "./context/wallet-provider";
 
 export const links: Route.LinksFunction = () => [];
@@ -12,6 +13,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <link rel="shortcut icon" href="/favicon.ico" />
+        <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+        <meta name="apple-mobile-web-app-title" content="Octocash" />
+        <link rel="manifest" href="/site.webmanifest" />
         <Meta />
         <Links />
       </head>
@@ -26,9 +33,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <WalletProvider>
-      <Outlet />
-    </WalletProvider>
+    <ThemeProvider storageKey="theme" defaultTheme="system">
+      <WalletProvider>
+        <Outlet />
+      </WalletProvider>
+    </ThemeProvider>
   );
 }
 
