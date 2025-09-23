@@ -8,6 +8,8 @@ export default defineConfig({
   plugins: [tailwindcss(), reactRouter(), tsconfigPaths()],
   server: {
     port: 3000,
+    // Allow access when Playwright runs in Docker hitting host via host.docker.internal
+    allowedHosts: ["host.docker.internal"],
   },
   test: {
     environment: "jsdom",

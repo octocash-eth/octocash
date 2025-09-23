@@ -112,7 +112,7 @@ async function fetchTokenBalancesFromBlockscout(chainId: number, address: string
       decimals: token.token.decimals,
       exchange_rate: token.token.exchange_rate,
       value: token.value,
-      icon_url: token.token.icon_url,
+      icon_url: ``,
     });
   }
   return balances;
@@ -138,7 +138,7 @@ function buildWalletDataFromTokens(tokenBalances: TokenBalance[], address: strin
         chain: chainIdToName[chainId] || `Chain-${chainId}`,
         amount: balance,
         amountInUsd: amountInUsd,
-        iconUrl: `https://token-logos.blossom.deno.net/token/${chainId}/${token.address}`,
+        iconUrl: `https://assets.octo.cash/token/${chainId}/${token.address}`,
         decimals: Number(token.decimals),
       });
     } catch (error) {
