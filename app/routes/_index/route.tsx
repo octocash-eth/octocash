@@ -34,8 +34,8 @@ export default function Home() {
 
               {/* Main Text Content */}
               <div className="flex flex-col items-center lg:items-start text-center lg:text-left">
-                <h2 className="text-4xl lg:text-5xl font-bold text-primary mb-4">{SITE_NAME}</h2>
-                <p className="text-lg text-muted-foreground mb-8 max-w-md">{SITE_DESCRIPTION}</p>
+                <h2 className="text-4xl lg:text-5xl font-semibold text-primary mb-5 tracking-[0.01em]">{SITE_NAME}</h2>
+                <p className="text-base md:text-lg text-muted-foreground mb-9 max-w-md">{SITE_DESCRIPTION}</p>
 
                 {/* Connect Wallet Button */}
                 <div className="mb-8">

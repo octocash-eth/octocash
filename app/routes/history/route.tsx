@@ -26,7 +26,7 @@ export default function History() {
       <main className="flex-1 p-4">
         <div className="w-full max-w-7xl mx-auto">
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-2xl font-bold">Consolidation History</h2>
+            <h2 className="text-3xl font-semibold tracking-[0.01em]">Consolidation History</h2>
             <div className="flex items-center gap-2">
               <ManualClaimDialog />
               <Link to="/" className="text-sm text-blue-600 hover:underline">

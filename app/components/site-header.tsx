@@ -11,7 +11,7 @@ export function SiteHeader() {
   const isHistory = location.pathname.startsWith("/history");
 
   return (
-    <header className="w-full p-4">
+    <header className="w-full px-4 py-3 md:py-4">
       <div className="flex items-center justify-between w-full max-w-7xl mx-auto">
         <div className="flex items-center gap-4">
           <Link to="/" className="flex items-center gap-2" aria-label={SITE_NAME}>
@@ -21,16 +21,20 @@ export function SiteHeader() {
           <nav className="flex items-center gap-2 ml-2">
             <Link
               to="/"
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                isHome ? "bg-card/70 text-primary" : "text-muted-foreground hover:text-primary"
+              className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
+                isHome
+                  ? "bg-card/70 text-primary font-semibold"
+                  : "text-muted-foreground hover:text-primary font-medium"
               }`}
             >
               Home
             </Link>
             <Link
               to="/history"
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                isHistory ? "bg-card/70 text-primary" : "text-muted-foreground hover:text-primary"
+              className={`px-3 py-1.5 rounded-md text-sm transition-colors ${
+                isHistory
+                  ? "bg-card/70 text-primary font-semibold"
+                  : "text-muted-foreground hover:text-primary font-medium"
               }`}
             >
               History
