@@ -34,6 +34,9 @@ export type SendCallsFn = (
  */
 export const prepareSendCalls = (client: WalletClient<HttpTransport, Chain, Account>): SendCallsFn => {
   return async (txId, chainId, from, calls, mode = "atomic") => {
+    if (calls.length === 0) {
+      return ["", []];
+    }
     await switchChain(client, chainId);
     const _calls = await client.sendCalls({
       account: from,
