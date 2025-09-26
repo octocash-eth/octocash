@@ -13,6 +13,7 @@ interface WalletTableProps {
 export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
   const [walletData, setWalletData] = React.useState<WalletData[]>([]);
   const [isLoading, setIsLoading] = React.useState(false);
+  const [isRefreshing, setIsRefreshing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [consolidateAmounts, setConsolidateAmounts] = React.useState<Record<string, string>>({});
@@ -72,20 +73,24 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     });
   }, [rowSelection, walletData]);
 
-  // Fetch token balances when component mounts or when connectedAddresses changes
-  React.useEffect(() => {
-    async function loadTokenBalances() {
+  const loadTokenBalances = React.useCallback(
+    async (mode: "initial" | "refresh" = "initial") => {
       if (connectedAddresses.length === 0) {
-        // If no addresses provided, use empty array
         setWalletData([]);
+        setIsLoading(false);
+        setIsRefreshing(false);
         return;
       }
 
-      setIsLoading(true);
+      if (mode === "initial") {
+        setIsLoading(true);
+      } else {
+        setIsRefreshing(true);
+      }
+
       setError(null);
 
       try {
-        // Convert readonly string[] to string[]
         const addresses = Array.from(connectedAddresses);
 
         console.log(`Fetching token balances for ${addresses.length} addresses across different networks...`);
@@ -93,7 +98,6 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
         console.log(`Received ${data.length} tokens from API`);
 
         if (data.length > 0) {
-          // Filter out any entries with zero or very small balances and ensure they have monetary value
           const filteredData = data.filter((item) => Number(item.amount) > 0.000001 && Number(item.amountInUsd) > 0);
           console.log(
             `After filtering, ${filteredData.length} tokens remain with non-zero balances and monetary value`,
@@ -101,7 +105,6 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
           setWalletData(filteredData);
         } else {
           console.log("No tokens returned from API, using empty array");
-          // If no data returned, set empty array
           setWalletData([]);
         }
       } catch (err) {
@@ -109,12 +112,20 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
         setError("Failed to load token balances.");
         setWalletData([]);
       } finally {
-        setIsLoading(false);
+        if (mode === "initial") {
+          setIsLoading(false);
+        } else {
+          setIsRefreshing(false);
+        }
       }
-    }
+    },
+    [connectedAddresses],
+  );
 
-    loadTokenBalances();
-  }, [connectedAddresses]);
+  // Fetch token balances when component mounts or when connectedAddresses changes
+  React.useEffect(() => {
+    void loadTokenBalances("initial");
+  }, [loadTokenBalances]);
 
   // Empty state component
   const EmptyState = () => (
@@ -142,6 +153,10 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
             data={walletData}
             connectedAddresses={connectedAddresses}
             onRowSelectionChange={setRowSelection}
+            onRefresh={() => {
+              void loadTokenBalances("refresh");
+            }}
+            isRefreshing={isRefreshing}
           />
           <div className="flex justify-center mt-6">
             <ConsolidateTokensModal

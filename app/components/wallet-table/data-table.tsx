@@ -13,7 +13,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { Coins, Link, Wallet } from "lucide-react";
+import { Coins, Link, RotateCcw, Wallet } from "lucide-react";
 import * as React from "react";
 import { formatAddress } from "~/lib/utils";
 import AddressAvatar from "../address-avatar";
@@ -28,6 +28,8 @@ interface DataTableProps<TData, TValue> {
   data: TData[];
   connectedAddresses?: readonly string[];
   onRowSelectionChange?: (value: RowSelectionState) => void;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
 function RenderedAddressCell({ address }: { address: string }) {
@@ -68,7 +70,13 @@ function RenderedChainCell({ chain }: { chain: string }) {
   );
 }
 
-export function DataTable<TData, TValue>({ columns, data, onRowSelectionChange }: DataTableProps<TData, TValue>) {
+export function DataTable<TData, TValue>({
+  columns,
+  data,
+  onRowSelectionChange,
+  onRefresh,
+  isRefreshing = false,
+}: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
@@ -150,7 +158,15 @@ export function DataTable<TData, TValue>({ columns, data, onRowSelectionChange }
   // Function to clear all filters
   return (
     <div className="space-y-4">
-      <WalletTableFilters setColumnFilters={setColumnFilters} filterConfigs={filterConfigs} />
+      <div className="flex items-center justify-between gap-2">
+        <WalletTableFilters setColumnFilters={setColumnFilters} filterConfigs={filterConfigs} />
+        {onRefresh ? (
+          <Button variant="outline" size="icon" onClick={onRefresh} className="ml-auto" disabled={isRefreshing}>
+            <RotateCcw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+            <span className="sr-only">Refresh table data</span>
+          </Button>
+        ) : null}
+      </div>
       <div className="rounded-md border">
         <Table>
           <TableHeader>
