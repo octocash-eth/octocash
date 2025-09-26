@@ -123,7 +123,10 @@ export const executeBridge = async (
   const attestations: Attestation[] = await retrieveAttestations(burnTxsAndChainIds);
 
   const tokenOutAmount = attestations.reduce(
-    (sum, attestation) => sum + BigInt(attestation.decodedMessage.decodedMessageBody.amount),
+    (sum, attestation) =>
+      sum +
+      BigInt(attestation.decodedMessage.decodedMessageBody.amount) -
+      BigInt(attestation.decodedMessage.decodedMessageBody.feeExecuted),
     0n,
   );
 

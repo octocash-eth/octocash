@@ -15,6 +15,7 @@ export type Attestation = {
     destinationDomain: string;
     decodedMessageBody: {
       amount: string;
+      feeExecuted: string;
     };
   };
 };
