@@ -10,6 +10,7 @@ export const chains = {
   [polygon.id]: polygon,
   [unichain.id]: unichain,
   [linea.id]: linea,
+  // [sonic.id]: sonic,
 };
 
 export const transports = import.meta.env.VITE_ALCHEMY_API_KEY

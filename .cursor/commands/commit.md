@@ -1,1 +1,0 @@
-Get all the staged changes in git and write a compelling commit message. Show it to the user, and if it's accepted, commit the changes.
