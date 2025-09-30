@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PropsWithChildren } from "react";
 import colors from "tailwindcss/colors";
 import { type State, WagmiProvider } from "wagmi";
-import { E2EAutoConnect } from "~/e2e/mock-wallet";
+import { E2EAutoConnect } from "~/components/mock-wallet";
 import AddressAvatar from "../components/address-avatar";
 import { WALLETCONNECT_CONFIG } from "../utils/wallet";
 

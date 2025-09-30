@@ -30,6 +30,22 @@ describe("sendCalls", () => {
   });
 
   describe("prepareSendCalls", () => {
+    test("skips when no calls are provided", async () => {
+      const client = {
+        switchChain: vi.fn().mockResolvedValue(undefined),
+        addChain: vi.fn().mockResolvedValue(undefined),
+        sendCalls: vi.fn(),
+        waitForCallsStatus: vi.fn(),
+      } as unknown as WalletClient<HttpTransport, Chain, Account>;
+
+      const [tx, logs] = await prepareSendCalls(client)("test", 1, "0x0000000000000000000000000000000000000000", []);
+
+      expect(tx).toBe("");
+      expect(logs).toEqual([]);
+      expect(client.switchChain).not.toHaveBeenCalled();
+      expect(client.sendCalls).not.toHaveBeenCalled();
+      expect(client.waitForCallsStatus).not.toHaveBeenCalled();
+    });
     test("switches chain and sends calls", async () => {
       const client = {
         switchChain: vi.fn().mockResolvedValue(undefined),
@@ -57,7 +73,9 @@ describe("sendCalls", () => {
         }),
       } as unknown as WalletClient<HttpTransport, Chain, Account>;
 
-      const [tx, logs] = await prepareSendCalls(client)("test", 1, "0x0000000000000000000000000000000000000000", []);
+      const [tx, logs] = await prepareSendCalls(client)("test", 1, "0x0000000000000000000000000000000000000000", [
+        { to: "0x0000000000000000000000000000000000000000", data: "0x" },
+      ]);
 
       expect(client.switchChain).toHaveBeenCalledWith({ id: 1 });
       expect(client.addChain).not.toHaveBeenCalled();
@@ -65,7 +83,6 @@ describe("sendCalls", () => {
         expect.objectContaining({
           account: "0x0000000000000000000000000000000000000000",
           forceAtomic: true,
-          calls: [],
         }),
       );
       expect(client.waitForCallsStatus).toHaveBeenCalledWith({ id: "test-id" });
@@ -98,7 +115,9 @@ describe("sendCalls", () => {
         }),
       } as unknown as WalletClient<HttpTransport, Chain, Account>;
 
-      const [tx, logs] = await prepareSendCalls(client)("test", 1, "0x0000000000000000000000000000000000000000", []);
+      const [tx, logs] = await prepareSendCalls(client)("test", 1, "0x0000000000000000000000000000000000000000", [
+        { to: "0x0000000000000000000000000000000000000000", data: "0x" },
+      ]);
 
       expect(tx).toBe("0xdeadbeef");
       expect(logs).toEqual([[]]);
@@ -118,7 +137,13 @@ describe("sendCalls", () => {
         }),
       } as unknown as WalletClient<HttpTransport, Chain, Account>;
       await expect(
-        prepareSendCalls(client)("test", 1, "0x0000000000000000000000000000000000000000", [], "non-atomic"),
+        prepareSendCalls(client)(
+          "test",
+          1,
+          "0x0000000000000000000000000000000000000000",
+          [{ to: "0x0000000000000000000000000000000000000000", data: "0x" }],
+          "non-atomic",
+        ),
       ).resolves.toEqual(["0xdeadbeef", [[], []]]);
       expect(client.switchChain).toHaveBeenCalledWith({ id: 1 });
       expect(client.addChain).not.toHaveBeenCalled();
@@ -126,7 +151,6 @@ describe("sendCalls", () => {
         expect.objectContaining({
           account: "0x0000000000000000000000000000000000000000",
           forceAtomic: false,
-          calls: [],
         }),
       );
       expect(client.waitForCallsStatus).toHaveBeenCalledWith({ id: "test-id" });
@@ -143,7 +167,9 @@ describe("sendCalls", () => {
       } as unknown as WalletClient<HttpTransport, Chain, Account>;
 
       await expect(
-        prepareSendCalls(client)("test", 1, "0x0000000000000000000000000000000000000000", []),
+        prepareSendCalls(client)("test", 1, "0x0000000000000000000000000000000000000000", [
+          { to: "0x0000000000000000000000000000000000000000", data: "0x" },
+        ]),
       ).rejects.toThrow("test transaction reverted");
     });
   });

@@ -28,7 +28,8 @@ const buildAttestations = (
     status: "complete",
     decodedMessage: {
       destinationDomain: "1",
-      decodedMessageBody: { amount: amount.toString() },
+      nonce: "0x00",
+      decodedMessageBody: { amount: amount.toString(), feeExecuted: "0" },
     },
   }));
 };

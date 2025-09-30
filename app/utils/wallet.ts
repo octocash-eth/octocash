@@ -2,7 +2,7 @@ import "@rainbow-me/rainbowkit/styles.css";
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
 import type { Chain } from "viem";
 import type { Config } from "wagmi";
-import { createE2EConfig } from "~/e2e/mock-wallet";
+import { createE2EConfig } from "~/components/mock-wallet";
 import { SITE_NAME } from "../data/site";
 import { chains, transports } from "../data/supported-chains";
 

@@ -5,7 +5,11 @@ import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
-  plugins: [tailwindcss(), reactRouter(), tsconfigPaths()],
+  plugins: [
+    tailwindcss(),
+    !process.env.VITEST && reactRouter(),
+    tsconfigPaths()
+  ],
   server: {
     port: 3000,
     // Allow access when Playwright runs in Docker hitting host via host.docker.internal
