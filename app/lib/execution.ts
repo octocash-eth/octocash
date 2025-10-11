@@ -437,7 +437,69 @@ function getSkipReason(step: TransactionStep, results: Record<string, StepResult
 }
 
 /**
+ * Calculate updated output for a step based on its type and updated inputs
+ * @param step - Transaction step to calculate output for
+ * @param updatedInputs - Updated input token amounts
+ * @returns Updated output token amount
+ */
+async function calculateStepOutput(step: TransactionStep, updatedInputs: TokenAmount[]): Promise<TokenAmount> {
+  switch (step.type) {
+    case "swap":
+      // Re-quote with ALL inputs for proportional adjustment
+      if (updatedInputs.length > 0) {
+        try {
+          return await getSwapQuote(updatedInputs, step.outputToken);
+        } catch (_error) {
+          return step.outputToken; // Keep original on failure
+        }
+      }
+      return step.outputToken;
+
+    case "bridge":
+      // Bridge outputs what it inputs (1:1, same token/amount)
+      if (updatedInputs.length > 0) {
+        const firstInput = updatedInputs[0];
+        return {
+          ...step.outputToken,
+          amount: firstInput.amount,
+        };
+      }
+      return step.outputToken;
+
+    case "claim":
+      // Claim outputs what it claims (1:1, amount from dependency)
+      if (updatedInputs.length > 0) {
+        const firstInput = updatedInputs[0];
+        return {
+          ...step.outputToken,
+          amount: firstInput.amount,
+        };
+      }
+      return step.outputToken;
+
+    case "transfer":
+      // Transfer outputs what it inputs (1:1)
+      if (updatedInputs.length > 0) {
+        const firstInput = updatedInputs[0];
+        return {
+          ...step.outputToken,
+          amount: firstInput.amount,
+        };
+      }
+      return step.outputToken;
+
+    case "attestation":
+      // Attestations don't change amounts
+      return step.outputToken;
+
+    default:
+      return step.outputToken;
+  }
+}
+
+/**
  * Recalculate plan after a step completes with actual amounts (T016)
+ * Cascades changes through all dependent steps in the plan.
  * @param state - Consolidation state (mutated in place for working state)
  * @param completedStepIndex - Index of completed step
  * @param actualOutput - Actual output amount
@@ -452,60 +514,76 @@ async function recalculatePlan(
   // Create a new plan array with updated steps
   const updatedPlan = [...state.plan];
 
-  // Find dependent steps
+  // Track which outputs have changed, starting with the completed step
+  const changedOutputs = new Map<string, TokenAmount>();
+  changedOutputs.set(completedStep.id, actualOutput);
+
+  // Iterate through remaining steps in order
   for (let i = completedStepIndex + 1; i < updatedPlan.length; i++) {
     const step = updatedPlan[i];
 
-    if (step.dependsOn.includes(completedStep.id)) {
-      // Update input amounts to use actual output
-      const existingInputIndex = step.inputTokens.findIndex(
-        (input) => input.token === actualOutput.token && input.chainId === actualOutput.chainId,
-      );
+    // Check if this step depends on any changed outputs
+    const dependenciesChanged = step.dependsOn.some((depId) => changedOutputs.has(depId));
 
-      let updatedInputTokens: TokenAmount[];
-      if (existingInputIndex >= 0) {
-        // Update the existing input token with the actual output amount
-        updatedInputTokens = step.inputTokens.map((token, idx) =>
-          idx === existingInputIndex ? { ...token, amount: actualOutput.amount } : token,
-        );
-      } else if (step.inputTokens.length === 0) {
-        // No inputs yet, so add the actual output as the first input
-        updatedInputTokens = [actualOutput];
-      } else {
-        // Keep existing inputs unchanged (output doesn't match any input)
-        updatedInputTokens = step.inputTokens;
+    if (!dependenciesChanged) {
+      continue; // Skip, no updates needed
+    }
+
+    // Update inputs: replace any input that matches a changed output
+    const updatedInputs: TokenAmount[] = [];
+
+    for (const input of step.inputTokens) {
+      // Find if this input matches any changed output
+      let matchingChange: TokenAmount | undefined;
+      for (const changedOutput of changedOutputs.values()) {
+        if (
+          changedOutput.token === input.token &&
+          changedOutput.chainId === input.chainId &&
+          changedOutput.walletAddress === input.walletAddress
+        ) {
+          matchingChange = changedOutput;
+          break;
+        }
       }
 
-      // Calculate updated output token based on step type
-      const getUpdatedOutputToken = async (): Promise<TokenAmount> => {
-        // Re-quote if it's a swap
-        if (step.type === "swap" && updatedInputTokens.length > 0) {
-          try {
-            return await getSwapQuote(updatedInputTokens[0], step.outputToken);
-          } catch (_error) {
-            return step.outputToken;
-          }
+      if (matchingChange) {
+        updatedInputs.push({ ...input, amount: matchingChange.amount });
+      } else {
+        updatedInputs.push(input);
+      }
+    }
+
+    // Handle case where dependency added a new token (not in original inputs)
+    for (const depId of step.dependsOn) {
+      const changedOutput = changedOutputs.get(depId);
+      if (changedOutput) {
+        // Check if this output is already in updatedInputs
+        const existsInInputs = updatedInputs.some(
+          (input) =>
+            input.token === changedOutput.token &&
+            input.chainId === changedOutput.chainId &&
+            input.walletAddress === changedOutput.walletAddress,
+        );
+
+        if (!existsInInputs) {
+          updatedInputs.push(changedOutput);
         }
+      }
+    }
 
-        // Update output amount for claim steps (they output what they claim)
-        if (step.type === "claim") {
-          return {
-            ...step.outputToken,
-            amount: actualOutput.amount,
-          };
-        }
+    // Recalculate output based on step type
+    const newOutput = await calculateStepOutput(step, updatedInputs);
 
-        return step.outputToken;
-      };
+    // Update the step in the plan
+    updatedPlan[i] = {
+      ...step,
+      inputTokens: updatedInputs,
+      outputToken: newOutput,
+    };
 
-      const updatedOutputToken = await getUpdatedOutputToken();
-
-      // Update the step in the plan
-      updatedPlan[i] = {
-        ...step,
-        inputTokens: updatedInputTokens,
-        outputToken: updatedOutputToken,
-      };
+    // Track this change for downstream dependencies
+    if (newOutput.amount !== step.outputToken.amount) {
+      changedOutputs.set(step.id, newOutput);
     }
   }
 

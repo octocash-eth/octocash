@@ -1,7 +1,7 @@
 import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { consumeGenerator, makeStep, makeToken, WALLET } from "../../test/helpers";
-import type { ConsolidationState, StepResult, TransactionStep } from "./types";
+import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
 
 // Mock dependencies BEFORE imports
 vi.mock("./odos");
@@ -469,6 +469,578 @@ describe("executeConsolidationPlan", () => {
     expect(finalState.status).toBe("completed");
     expect(finalState.results["step-1"].status).toBe("success");
     expect(finalState.results["step-2"].status).toBe("success");
+  });
+});
+
+describe("recalculatePlan - comprehensive coverage", () => {
+  const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+  const DAI_ADDRESS = "0x6B175474E89094C44Da98b954EedeAC495271d0F" as Address;
+  const WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as Address;
+
+  let mockWalletClient: WalletClient<HttpTransport, Chain, Account>;
+
+  // Helper to create a step with custom type and tokens
+  const createStep = (
+    id: string,
+    type: TransactionStep["type"],
+    dependsOn: string[],
+    inputTokens: TokenAmount[],
+    outputToken: TokenAmount,
+  ): TransactionStep => ({
+    id,
+    type,
+    status: "pending",
+    chainId: inputTokens.length > 0 ? inputTokens[0].chainId : outputToken.chainId,
+    inputTokens,
+    outputToken,
+    dependsOn,
+    partialDependency: false,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    mockWalletClient = {
+      account: { address: WALLET } as Account,
+      chain: { id: 1 } as Chain,
+    } as WalletClient<HttpTransport, Chain, Account>;
+
+    vi.mocked(getSwapQuote).mockResolvedValue(makeToken(USDC_ADDRESS, 1000000n, 1));
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap" });
+    vi.mocked(executeCCTPBurn).mockResolvedValue(["0xburn", 1]);
+    vi.mocked(retrieveAttestations).mockResolvedValue([
+      {
+        message: `0x${"00".repeat(32)}`,
+        attestation: `0x${"00".repeat(65)}`,
+        status: "complete",
+        decodedMessage: {
+          nonce: `0x${"00".repeat(32)}`,
+          destinationDomain: "0",
+          decodedMessageBody: {
+            amount: "1000000",
+            feeExecuted: "0",
+          },
+        },
+      },
+    ]);
+    vi.mocked(executeCCTPMint).mockResolvedValue(["0xmint", []]);
+  });
+
+  test("recalculation cascades through multiple dependent steps", async () => {
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [],
+      [makeToken(WETH_ADDRESS, 1000000n, 1)],
+      makeToken(USDC_ADDRESS, 2000000n, 1),
+    );
+
+    const step2: TransactionStep = createStep(
+      "step-2",
+      "bridge",
+      ["step-1"],
+      [makeToken(USDC_ADDRESS, 2000000n, 1)],
+      makeToken(USDC_ADDRESS, 2000000n, 10),
+    );
+
+    const step3: TransactionStep = createStep(
+      "step-3",
+      "claim",
+      ["step-2"],
+      [makeToken(USDC_ADDRESS, 2000000n, 10)],
+      makeToken(USDC_ADDRESS, 2000000n, 10),
+    );
+
+    const step4: TransactionStep = createStep(
+      "step-4",
+      "swap",
+      ["step-3"],
+      [makeToken(USDC_ADDRESS, 2000000n, 10)],
+      makeToken(DAI_ADDRESS, 2000000n, 10),
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2, step3, step4],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(DAI_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    // Step 1 swap execution
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 2500000n,
+      transactionHash: "0xswap1",
+    });
+
+    // Recalculation quotes for step 4 (called after step 1 completes)
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(DAI_ADDRESS, 2500000n, 10));
+
+    // Step 4 swap execution (uses the recalculated input)
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 2500000n,
+      transactionHash: "0xswap4",
+    });
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // The key test: all steps should have cascaded amounts through dependencies
+    expect(finalState.plan[1].inputTokens[0].amount).toBe(2500000n); // Step 2 input cascaded from step 1
+    expect(finalState.plan[1].outputToken.amount).toBe(2500000n); // Step 2 output (1:1 for bridge)
+    expect(finalState.plan[2].inputTokens[0].amount).toBe(2500000n); // Step 3 input cascaded from step 2
+    expect(finalState.plan[2].outputToken.amount).toBe(2500000n); // Step 3 output (1:1 for claim)
+    expect(finalState.plan[3].inputTokens[0].amount).toBe(2500000n); // Step 4 input cascaded from step 3 - proves cascade works!
+  });
+
+  test("recalculation updates multi-input swap with all inputs", async () => {
+    const USDT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7" as Address;
+
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [],
+      [makeToken(WETH_ADDRESS, 1000000n, 1)],
+      makeToken(USDC_ADDRESS, 2000000n, 1),
+    );
+
+    const step2: TransactionStep = createStep(
+      "step-2",
+      "swap",
+      ["step-1"],
+      [makeToken(USDC_ADDRESS, 2000000n, 1), makeToken(USDT_ADDRESS, 3000000n, 1)],
+      makeToken(DAI_ADDRESS, 5000000n, 1),
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    // Step 1 completes with 2.5 USDC instead of 2 USDC
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 2500000n,
+      transactionHash: "0xswap1",
+    });
+
+    // Mock getSwapQuote to be called with BOTH inputs
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(DAI_ADDRESS, 5500000n, 1));
+
+    await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // Verify getSwapQuote was called with array of both inputs
+    expect(getSwapQuote).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({ token: USDC_ADDRESS, amount: 2500000n }), // Updated
+        expect.objectContaining({ token: USDT_ADDRESS, amount: 3000000n }), // Unchanged
+      ],
+      expect.objectContaining({ token: DAI_ADDRESS }),
+    );
+  });
+
+  test("recalculation handles transfer step with 1:1 amount passthrough", async () => {
+    const WALLET_2 = "0x2234567890123456789012345678901234567890" as Address;
+
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [],
+      [makeToken(WETH_ADDRESS, 1000000n, 1)],
+      makeToken(USDC_ADDRESS, 2000000n, 1),
+    );
+
+    const step2: TransactionStep = createStep(
+      "step-2",
+      "transfer",
+      ["step-1"],
+      [makeToken(USDC_ADDRESS, 2000000n, 1)],
+      {
+        ...makeToken(USDC_ADDRESS, 2000000n, 1),
+        walletAddress: WALLET_2,
+      },
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    // Step 1 completes with 2.3 USDC
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 2300000n,
+      transactionHash: "0xswap1",
+    });
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // Transfer should pass through the exact amount
+    expect(finalState.plan[1].inputTokens[0].amount).toBe(2300000n);
+    expect(finalState.plan[1].outputToken.amount).toBe(2300000n);
+  });
+
+  test("recalculation handles step with no matching inputs (new token added)", async () => {
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [],
+      [makeToken(WETH_ADDRESS, 1000000n, 1)],
+      makeToken(USDC_ADDRESS, 2000000n, 1),
+    );
+
+    const step2: TransactionStep = createStep("step-2", "swap", ["step-1"], [], makeToken(DAI_ADDRESS, 2000000n, 1));
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    // Step 1 completes
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 2000000n,
+      transactionHash: "0xswap1",
+    });
+
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(DAI_ADDRESS, 2000000n, 1));
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // Step 2 should have the new token added as input
+    expect(finalState.plan[1].inputTokens.length).toBe(1);
+    expect(finalState.plan[1].inputTokens[0].token).toBe(USDC_ADDRESS);
+    expect(finalState.plan[1].inputTokens[0].amount).toBe(2000000n);
+  });
+
+  test("recalculation skips steps that don't depend on completed step", async () => {
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [],
+      [makeToken(WETH_ADDRESS, 1000000n, 1)],
+      makeToken(USDC_ADDRESS, 2000000n, 1),
+    );
+
+    const step2: TransactionStep = createStep(
+      "step-2",
+      "swap",
+      [],
+      [makeToken(DAI_ADDRESS, 3000000n, 1)],
+      makeToken(USDC_ADDRESS, 3000000n, 1),
+    );
+
+    const step3: TransactionStep = createStep(
+      "step-3",
+      "bridge",
+      ["step-1"],
+      [makeToken(USDC_ADDRESS, 2000000n, 1)],
+      makeToken(USDC_ADDRESS, 2000000n, 10),
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2, step3],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    // Step 1 completes with different amount
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 2500000n,
+      transactionHash: "0xswap1",
+    });
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // Step 2 should NOT be updated (no dependency)
+    expect(finalState.plan[1].inputTokens[0].amount).toBe(3000000n);
+    expect(finalState.plan[1].outputToken.amount).toBe(3000000n);
+
+    // Step 3 should be updated (depends on step 1)
+    expect(finalState.plan[2].inputTokens[0].amount).toBe(2500000n);
+    expect(finalState.plan[2].outputToken.amount).toBe(2500000n);
+  });
+
+  test("recalculation handles attestation step (no amount change)", async () => {
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "bridge",
+      [],
+      [makeToken(USDC_ADDRESS, 2000000n, 1)],
+      makeToken(USDC_ADDRESS, 2000000n, 10),
+    );
+
+    const step2: TransactionStep = createStep("step-2", "attestation", ["step-1"], [], makeToken(USDC_ADDRESS, 0n, 10));
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xburn", 1]);
+    vi.mocked(retrieveAttestations).mockResolvedValueOnce([
+      {
+        message: `0x${"00".repeat(32)}`,
+        attestation: `0x${"00".repeat(65)}`,
+        status: "complete",
+        decodedMessage: {
+          nonce: `0x${"00".repeat(32)}`,
+          destinationDomain: "0",
+          decodedMessageBody: {
+            amount: "2500000",
+            feeExecuted: "0",
+          },
+        },
+      },
+    ]);
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // Attestation output should remain unchanged
+    expect(finalState.plan[1].outputToken.amount).toBe(0n);
+  });
+
+  test("recalculation handles swap with empty inputs gracefully", async () => {
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [],
+      [makeToken(WETH_ADDRESS, 1000000n, 1)],
+      makeToken(USDC_ADDRESS, 2000000n, 1),
+    );
+
+    const step2: TransactionStep = createStep("step-2", "swap", ["step-1"], [], makeToken(DAI_ADDRESS, 2000000n, 1));
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 2000000n,
+      transactionHash: "0xswap1",
+    });
+
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(DAI_ADDRESS, 2000000n, 1));
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // Should add the dependency output as input
+    expect(finalState.plan[1].inputTokens.length).toBeGreaterThan(0);
+  });
+
+  test("recalculation preserves inputs that don't match changed output", async () => {
+    const USDT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7" as Address;
+
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [],
+      [makeToken(WETH_ADDRESS, 1000000n, 1)],
+      makeToken(USDC_ADDRESS, 2000000n, 1),
+    );
+
+    const step2: TransactionStep = createStep(
+      "step-2",
+      "swap",
+      ["step-1"],
+      [makeToken(USDC_ADDRESS, 2000000n, 1), makeToken(USDT_ADDRESS, 5000000n, 1)],
+      makeToken(DAI_ADDRESS, 7000000n, 1),
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 2100000n,
+      transactionHash: "0xswap1",
+    });
+
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(DAI_ADDRESS, 7100000n, 1));
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // USDC should be updated
+    expect(finalState.plan[1].inputTokens[0].amount).toBe(2100000n);
+    // USDT should remain unchanged
+    expect(finalState.plan[1].inputTokens[1].amount).toBe(5000000n);
+  });
+
+  test("recalculation updates only first matching input when multiple match", async () => {
+    const WALLET_2 = "0x2234567890123456789012345678901234567890" as Address;
+
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [],
+      [makeToken(WETH_ADDRESS, 1000000n, 1)],
+      makeToken(USDC_ADDRESS, 2000000n, 1),
+    );
+
+    const step2: TransactionStep = createStep(
+      "step-2",
+      "swap",
+      ["step-1"],
+      [makeToken(USDC_ADDRESS, 2000000n, 1), makeToken(USDC_ADDRESS, 1000000n, 1, WALLET_2)],
+      makeToken(DAI_ADDRESS, 3000000n, 1),
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 2500000n,
+      transactionHash: "0xswap1",
+    });
+
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(DAI_ADDRESS, 3500000n, 1));
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // First USDC from WALLET should be updated
+    expect(finalState.plan[1].inputTokens[0].amount).toBe(2500000n);
+    expect(finalState.plan[1].inputTokens[0].walletAddress).toBe(WALLET);
+    // Second USDC from WALLET_2 should remain unchanged
+    expect(finalState.plan[1].inputTokens[1].amount).toBe(1000000n);
+    expect(finalState.plan[1].inputTokens[1].walletAddress).toBe(WALLET_2);
+  });
+
+  test("recalculation with deep cascade (4 levels)", async () => {
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [],
+      [makeToken(WETH_ADDRESS, 1000000n, 1)],
+      makeToken(USDC_ADDRESS, 1000000n, 1),
+    );
+
+    const step2: TransactionStep = createStep(
+      "step-2",
+      "bridge",
+      ["step-1"],
+      [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      makeToken(USDC_ADDRESS, 1000000n, 10),
+    );
+
+    const step3: TransactionStep = createStep(
+      "step-3",
+      "claim",
+      ["step-2"],
+      [makeToken(USDC_ADDRESS, 1000000n, 10)],
+      makeToken(USDC_ADDRESS, 1000000n, 10),
+    );
+
+    const step4: TransactionStep = createStep(
+      "step-4",
+      "transfer",
+      ["step-3"],
+      [makeToken(USDC_ADDRESS, 1000000n, 10)],
+      makeToken(USDC_ADDRESS, 1000000n, 10),
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2, step3, step4],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 1200000n,
+      transactionHash: "0xswap1",
+    });
+
+    // Mock wallet methods for transfer step
+    mockWalletClient.sendCalls = vi.fn().mockResolvedValue({ id: "test-id" });
+    mockWalletClient.waitForCallsStatus = vi.fn().mockResolvedValue({
+      status: "success",
+      receipts: [{ transactionHash: "0xtransfer", logs: [] }],
+    });
+    mockWalletClient.switchChain = vi.fn();
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // All 4 steps should cascade the change
+    expect(finalState.plan[1].inputTokens[0].amount).toBe(1200000n);
+    expect(finalState.plan[1].outputToken.amount).toBe(1200000n);
+    expect(finalState.plan[2].inputTokens[0].amount).toBe(1200000n);
+    expect(finalState.plan[2].outputToken.amount).toBe(1200000n);
+    expect(finalState.plan[3].inputTokens[0].amount).toBe(1200000n);
+    expect(finalState.plan[3].outputToken.amount).toBe(1200000n);
   });
 });
 
