@@ -282,17 +282,15 @@ function TokenCard({ token }: { token: TokenAmount }) {
   }
 
   const chain = chains[token.chainId as keyof typeof chains];
-  const { symbol, decimals } = tokenData ?? chain?.nativeCurrency ?? { symbol: "?", decimals: 18 };
-  const tokenSymbol = symbol || "?";
   const chainIconUrl = chain?.name ? `/chain-icons/${chain.name.toLowerCase().replace(/\s+/g, "-")}.svg` : "";
 
   return (
     <div className="bg-background rounded-lg border border-border p-3 space-y-2">
       {/* Token Info */}
       <div className="flex items-center gap-2">
-        <TokenLabel tokenAddress={token.token} chainId={token.chainId} symbol={tokenSymbol} />
+        <TokenLabel tokenAddress={token.token} chainId={token.chainId} symbol={token.symbol} />
         {token.amount > 0n && (
-          <span className="ml-auto font-semibold text-sm">{formatUnits(token.amount, decimals)}</span>
+          <span className="ml-auto font-semibold text-sm">{formatUnits(token.amount, token.decimals)}</span>
         )}
       </div>
 

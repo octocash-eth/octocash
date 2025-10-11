@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface TokenLabelProps {
   tokenAddress: string;
@@ -8,6 +8,12 @@ interface TokenLabelProps {
 
 export function TokenLabel({ tokenAddress, chainId, symbol }: TokenLabelProps) {
   const [error, setError] = useState(false);
+
+  // Reset error whenever the tokenAddress or chainId changes:
+  // biome-ignore lint/correctness/useExhaustiveDependencies: We intentionally reset on prop changes
+  useEffect(() => {
+    setError(false);
+  }, [tokenAddress, chainId]);
 
   const src = !error
     ? `https://assets.octo.cash/token/${chainId}/${tokenAddress}`
