@@ -123,8 +123,10 @@ export function ConsolidateTokensModal({
 
   // Reset showPlan when modal is closed
   React.useEffect(() => {
-    setShowPlan(false);
-  }, []);
+    if (!open) {
+      setShowPlan(false);
+    }
+  }, [open]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -282,7 +284,7 @@ export function ConsolidateTokensModal({
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="destination-chain" className="text-sm font-medium">
+              <label htmlFor={_destinationChainId} className="text-sm font-medium">
                 Destination Chain
               </label>
               <Select value={destinationChain} onValueChange={setDestinationChain} required>

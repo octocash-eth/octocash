@@ -15,7 +15,9 @@ function truncateAddress(address: string): string {
 }
 
 function formatAmount(amount: bigint, decimals: number = 18): string {
-  return Number(formatUnits(amount, decimals)).toLocaleString(undefined, {
+  const value = Number(formatUnits(amount, decimals));
+  if (value !== 0 && value < 0.000001) return "<0.000001";
+  return value.toLocaleString(undefined, {
     maximumFractionDigits: 6,
   });
 }

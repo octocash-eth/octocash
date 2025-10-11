@@ -230,7 +230,7 @@ const happyPathState: ConsolidationState = {
     chainId: 1,
     walletAddress: WALLET,
     symbol: "WBTC",
-    decimals: 18,
+    decimals: 8,
   },
   createdAt: Date.now(),
   updatedAt: Date.now(),

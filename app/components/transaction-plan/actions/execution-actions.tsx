@@ -11,7 +11,13 @@ interface ExecutionActionsProps {
 export function ExecutionActions({ onBack, onExecute, isExecuting, isCompleted }: ExecutionActionsProps) {
   return (
     <>
-      <Button type="button" variant="outline" onClick={onBack} className="flex-1" disabled={isExecuting || isCompleted}>
+      <Button
+        type="button"
+        variant="outline"
+        onClick={onBack}
+        className="flex-1"
+        disabled={!onBack || isExecuting || isCompleted}
+      >
         Back
       </Button>
       <Button type="button" onClick={onExecute} className="flex-1 py-5 text-base" disabled={isExecuting || isCompleted}>

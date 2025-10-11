@@ -1,5 +1,5 @@
 import * as React from "react";
-import { erc20Abi, getAddress, isAddress } from "viem";
+import { type Address, erc20Abi, getAddress, isAddress, isAddressEqual } from "viem";
 import { useReadContracts } from "wagmi";
 import { ETH, USDC, WBTC } from "~/data/token-contracts";
 import { Combobox } from "./combobox";
@@ -34,7 +34,7 @@ interface TokenSelectorProps {
 
 export function TokenSelector({ chainId, value, onChange, disabled }: TokenSelectorProps) {
   // Track the address we're previewing
-  const [previewAddress, setPreviewAddress] = React.useState<string | null>(null);
+  const [previewAddress, setPreviewAddress] = React.useState<Address | null>(null);
 
   // Fetch token metadata for preview using wagmi
   const {
@@ -77,35 +77,33 @@ export function TokenSelector({ chainId, value, onChange, disabled }: TokenSelec
     return null;
   }, [previewAddress, isSuccess, tokenData]);
 
+  // Promote preview metadata to full token value when it arrives
+  React.useEffect(() => {
+    if (previewMetadata && chainId) {
+      const formattedValue = formatTokenValue(
+        chainId,
+        previewMetadata.address,
+        previewMetadata.decimals,
+        previewMetadata.symbol,
+      );
+      onChange(formattedValue);
+      setPreviewAddress(null); // Clear preview
+    }
+  }, [previewMetadata, chainId, onChange]);
+
   // Handle token address input - transform raw address to full format
   const handleTokenChange = React.useCallback(
     async (inputValue: string) => {
-      // If already in full format, use as-is
-      if (inputValue.includes(":")) {
-        onChange(inputValue);
-        return;
-      }
-
-      // If it's a plain address, use cached preview metadata
+      // If it's a plain address, normalize and trigger preview fetch
       if (isAddress(inputValue) && chainId) {
         const normalizedAddress = getAddress(inputValue);
-
-        // Use preview metadata if available
-        if (previewMetadata && previewMetadata.address === normalizedAddress) {
-          const formattedValue = formatTokenValue(
-            chainId,
-            normalizedAddress,
-            previewMetadata.decimals,
-            previewMetadata.symbol,
-          );
-          onChange(formattedValue);
-          setPreviewAddress(null); // Clear preview
-        }
+        setPreviewAddress(normalizedAddress);
+        onChange(normalizedAddress);
       } else {
         onChange(inputValue);
       }
     },
-    [chainId, onChange, previewMetadata],
+    [chainId, onChange],
   );
 
   const options = React.useMemo(() => {
@@ -128,25 +126,14 @@ export function TokenSelector({ chainId, value, onChange, disabled }: TokenSelec
       }
 
       // Handle raw addresses for preview (before transformation)
-      if (isAddress(tokenValue) && chainId) {
-        const normalizedAddress = getAddress(tokenValue);
-
-        // Trigger fetch by setting preview address
-        if (previewAddress !== normalizedAddress) {
-          setPreviewAddress(normalizedAddress);
-        }
-
+      if (isAddress(tokenValue) && chainId && previewMetadata && isAddressEqual(previewMetadata.address, tokenValue)) {
         // If we have loaded metadata, show it
-        if (previewMetadata && previewMetadata.address === normalizedAddress) {
-          return (
-            <TokenLabel tokenAddress={previewMetadata.address} chainId={chainId} symbol={previewMetadata.symbol} />
-          );
-        }
+        return <TokenLabel tokenAddress={previewMetadata.address} chainId={chainId} symbol={previewMetadata.symbol} />;
       }
 
       return null;
     },
-    [chainId, previewAddress, previewMetadata],
+    [chainId, previewMetadata],
   );
 
   // Handle token validation

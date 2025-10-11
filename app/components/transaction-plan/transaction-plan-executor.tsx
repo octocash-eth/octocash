@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { useConsolidationExecution } from "~/hooks/use-consolidation-execution";
 import { useConsolidationPlanning } from "~/hooks/use-consolidation-planning";
 import { ExecutionActions } from "./actions/execution-actions";
@@ -21,12 +20,6 @@ export function TransactionPlanExecutor({
   showActions = false,
   planId,
 }: ExecutorProps) {
-  // Put in suspicious components
-  useEffect(() => {
-    console.log("MOUNT", "TransactionPlanExecutor", planId);
-    return () => console.log("UNMOUNT", "TransactionPlanExecutor", planId);
-  }, [planId]);
-
   // Step 1: Generate the plan
   const {
     state: plannedState,
