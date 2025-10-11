@@ -229,9 +229,9 @@ async function executeStep(
       // Collect transaction hashes from successful bridge steps
       const bridgeTxs = step.dependsOn
         .map((stepId) => {
-          const depStep = state.plan.find((s) => s.id === stepId);
-          if (!depStep?.transactionHash) return null;
-          return [depStep.transactionHash, depStep.chainId] as [string, number];
+          const depResult = state.results[stepId];
+          if (!depResult?.transactionHash) return null;
+          return [depResult.transactionHash, depResult.chainId] as [string, number];
         })
         .filter((tx): tx is [string, number] => tx !== null);
 
