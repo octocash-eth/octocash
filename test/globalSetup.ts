@@ -7,25 +7,61 @@ import { base, mainnet, optimism } from 'viem/chains';
 const basePort = 8545;
 const mnemonic = "memory dream rib champion cradle century antenna purchase smart company spoon reason";
 
+async function getLatestBlockNumber(rpcUrl: string): Promise<number> {
+  try {
+    const response = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'eth_blockNumber',
+        params: []
+      })
+    });
+    const data = await response.json();
+    if (data.result) {
+      return Number.parseInt(data.result, 16);
+    }
+    throw new Error(`Failed to fetch block number from RPC: ${JSON.stringify(data)}`);
+  } catch (error) {
+    console.error(`Error fetching block number from ${rpcUrl}:`, error);
+    throw error;
+  }
+}
+
 export default async function setup() {
   if (!process.env.VITE_DRPC_API_KEY) {
     throw new Error("VITE_DRPC_API_KEY is not set")
   }
+
+  console.log('📊 Fetching latest block numbers...');
+  const mainnetRpc = `https://lb.drpc.org/ethereum/${process.env.VITE_DRPC_API_KEY}`;
+  const optimismRpc = `https://lb.drpc.org/optimism/${process.env.VITE_DRPC_API_KEY}`;
+  const baseRpc = `https://lb.drpc.org/base/${process.env.VITE_DRPC_API_KEY}`;
+
+  const [mainnetBlock, optimismBlock, baseBlock] = await Promise.all([
+    getLatestBlockNumber(mainnetRpc),
+    getLatestBlockNumber(optimismRpc),
+    getLatestBlockNumber(baseRpc),
+  ]);
+  console.log(`📦 Latest blocks - Mainnet: ${mainnetBlock}, Optimism: ${optimismBlock}, Base: ${baseBlock}`);
+
   const [proolMainnet, proolOptimism, proolBase] = [
     {
       chain: mainnet,
-      forkUrl: `https://lb.drpc.org/ethereum/${process.env.VITE_DRPC_API_KEY}`,
-      forkBlockNumber: 23257260,
+      forkUrl: mainnetRpc,
+      forkBlockNumber: mainnetBlock,
     },
     {
       chain: optimism,
-      forkUrl: `https://lb.drpc.org/optimism/${process.env.VITE_DRPC_API_KEY}`,
-      forkBlockNumber: 140499492,
+      forkUrl: optimismRpc,
+      forkBlockNumber: optimismBlock,
     },
     {
       chain: base,
-      forkUrl: `https://lb.drpc.org/base/${process.env.VITE_DRPC_API_KEY}`,
-      forkBlockNumber: 34904190,
+      forkUrl: baseRpc,
+      forkBlockNumber: baseBlock,
     },
   ].map(({ chain, forkUrl, forkBlockNumber }) =>
     createServer({
