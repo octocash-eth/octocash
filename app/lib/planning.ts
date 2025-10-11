@@ -424,7 +424,7 @@ async function createBridgeSteps(
         inputTokens: [
           {
             token: chainUSDC,
-            amount: amountAfterFee,
+            amount: walletAmount,
             chainId,
             walletAddress,
             symbol: "USDC",
