@@ -112,7 +112,36 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     expect(attestation!.partialDependency).toBe(true);
     expect(claim!.partialDependency).toBe(true);
 
-    // Simulate execution with one bridge failing
+    // Identify which swap is first in the plan
+    const daiSwap = swaps.find((s) => s.chainId === 137);
+    const usdtSwap = swaps.find((s) => s.chainId === 10);
+    const firstSwap = swaps[0];
+    const secondSwap = swaps[1];
+    
+    // Mock swaps based on which is first in the execution order
+    if (firstSwap.chainId === 137) {
+      // DAI swap is first - make it fail
+      vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async () => {
+        throw new Error("Swap failed: Insufficient liquidity");
+      });
+      // USDT swap is second - make it succeed
+      vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async (tokensIn, _tokenOut, _sendCalls) => {
+        const totalAmount = tokensIn.reduce((sum, token) => sum + token.amount, 0n);
+        return { amount: totalAmount / 2n, transactionHash: `0x${Math.random().toString(16).substring(2)}` };
+      });
+    } else {
+      // USDT swap is first - make it succeed
+      vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async (tokensIn, _tokenOut, _sendCalls) => {
+        const totalAmount = tokensIn.reduce((sum, token) => sum + token.amount, 0n);
+        return { amount: totalAmount / 2n, transactionHash: `0x${Math.random().toString(16).substring(2)}` };
+      });
+      // DAI swap is second - make it fail
+      vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async () => {
+        throw new Error("Swap failed: Insufficient liquidity");
+      });
+    }
+
+    // Simulate execution with one swap failing
     const state: ConsolidationState = {
       id: "test-partial-dep",
       plan,
@@ -123,48 +152,49 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
       destinationToken,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
+      hasSubsequentExecution: true, // Continue past failures to test skip logic
     };
 
-    // Mock: First 3 steps succeed, 4th (second bridge) fails
     const { finalValue: executedState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
     // Verify results:
-    // - Step 1 (swap 1): success
-    // - Step 2 (swap 2): success/failed (let's say it fails)
-    // - Step 3 (bridge 1): success
-    // - Step 4 (bridge 2): skipped (depends on failed swap 2)
-    // - Step 5 (attestation): SUCCESS (adapts to only bridge 1)
+    // - Step 1 (USDT swap on Optimism): success
+    // - Step 2 (DAI swap on Polygon): failed
+    // - Step 3 (bridge from Optimism): success
+    // - Step 4 (bridge from Polygon): skipped (depends on failed swap 2)
+    // - Step 5 (attestation): SUCCESS (adapts to only bridge from Optimism)
     // - Step 6 (claim): SUCCESS (claims only from bridge 1)
     // - Step 7 (final swap): success (with reduced amount)
 
-    // If DAI swap fails, the Polygon bridge should be skipped
-    const failedSwap = swaps.find((s) => s.chainId === 137); // DAI swap
     const polygonBridge = bridges.find((s) => s.chainId === 137);
 
-    if (executedState.results[failedSwap!.id]?.status === "failed") {
-      expect(executedState.results[polygonBridge!.id]?.status).toBe("skipped");
+    // DAI swap should have failed
+    expect(executedState.results[daiSwap!.id]?.status).toBe("failed");
+    
+    // Polygon bridge should be skipped
+    expect(executedState.results[polygonBridge!.id]?.status).toBe("skipped");
 
-      // Attestation should adapt (not skip)
-      expect(executedState.results[attestation!.id]?.status).toBe("success");
+    // Attestation should adapt (not skip)
+    expect(executedState.results[attestation!.id]?.status).toBe("success");
 
-      // Verify attestation adapted its dependencies
-      const updatedAttestation = executedState.plan.find((s) => s.id === attestation!.id);
-      expect(updatedAttestation?.dependsOn.length).toBeLessThan(attestation!.dependsOn.length);
-      expect(updatedAttestation?.adaptedFrom).toEqual(attestation!.dependsOn);
+    // Verify attestation adapted its dependencies
+    const updatedAttestation = executedState.plan.find((s) => s.id === attestation!.id);
+    expect(updatedAttestation?.dependsOn.length).toBeLessThan(attestation!.dependsOn.length);
+    expect(updatedAttestation?.adaptedFrom).toEqual(attestation!.dependsOn);
 
-      // Claim should also adapt
-      expect(executedState.results[claim!.id]?.status).toBe("success");
+    // Claim should succeed (it depends on attestation, which adapted)
+    expect(executedState.results[claim!.id]?.status).toBe("success");
 
-      const updatedClaim = executedState.plan.find((s) => s.id === claim!.id);
-      expect(updatedClaim?.adaptedFrom).toBeDefined();
+    // The claim step itself may or may not adapt depending on its dependency structure
+    // (it typically depends on attestation, not directly on bridges)
+    const updatedClaim = executedState.plan.find((s) => s.id === claim!.id);
+    expect(updatedClaim).toBeDefined();
 
-      // Final swap should succeed with reduced amount
-      expect(executedState.results[finalSwap!.id]?.status).toBe("success");
+    // Final swap should succeed with reduced amount
+    expect(executedState.results[finalSwap!.id]?.status).toBe("success");
 
-      // Overall status should be 'partial' (some steps skipped)
-      expect(executedState.status).toBe("partial");
-    }
+    // Overall status should be 'partial' (some steps skipped)
+    expect(executedState.status).toBe("partial");
   });
 
   test("verify user is shown clear explanation for skipped and adapted steps", async () => {
@@ -183,6 +213,11 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
 
     const plan = await planConsolidation(sourceTokens, destinationToken);
 
+    // Force the first swap (USDT on Optimism) to fail
+    vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async () => {
+      throw new Error("Swap failed: Network timeout");
+    });
+
     const state: ConsolidationState = {
       id: "test-explanations",
       plan,
@@ -198,8 +233,9 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
 
     const { finalValue: executedState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
-    // Find any skipped steps
+    // Find any skipped steps - there MUST be at least one since we forced a failure
     const skippedSteps = Object.values(executedState.results).filter((r) => r.status === "skipped");
+    expect(skippedSteps.length).toBeGreaterThan(0);
 
     for (const skipped of skippedSteps) {
       // Each skipped step should have a clear reason
@@ -207,8 +243,9 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
       expect(skipped.skipReason).toContain("step"); // Should reference the failed dependency
     }
 
-    // Find adapted steps
+    // Find adapted steps - there MUST be at least one
     const adaptedSteps = executedState.plan.filter((s) => s.adaptedFrom && s.adaptedFrom.length > 0);
+    expect(adaptedSteps.length).toBeGreaterThan(0);
 
     for (const adapted of adaptedSteps) {
       // Adapted steps should track original dependencies
@@ -235,6 +272,21 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     };
 
     const plan = await planConsolidation(sourceTokens, destinationToken);
+    
+    const bridges = plan.filter((s) => s.type === "bridge");
+    const optimismBridge = bridges.find((b) => b.chainId === 10);
+    const polygonBridge = bridges.find((b) => b.chainId === 137);
+
+    // Force Optimism bridge to succeed (first call)
+    vi.mocked(executeCCTPBurn).mockImplementationOnce(async (tokenIn, _tokenOut, _sendCalls) => {
+      const txHash = `0x${Math.random().toString(16).substring(2)}`;
+      return [txHash, tokenIn.chainId];
+    });
+    
+    // Force Polygon bridge to fail (second call)
+    vi.mocked(executeCCTPBurn).mockImplementationOnce(async () => {
+      throw new Error("Bridge failed: Circle API unavailable");
+    });
 
     const state: ConsolidationState = {
       id: "test-partial-amount",
@@ -252,31 +304,31 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     // Simulate: Optimism bridge succeeds, Polygon bridge fails
     const { finalValue: executedState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
-    const bridges = plan.filter((s) => s.type === "bridge");
     const claim = plan.find((s) => s.type === "claim");
     const finalSwap = plan.find((s) => s.type === "swap" && s.chainId === 1);
 
-    // If one bridge failed
-    const failedBridges = bridges.filter((b) => executedState.results[b.id]?.status === "failed");
-    const successBridges = bridges.filter((b) => executedState.results[b.id]?.status === "success");
+    // Optimism bridge should succeed
+    expect(executedState.results[optimismBridge!.id]?.status).toBe("success");
+    
+    // Polygon bridge should fail
+    expect(executedState.results[polygonBridge!.id]?.status).toBe("failed");
 
-    if (failedBridges.length > 0 && successBridges.length > 0) {
-      // Claim should succeed with reduced amount (only from successful bridges)
-      expect(executedState.results[claim!.id]?.status).toBe("success");
+    // Claim should succeed with reduced amount (only from successful bridge)
+    expect(executedState.results[claim!.id]?.status).toBe("success");
 
-      const claimResult = executedState.results[claim!.id];
-      const claimAmount = claimResult.actualOutput?.amount || 0n;
+    const claimResult = executedState.results[claim!.id];
+    const claimAmount = claimResult.actualOutput?.amount || 0n;
+    expect(claimAmount).toBeGreaterThan(0n);
 
-      // Final swap should use the reduced amount from claim
-      const finalSwapResult = executedState.results[finalSwap!.id];
-      if (finalSwapResult.status === "success") {
-        const updatedFinalSwap = executedState.plan.find((s) => s.id === finalSwap!.id);
-        expect(updatedFinalSwap?.inputTokens[0].amount).toBe(claimAmount);
-      }
+    // Final swap should use the reduced amount from claim
+    const finalSwapResult = executedState.results[finalSwap!.id];
+    expect(finalSwapResult.status).toBe("success");
+    
+    const updatedFinalSwap = executedState.plan.find((s) => s.id === finalSwap!.id);
+    expect(updatedFinalSwap?.inputTokens[0].amount).toBe(claimAmount);
 
-      // Status should be 'partial'
-      expect(executedState.status).toBe("partial");
-    }
+    // Status should be 'partial'
+    expect(executedState.status).toBe("partial");
   });
 
   test("skip reason shows which dependency failed", async () => {
@@ -294,6 +346,14 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
 
     const plan = await planConsolidation(sourceTokens, destinationToken);
 
+    const swapStep = plan.find((s) => s.type === "swap");
+    const bridgeStep = plan.find((s) => s.type === "bridge");
+
+    // Force the swap to fail
+    vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async () => {
+      throw new Error("Swap failed: Price impact too high");
+    });
+
     const state: ConsolidationState = {
       id: "test-skip-reason",
       plan,
@@ -310,16 +370,15 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     // Simulate: First swap fails
     const { finalValue: executedState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
-    const swapStep = plan.find((s) => s.type === "swap");
-    const bridgeStep = plan.find((s) => s.type === "bridge");
+    // Swap should have failed
+    expect(executedState.results[swapStep!.id]?.status).toBe("failed");
+    
+    // Bridge should be skipped
+    expect(executedState.results[bridgeStep!.id]?.status).toBe("skipped");
 
-    if (executedState.results[swapStep!.id]?.status === "failed") {
-      // Bridge should be skipped
-      expect(executedState.results[bridgeStep!.id]?.status).toBe("skipped");
-
-      // Skip reason should reference the failed swap
-      const skipReason = executedState.results[bridgeStep!.id]?.skipReason;
-      expect(skipReason).toContain(swapStep!.id);
-    }
+    // Skip reason should reference the failed swap
+    const skipReason = executedState.results[bridgeStep!.id]?.skipReason;
+    expect(skipReason).toBeDefined();
+    expect(skipReason).toContain(swapStep!.id);
   });
 });
