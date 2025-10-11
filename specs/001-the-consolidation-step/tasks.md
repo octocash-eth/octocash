@@ -119,8 +119,8 @@ Agent: "Create recovery integration test test/e2e/consolidation-recovery.test.ts
 ### Batch 3: UI Components (After T009-T016 complete)
 ```bash
 # Run T017-T018 in parallel (different files)
-Agent: "Create TransactionCard component in app/components/transaction-card.tsx"
-Agent: "Create TransactionPlanView component in app/components/transaction-plan-view.tsx"
+Agent: "Create PlanCard component in app/components/transaction-plan/plan-card.tsx"
+Agent: "Create TransactionPlanViewer component in app/components/transaction-plan/transaction-plan-viewer.tsx"
 # T019 cancelled - recovery handled from History page
 ```
 
@@ -140,7 +140,7 @@ Agent: "Run performance validation tests"
 
 ### File Organization
 - Tests co-located with implementation in `app/lib/*.test.ts`
-- E2E tests in separate `app/e2e/` directory
+- E2E tests in separate `test/e2e/` directory
 - Components in `app/components/`
 
 ### Partial Dependencies
