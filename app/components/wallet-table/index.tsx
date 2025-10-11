@@ -10,6 +10,16 @@ interface WalletTableProps {
   connectedAddresses?: readonly string[];
 }
 
+// Empty state component
+const EmptyState = ({ hasAddresses }: { hasAddresses: boolean }) => (
+  <div className="flex flex-col items-center justify-center h-64 text-center">
+    <p className="mb-2 text-muted-foreground">No tokens found</p>
+    <p className="text-sm text-muted-foreground">
+      {hasAddresses ? "Connect a wallet with tokens or try a different address" : "Connect a wallet to see your tokens"}
+    </p>
+  </div>
+);
+
 export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
   const [walletData, setWalletData] = React.useState<WalletData[]>([]);
   const [isLoading, setIsLoading] = React.useState(false);
@@ -23,8 +33,8 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     let total = 0;
 
     Object.entries(rowSelection).forEach(([rowId, isSelected]) => {
-      if (isSelected && walletData[parseInt(rowId)]) {
-        const row = walletData[parseInt(rowId)];
+      if (isSelected && walletData[parseInt(rowId, 10)]) {
+        const row = walletData[parseInt(rowId, 10)];
         const amount = consolidateAmounts[rowId] !== undefined ? consolidateAmounts[rowId] : row.amount;
         // Calculate the USD value based on the proportion of tokens being consolidated
         const proportion = Number(amount) / Number(row.amount);
@@ -61,9 +71,9 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
       const next: Record<string, string> = { ...previous };
 
       Object.entries(rowSelection).forEach(([rowId, isSelected]) => {
-        if (isSelected && walletData[parseInt(rowId)]) {
+        if (isSelected && walletData[parseInt(rowId, 10)]) {
           if (next[rowId] === undefined) {
-            next[rowId] = walletData[parseInt(rowId)].amount;
+            next[rowId] = walletData[parseInt(rowId, 10)].amount;
             hasChanges = true;
           }
         }
@@ -127,18 +137,6 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     void loadTokenBalances("initial");
   }, [loadTokenBalances]);
 
-  // Empty state component
-  const EmptyState = () => (
-    <div className="flex flex-col items-center justify-center h-64 text-center">
-      <p className="mb-2 text-muted-foreground">No tokens found</p>
-      <p className="text-sm text-muted-foreground">
-        {connectedAddresses.length > 0
-          ? "Connect a wallet with tokens or try a different address"
-          : "Connect a wallet to see your tokens"}
-      </p>
-    </div>
-  );
-
   return (
     <div className="space-y-4">
       {error && <div className="p-4 text-red-700 rounded-md bg-red-50">{error}</div>}
@@ -169,7 +167,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
           </div>
         </>
       ) : (
-        <EmptyState />
+        <EmptyState hasAddresses={connectedAddresses.length > 0} />
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
@@ -20,12 +20,13 @@ const explorerUrls: Array<[string, number]> = [
   ...Object.entries(blockExplorers).map(([chainId, url]) => [url as string, Number(chainId)] as [string, number]),
 ];
 
-export function ManualClaimDialog() {
+export function ManualClaimDialog({ children }: { children: React.ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);
   const [txUrl, setTxUrl] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { claim } = useCCTPClaim();
+  const txUrlId = useId();
 
   function isLikelyTxUrl(url: string) {
     try {
@@ -72,9 +73,7 @@ export function ManualClaimDialog() {
 
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
-      <DialogTrigger asChild>
-        <Button variant="default">Manual Claim</Button>
-      </DialogTrigger>
+      <DialogTrigger asChild>{children}</DialogTrigger>
       <DialogContent className="sm:max-w-[480px]">
         <form onSubmit={handleManualClaimSubmit} className="grid gap-4">
           <DialogHeader>
@@ -84,11 +83,11 @@ export function ManualClaimDialog() {
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-2">
-            <label htmlFor="tx-url" className="text-sm font-medium">
+            <label htmlFor={txUrlId} className="text-sm font-medium">
               Transaction URL
             </label>
             <Input
-              id="tx-url"
+              id={txUrlId}
               placeholder="https://etherscan.io/tx/0x…"
               value={txUrl}
               onChange={(e) => setTxUrl(e.target.value)}

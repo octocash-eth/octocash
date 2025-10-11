@@ -8,7 +8,7 @@ import { chains, transports } from "../data/supported-chains";
 
 export const WALLETCONNECT_PROJECT_ID = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID ?? "";
 
-if (!WALLETCONNECT_PROJECT_ID && !import.meta.env.VITE_E2E) {
+if (!WALLETCONNECT_PROJECT_ID && !import.meta.env.VITE_E2E && !import.meta.env.VITEST) {
   console.warn("You need to provide a VITE_WALLETCONNECT_PROJECT_ID env variable");
 }
 
