@@ -14,12 +14,12 @@ interface ComboboxProps {
   options: ComboboxOption[];
   labelFunction?: (value: string) => React.ReactNode;
   value?: string;
-  onValueChange?: (value: string) => void;
+  onValueChange?: (value: string) => void | Promise<void>;
   onOptionsChange?: (options: ComboboxOption[]) => void;
   placeholder?: string;
   searchPlaceholder?: string;
   className?: string;
-  isValidOption?: [(value: string) => boolean, string];
+  isValidOption?: (value: string) => [boolean, string];
   disabled?: boolean;
 }
 
@@ -38,8 +38,8 @@ export function Combobox({
   const [open, setOpen] = React.useState(false);
   const [options, setOptions] = React.useState<ComboboxOption[]>(initialOptions);
   const [searchValue, setSearchValue] = React.useState("");
-  const [isValidOptionFunc, invalidMessage] = isValidOption ?? [() => true, ""];
-  const isInvalid = !isValidOptionFunc(searchValue);
+  const isValidOptionFunc = isValidOption ?? (() => [true, ""]);
+  const [isValid, invalidMessage] = isValidOptionFunc(searchValue);
 
   // Update internal options when prop changes
   React.useEffect(() => {
@@ -54,26 +54,38 @@ export function Combobox({
   const showAddOption = React.useMemo(() => {
     if (!searchValue.trim()) return false;
     const notDuplicate = !options.some((option) => option.value.toLowerCase() === searchValue.toLowerCase());
-    return notDuplicate && !isInvalid;
-  }, [options, searchValue, isInvalid]);
+    return notDuplicate && isValid;
+  }, [options, searchValue, isValid]);
 
   const selectedOption = options.find((option) => option.value === value);
 
-  const handleAddOption = () => {
+  const handleAddOption = async () => {
     if (!searchValue.trim()) return;
 
+    const inputValue = searchValue.trim();
+
+    // Call onValueChange and wait for any async transformation
+    await onValueChange?.(inputValue);
+
+    // Clear search and close - the value update will trigger adding the option
+    setSearchValue("");
+    setOpen(false);
+  };
+
+  // Add custom options when value changes (after transformation)
+  React.useEffect(() => {
+    if (!value || options.some((opt) => opt.value === value)) return;
+
+    // This is a new value not in options, add it as removable
     const newOption: ComboboxOption = {
-      value: searchValue.trim(),
+      value,
       removable: true,
     };
 
     const updatedOptions = [...options, newOption];
     setOptions(updatedOptions);
     onOptionsChange?.(updatedOptions);
-    onValueChange?.(newOption.value);
-    setSearchValue("");
-    setOpen(false);
-  };
+  }, [value, options, onOptionsChange]);
 
   const handleRemoveOption = (optionToRemove: ComboboxOption) => {
     const updatedOptions = options.filter((option) => option.value !== optionToRemove.value);
@@ -87,7 +99,10 @@ export function Combobox({
   };
 
   const handleSelect = (selectedValue: string) => {
-    onValueChange?.(selectedValue === value ? "" : selectedValue);
+    // If clicking the already selected option, just close the dropdown
+    if (selectedValue !== value) {
+      onValueChange?.(selectedValue);
+    }
     setOpen(false);
     setSearchValue("");
   };
@@ -139,15 +154,15 @@ export function Combobox({
                   )}
                 </CommandItem>
               ))}
-              {!showAddOption && isInvalid && searchValue.trim() && (
+              {!showAddOption && !isValid && searchValue.trim() && (
                 <CommandItem value={`invalid-${searchValue}`} disabled className="text-muted-foreground">
                   {(invalidMessage ?? '"$0" is invalid').replace(/\$0/g, searchValue)}
                 </CommandItem>
               )}
               {showAddOption && (
-                <CommandItem value={`add-${searchValue}`} onSelect={handleAddOption} className="text-muted-foreground">
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add "{searchValue}" to the list
+                <CommandItem value={`add-${searchValue}`} onSelect={handleAddOption}>
+                  <Plus className="mr-2 h-4 w-4 shrink-0" />
+                  <div className="flex items-center gap-2 min-w-0">{labelFunction(searchValue.trim())}</div>
                 </CommandItem>
               )}
             </CommandGroup>

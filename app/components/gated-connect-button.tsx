@@ -1,5 +1,5 @@
 import { useConnectModal } from "@rainbow-me/rainbowkit";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
@@ -16,6 +16,7 @@ export function GatedConnectButton() {
   const [open, setOpen] = useState(false);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const passwordId = useId();
 
   const onRequestConnect = () => {
     setPassword("");
@@ -48,11 +49,11 @@ export function GatedConnectButton() {
           </DialogHeader>
           <form onSubmit={onSubmit} className="space-y-3">
             <div className="space-y-2">
-              <label htmlFor="alpha-password" className="text-sm font-medium">
+              <label htmlFor={passwordId} className="text-sm font-medium">
                 Password
               </label>
               <Input
-                id="alpha-password"
+                id={passwordId}
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
