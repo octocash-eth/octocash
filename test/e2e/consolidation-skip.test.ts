@@ -158,13 +158,15 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     const { finalValue: executedState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
     // Verify results:
-    // - Step 1 (USDT swap on Optimism): success
-    // - Step 2 (DAI swap on Polygon): failed
-    // - Step 3 (bridge from Optimism): success
-    // - Step 4 (bridge from Polygon): skipped (depends on failed swap 2)
-    // - Step 5 (attestation): SUCCESS (adapts to only bridge from Optimism)
-    // - Step 6 (claim): SUCCESS (claims only from bridge 1)
-    // - Step 7 (final swap): success (with reduced amount)
+    // Verify results:
+    // Expected outcomes (order may vary):
+    // - Step 1 - USDT swap (Optimism): success
+    // - Step 2 - DAI swap (Polygon): failed
+    // - Step 3 - Bridge from Optimism: success
+    // - Step 4 - Bridge from Polygon: skipped (depends on failed DAI swap)
+    // - Step 5 - Attestation: SUCCESS (adapts to only bridge from Optimism)
+    // - Step 6 - Claim: SUCCESS (claims only from bridge 1)
+    // - Step 7 - Swap USDC -> WBTC (Ethereum): success (with reduced amount)
 
     const polygonBridge = bridges.find((s) => s.chainId === 137);
 
