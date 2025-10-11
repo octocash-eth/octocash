@@ -229,7 +229,6 @@ function ConsolidationCard({ consolidation, expanded, onToggle, onDelete, getSta
                       symbol: "USDC",
                       decimals: 6,
                     }}
-                    isDestination
                   />
                 </div>
               </div>
