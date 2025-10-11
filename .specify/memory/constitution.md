@@ -119,8 +119,10 @@ app/
 ├── lib/            # Core business logic (consolidation, cctp, odos, gas)
 │   └── *.test.ts   # Tests co-located with source files
 ├── data/           # Static data (contract addresses, chain configs)
-├── e2e/            # End-to-end test utilities
 └── routes/         # File-based routing (React Router 7)
+
+test/
+└── e2e/            # End-to-end integration tests
 ```
 
 ### Commit Practices

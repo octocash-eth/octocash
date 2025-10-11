@@ -1,0 +1,20 @@
+# Cursor Rules for OctoCash
+
+## Testing
+- Always use `bun run test run` to execute tests (NOT `bun test`)
+- This project uses Vitest, not Bun's built-in test runner
+- For watch mode: `bun run test`
+- For coverage: `bun run coverage`
+
+## Development Commands
+- `bun dev` - Start development server
+- `bun run build` - Build for production
+- `bun run lint` - Check code quality
+- `bun run lint:fix` - Auto-fix linting issues
+- `bun run typecheck` - Run TypeScript type checking
+
+## Code Style
+- Use Biome for linting and formatting (not Prettier/ESLint)
+- Follow existing patterns in the codebase
+- Prefer functional components and hooks in React
+

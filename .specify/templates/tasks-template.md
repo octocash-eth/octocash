@@ -42,7 +42,7 @@
 - `app/hooks/` - Custom React hooks  
 - `app/lib/` - Core business logic
 - `app/lib/*.test.ts` - Tests co-located with logic files
-- `app/e2e/` - End-to-end test utilities
+- `test/e2e/` - End-to-end integration tests
 - `app/routes/` - File-based routing (React Router 7)
 
 ## Phase 3.1: Setup
@@ -60,7 +60,7 @@
 ## Phase 3.3: Core Implementation (ONLY after tests are failing)
 - [ ] T008 [P] Core logic in app/lib/[feature].ts
 - [ ] T009 [P] React hook in app/hooks/use-[feature].ts
-- [ ] T010 [P] UI component in app/components/[Feature].tsx
+- [ ] T010 [P] UI component in app/components/[feature].tsx
 - [ ] T011 Route handler in app/routes/[route].tsx (if applicable)
 - [ ] T012 Error handling with user-friendly messages
 - [ ] T013 Loading states and transaction previews
