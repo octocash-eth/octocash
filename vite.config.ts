@@ -19,6 +19,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     globalSetup: "./test/globalSetup.ts",
+    setupFiles: ["./test/setup.ts"],
     coverage: {
       reporter: ["json", "html"],
       include: ["app/lib/**/*"],
