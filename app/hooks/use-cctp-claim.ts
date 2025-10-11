@@ -35,6 +35,8 @@ export function useCCTPClaim() {
       amount: 0n,
       walletAddress: walletClient.account.address,
       chainId: Number(destinationChainId),
+      symbol: "USDC",
+      decimals: 6,
     };
 
     const [mintTx, logs] = await executeCCTPMint(attestations, tokenOut, sendCalls);
