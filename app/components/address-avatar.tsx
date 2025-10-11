@@ -7,7 +7,15 @@ import { cn } from "../lib/utils";
 
 const transparentPixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
-function AddressAvatar({ addressOrEns, size }: { addressOrEns: string; size: number }) {
+function AddressAvatar({
+  addressOrEns,
+  size,
+  title,
+}: {
+  addressOrEns: string;
+  size: number;
+  title?: string | undefined;
+}) {
   const isEnsName = addressOrEns.endsWith(".eth");
   const isAddr = isAddress(addressOrEns);
 
@@ -44,7 +52,7 @@ function AddressAvatar({ addressOrEns, size }: { addressOrEns: string; size: num
     return transparentPixel;
   }, [ensAvatar, address, isLoading]);
 
-  return <img src={src} alt="" width={size} height={size} className={cn("rounded bg-gray-600")} />;
+  return <img src={src} alt="" width={size} height={size} className={cn("rounded bg-gray-600")} title={title} />;
 }
 
 export default AddressAvatar;
