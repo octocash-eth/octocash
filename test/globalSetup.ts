@@ -9,9 +9,13 @@ const mnemonic = "memory dream rib champion cradle century antenna purchase smar
 
 async function getLatestBlockNumber(rpcUrl: string): Promise<number> {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
     const response = await fetch(rpcUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
+      signal: controller.signal,
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
@@ -19,11 +23,17 @@ async function getLatestBlockNumber(rpcUrl: string): Promise<number> {
         params: []
       })
     });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
     const data = await response.json();
     if (data.result) {
       return Number.parseInt(data.result, 16);
     }
-    throw new Error(`Failed to fetch block number from RPC: ${JSON.stringify(data)}`);
+    throw new Error(`Failed to fetch block number from RPC: ${data.error?.message || 'Unknown error'}`);
   } catch (error) {
     console.error(`Error fetching block number from ${rpcUrl}:`, error);
     throw error;
