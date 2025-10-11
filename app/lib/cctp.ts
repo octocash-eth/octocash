@@ -1,10 +1,8 @@
-import { type Config, getPublicClient } from "@wagmi/core";
-import { type Address, type Chain, encodeFunctionData, type Hex, parseAbi } from "viem";
+import { type Address, type Call, type Chain, createPublicClient, encodeFunctionData, type Hex, parseAbi } from "viem";
 import { chainIdToDomain, messageTransmitter, tokenAddresses, tokenMessenger } from "~/data/cctp-contracts";
-import { chains } from "~/data/supported-chains";
-import type { TokenAmount } from "~/lib/consolidation";
+import { chains, transports } from "~/data/supported-chains";
 import type { SendCallsFn } from "~/lib/send-calls";
-import { WALLETCONNECT_CONFIG } from "~/utils/wallet";
+import type { TokenAmount } from "~/lib/types";
 
 export type Attestation = {
   message: `0x${string}`;
@@ -105,10 +103,14 @@ export const getMintUsdcCalls = async (destinationChainId: number, attestations:
     ]),
   };
 
-  const publicClient = getPublicClient(WALLETCONNECT_CONFIG as Config, { chainId: destinationChainId });
-  if (!publicClient) {
-    throw new Error(`Chain ${destinationChainId} not supported`);
+  const transport = transports?.[destinationChainId as keyof typeof transports];
+  if (!transport) {
+    throw new Error(`Chain ${destinationChainId} not supported or no transport configured`);
   }
+  const publicClient = createPublicClient({
+    chain: chains[destinationChainId as keyof typeof chains] as Chain,
+    transport,
+  });
 
   const usedNonces = await publicClient.multicall({
     contracts: attestations.map((a) => ({
@@ -118,7 +120,7 @@ export const getMintUsdcCalls = async (destinationChainId: number, attestations:
     })),
   });
 
-  const calls = attestations
+  const calls: Call[] = attestations
     .map((attestation, index) => ({ attestation, isUsed: usedNonces[index].result }))
     .filter(({ isUsed }) => !isUsed) // keep only UNUSED nonces
     .map(({ attestation }) => ({
@@ -128,7 +130,6 @@ export const getMintUsdcCalls = async (destinationChainId: number, attestations:
         functionName: "receiveMessage",
         args: [attestation.message, attestation.attestation],
       }),
-      chain: chains[destinationChainId as keyof typeof chains] as Chain,
     }));
 
   return calls;
@@ -202,7 +203,20 @@ export const executeCCTPMint = async (
     return ["", []];
   }
 
-  const [mintTx, mintLogs] = await sendCalls("mint", chainId, walletAddress, calls, "non-atomic");
-
+  const [mintTx, mintLogs] = await sendCalls("mint", chainId, walletAddress, calls, "non-atomic-batch");
   return [mintTx, mintLogs];
 };
+
+/**
+ * Get bridge fee for CCTP (T010)
+ * @param amount - Amount to bridge
+ * @param sourceChain - Source chain ID
+ * @param destChain - Destination chain ID
+ * @returns Bridge fee in smallest unit
+ */
+export async function getBridgeFee(_amount: bigint, _sourceChain: number, _destChain: number): Promise<bigint> {
+  // In the future we may want to call
+  // https://iris-api-sandbox.circle.com/v2/burn/USDC/fees/{sourceDomainId}/{destDomainId}
+  // for now we return a nominal fee for planning
+  return 0n;
+}

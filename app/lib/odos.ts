@@ -8,11 +8,13 @@ import {
   parseEventLogs,
   zeroAddress,
 } from "viem";
-import type { TokenAmount } from "~/lib/consolidation";
 import type { SendCallsFn } from "~/lib/send-calls";
+import type { TokenAmount } from "~/lib/types";
 
 interface OdosQuoteResponse {
   pathId: string;
+  outAmounts?: string[]; // Amount in smallest unit (wei, etc.)
+  outValues?: number[]; // Converted to USD value
 }
 
 interface OdosAssembleResponse {
@@ -23,12 +25,12 @@ interface OdosAssembleResponse {
   };
 }
 
-const ODOS_QUOTE_URL = "https://api.odos.xyz/sor/quote/v2";
+const ODOS_QUOTE_URL = "https://api.odos.xyz/sor/quote/v3";
 const ODOS_ASSEMBLE_URL = "https://api.odos.xyz/sor/assemble";
 
 const swapAbi = parseAbi([
-  "event Swap(address sender, uint256 inputAmount, address inputToken, uint256 amountOut, address outputToken, int256 slippage, uint32 referralCode)",
-  "event SwapMulti(address sender, uint256[] amountsIn, address[] tokensIn, uint256[] amountsOut, address[] tokensOut, uint32 referralCode)",
+  "event Swap(address sender, uint256 inputAmount, address inputToken, uint256 amountOut, address outputToken, int256 slippage, uint64 referralCode, uint64 referralFee, address referralFeeRecipient)",
+  "event SwapMulti(address sender, uint256[] amountsIn, address[] tokensIn, uint256[] amountsOut, address[] tokensOut, int256[] slippage, uint64 referralCode, uint64 referralFee, address referralFeeRecipient)",
 ]);
 
 async function fetchJson<T>(url: string, body: unknown): Promise<T> {
@@ -72,6 +74,12 @@ function buildApproveCalls(inputs: TokenAmount[], router: Address): Call[] {
   return calls;
 }
 
+/**
+ * Builds the transfer call for the given token.
+ * @param token - The token to transfer.
+ * @param to - The address to transfer to.
+ * @returns The transfer call.
+ */
 function buildTransferCall(token: TokenAmount, to: Address): Call {
   return {
     to: token.token,
@@ -82,35 +90,45 @@ function buildTransferCall(token: TokenAmount, to: Address): Call {
   };
 }
 
-export async function buildOdosCalls(tokensToSwap: TokenAmount[], tokenOut: TokenAmount): Promise<Call[]> {
-  const chainId = tokensToSwap[0].chainId;
-  const userAddr = tokensToSwap[0].walletAddress;
-
+/**
+ * Fetches a swap quote from Odos.
+ * @param inputTokens - The tokens to swap.
+ * @param outputToken - The output token.
+ * @returns The quote that will be used to assemble the swap transaction.
+ */
+async function fetchSwapQuote(
+  inputTokens: TokenAmount[],
+  outputToken: Omit<TokenAmount, "amount">,
+): Promise<OdosQuoteResponse> {
   const quoteBody = {
-    chainId,
-    inputTokens: tokensToSwap.map((token) => ({
+    chainId: outputToken.chainId,
+    inputTokens: inputTokens.map((token) => ({
       tokenAddress: token.token,
       amount: token.amount.toString(),
     })),
     outputTokens: [
       {
-        tokenAddress: tokenOut.token,
-        outputReceiver: tokenOut.walletAddress,
+        tokenAddress: outputToken.token,
         proportion: 1,
       },
     ],
-    userAddr,
+    userAddr: inputTokens[0].walletAddress,
     slippageLimitPercent: 0.3,
     referralCode: 0,
     disableRFQs: true,
     compact: true,
   };
   const quote = await fetchJson<OdosQuoteResponse>(ODOS_QUOTE_URL, quoteBody);
+  return quote;
+}
 
+export async function buildOdosCalls(tokensToSwap: TokenAmount[], tokenOut: TokenAmount): Promise<Call[]> {
+  const userAddr = tokensToSwap[0].walletAddress;
+  const quote = await fetchSwapQuote(tokensToSwap, tokenOut);
   const assembleBody = {
     userAddr,
     pathId: quote.pathId,
-    simulate: true,
+    simulate: false,
   };
   const assembled = await fetchJson<OdosAssembleResponse>(ODOS_ASSEMBLE_URL, assembleBody);
   const { to, data, value } = assembled.transaction;
@@ -122,13 +140,13 @@ export async function buildOdosCalls(tokensToSwap: TokenAmount[], tokenOut: Toke
  * @param tokensIn - The tokens to swap.
  * @param tokenOut - The token to swap to.
  * @param sendCalls - The function to send the calls.
- * @returns The amount of the output token.
+ * @returns Object containing the amount of output token and transaction hash (if transaction was sent).
  */
 export async function executeOdosSwapOrTransfer(
   tokensIn: TokenAmount[],
   tokenOut: TokenAmount,
   sendCalls: SendCallsFn,
-): Promise<bigint> {
+): Promise<{ amount: bigint; transactionHash?: string }> {
   const chainId = tokensIn[0].chainId;
   const wallet = tokensIn[0].walletAddress;
 
@@ -163,10 +181,10 @@ export async function executeOdosSwapOrTransfer(
   }
 
   if (calls.length === 0) {
-    return tokenThatStays?.amount || 0n;
+    return { amount: tokenThatStays?.amount || 0n };
   }
 
-  const [_tx, logs] = await sendCalls("swap", chainId, wallet, calls);
+  const [transactionHash, logs] = await sendCalls("swap", chainId, wallet, calls, "atomic-steps");
   const flattenedLogs = logs.flat();
 
   const singleSwapLogs = parseEventLogs({
@@ -181,14 +199,55 @@ export async function executeOdosSwapOrTransfer(
     logs: flattenedLogs as Log[],
   });
 
-  const tokenOutAmount =
+  const amount =
     (tokenToTransfer?.amount || 0n) +
     (tokenThatStays?.amount || 0n) +
     (singleSwapLogs[0]?.args?.amountOut || multiSwapLogs[0]?.args?.amountsOut?.[0] || 0n);
 
-  if (!tokenOutAmount) {
+  if (!amount) {
     throw new Error("No output token amount found");
   }
 
-  return tokenOutAmount;
+  return { amount, transactionHash };
+}
+
+/**
+ * Get a swap quote from Odos for planning purposes (T009)
+ * @param input - The input token amount(s) - can be a single token or an array of tokens
+ * @param outputToken - The output token address
+ * @param chainId - The chain ID
+ * @returns The estimated output token amount
+ */
+export async function getSwapQuote(
+  input: TokenAmount | TokenAmount[],
+  outputToken: Omit<TokenAmount, "amount">,
+): Promise<TokenAmount> {
+  const inputTokens = Array.isArray(input) ? input : [input];
+
+  // Validate all inputs are on the same chain
+  for (const token of inputTokens) {
+    if (token.chainId !== outputToken.chainId) {
+      throw new Error("Input and output token must be on the same chain");
+    }
+  }
+
+  // Validate all inputs are from the same wallet
+  const firstWallet = inputTokens[0].walletAddress;
+  for (const token of inputTokens) {
+    if (token.walletAddress !== firstWallet) {
+      throw new Error("All input tokens must be from the same wallet");
+    }
+  }
+
+  try {
+    const quote = await fetchSwapQuote(inputTokens, outputToken);
+    const outputAmount = quote.outAmounts?.[0] ? BigInt(quote.outAmounts[0]) : 0n;
+    return {
+      ...outputToken,
+      amount: outputAmount,
+      walletAddress: firstWallet,
+    };
+  } catch (error) {
+    throw new Error(`ExternalAPIError: ${error instanceof Error ? error.message : "Odos quote failed"}`);
+  }
 }
