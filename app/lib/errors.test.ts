@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTransactionError, ERROR_MESSAGES, getErrorMessage } from "./errors";
-import { ERROR_CODES } from "./types";
+import { ERROR_CODES, type ErrorCode } from "./types";
 
 describe("errors", () => {
   beforeEach(() => {
