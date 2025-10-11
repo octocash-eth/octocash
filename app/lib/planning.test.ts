@@ -1,3 +1,4 @@
+import { ETH_ADDRESS, USDC_ETHEREUM as USDC_ADDRESS, USDC_OPTIMISM, WALLET, WBTC_ADDRESS } from "test/helpers";
 import type { Address } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { TokenAmount, TransactionStep } from "./types";
@@ -11,11 +12,6 @@ import { getSwapQuote } from "./odos";
 import { planConsolidation } from "./planning";
 
 describe("planConsolidation", () => {
-  const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
-  const WBTC_ADDRESS = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599" as Address;
-  const ETH_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
-  const WALLET = "0x1234567890123456789012345678901234567890" as Address;
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -82,7 +78,7 @@ describe("planConsolidation", () => {
       chainId: 1, // Ethereum
       walletAddress: WALLET,
       symbol: "WBTC",
-      decimals: 18,
+      decimals: 8,
     };
 
     // Mock swap ETH -> USDC on Polygon
@@ -250,7 +246,7 @@ describe("planConsolidation", () => {
       chainId: 1,
       walletAddress: WALLET,
       symbol: "WBTC",
-      decimals: 18,
+      decimals: 8,
     };
 
     await expect(planConsolidation(sourceTokens, destinationToken)).rejects.toThrow("PlanningError");
@@ -296,7 +292,7 @@ describe("planConsolidation", () => {
       chainId: 999, // Unsupported destination chain
       walletAddress: WALLET,
       symbol: "WBTC",
-      decimals: 18,
+      decimals: 8,
     };
 
     await expect(planConsolidation(sourceTokens, destinationToken)).rejects.toThrow("UnsupportedRouteError");
@@ -557,5 +553,103 @@ describe("planConsolidation", () => {
     // Verify that the function recognized the token is already correct
     const logCalls = logSpy.mock.calls.flat().join(" ");
     expect(logCalls).toContain("already destination token");
+  });
+
+  test("multiple wallets on same chain - should create one bridge step per wallet", async () => {
+    const WALLET_1 = "0x1111111111111111111111111111111111111111" as Address;
+    const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+    const WALLET_3 = "0x3333333333333333333333333333333333333333" as Address;
+
+    // Simple scenario: 3 wallets, each with USDC on Optimism, bridging to Ethereum
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: USDC_OPTIMISM,
+        amount: 1000000n, // 1 USDC
+        chainId: 10, // Optimism
+        walletAddress: WALLET_1,
+        symbol: "USDC",
+        decimals: 6,
+      },
+      {
+        token: USDC_OPTIMISM,
+        amount: 2000000n, // 2 USDC
+        chainId: 10, // Optimism
+        walletAddress: WALLET_2,
+        symbol: "USDC",
+        decimals: 6,
+      },
+      {
+        token: USDC_OPTIMISM,
+        amount: 3000000n, // 3 USDC
+        chainId: 10, // Optimism
+        walletAddress: WALLET_3,
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1, // Ethereum
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    // Mock final swap USDC -> WBTC on Ethereum
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: WBTC_ADDRESS,
+      amount: 8000n,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    });
+
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+    const result = await planConsolidation(sourceTokens, destinationToken);
+
+    // Find all bridge steps
+    const bridgeSteps = result.filter((s: TransactionStep) => s.type === "bridge");
+
+    // Should have 3 bridge steps, one per wallet
+    expect(bridgeSteps.length).toBe(3);
+
+    // Verify each wallet has its own bridge step with correct amounts
+    const wallet1BridgeStep = bridgeSteps.find((s: TransactionStep) => s.inputTokens[0].walletAddress === WALLET_1);
+    const wallet2BridgeStep = bridgeSteps.find((s: TransactionStep) => s.inputTokens[0].walletAddress === WALLET_2);
+    const wallet3BridgeStep = bridgeSteps.find((s: TransactionStep) => s.inputTokens[0].walletAddress === WALLET_3);
+
+    expect(wallet1BridgeStep).toBeDefined();
+    expect(wallet2BridgeStep).toBeDefined();
+    expect(wallet3BridgeStep).toBeDefined();
+
+    // Verify WALLET_1 bridges its USDC (1 USDC)
+    expect(wallet1BridgeStep?.inputTokens[0].amount).toBe(1000000n);
+    expect(wallet1BridgeStep?.outputToken.amount).toBe(1000000n);
+    expect(wallet1BridgeStep?.chainId).toBe(10);
+
+    // Verify WALLET_2 bridges its USDC (2 USDC)
+    expect(wallet2BridgeStep?.inputTokens[0].amount).toBe(2000000n);
+    expect(wallet2BridgeStep?.outputToken.amount).toBe(2000000n);
+    expect(wallet2BridgeStep?.chainId).toBe(10);
+
+    // Verify WALLET_3 bridges its USDC (3 USDC)
+    expect(wallet3BridgeStep?.inputTokens[0].amount).toBe(3000000n);
+    expect(wallet3BridgeStep?.outputToken.amount).toBe(3000000n);
+    expect(wallet3BridgeStep?.chainId).toBe(10);
+
+    // Verify all bridge steps have no dependencies (no swaps on this chain)
+    for (const bridgeStep of bridgeSteps) {
+      expect(bridgeStep.dependsOn).toEqual([]);
+    }
+
+    // Verify attestation depends on all 3 bridge steps
+    const attestationStep = result.find((s: TransactionStep) => s.type === "attestation");
+    expect(attestationStep?.dependsOn.length).toBe(3);
+    expect(attestationStep?.dependsOn).toContain(wallet1BridgeStep?.id);
+    expect(attestationStep?.dependsOn).toContain(wallet2BridgeStep?.id);
+    expect(attestationStep?.dependsOn).toContain(wallet3BridgeStep?.id);
   });
 });

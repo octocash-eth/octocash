@@ -377,58 +377,76 @@ async function createBridgeSteps(
 
     log(`🔍 [DEBUG] Chain ${chainId} is not destination chain, processing bridging`);
     const chainUSDC = USDC_ADDRESSES[chainId as keyof typeof USDC_ADDRESSES] as Address;
-    const totalUSDC = tokens.reduce((sum, t) => {
+
+    // Group USDC tokens by wallet address
+    const usdcByWallet = new Map<Address, bigint>();
+    for (const t of tokens) {
       if (isAddressEqual(t.token, chainUSDC)) {
-        return sum + t.amount;
+        const current = usdcByWallet.get(t.walletAddress) || 0n;
+        usdcByWallet.set(t.walletAddress, current + t.amount);
       }
-      return sum;
-    }, 0n);
+    }
 
-    // Add estimated swap outputs
-    const swapOutputs = existingSteps
-      .filter((s) => s.chainId === chainId && s.type === "swap")
-      .reduce((sum, s) => sum + (s.outputToken?.amount || 0n), 0n);
+    // Add swap outputs to their respective wallets
+    for (const swapStep of existingSteps.filter((s) => s.chainId === chainId && s.type === "swap")) {
+      const swapOutputWallet = swapStep.outputToken.walletAddress;
+      const swapAmount = swapStep.outputToken.amount || 0n;
+      const current = usdcByWallet.get(swapOutputWallet) || 0n;
+      usdcByWallet.set(swapOutputWallet, current + swapAmount);
+    }
 
-    const totalToBridge = totalUSDC + swapOutputs;
-
-    log(
-      `🔍 [DEBUG] Bridge calculation for chain ${chainId}: totalUSDC=${totalUSDC.toString()}, swapOutputs=${swapOutputs.toString()}, totalToBridge=${totalToBridge.toString()}`,
-    );
-
-    const bridgeFee = await getBridgeFee(totalToBridge, chainId, destinationToken.chainId);
-    const stepId = `step-${++counter}`;
-
-    // Find dependencies: this bridge depends on swaps from this chain
+    // Find dependencies: bridge steps depend on swaps from this chain
     const deps = existingSteps.filter((s) => s.chainId === chainId && s.type === "swap").map((s) => s.id);
 
-    bridgeSteps.push({
-      id: stepId,
-      type: "bridge",
-      status: "pending",
-      chainId,
-      inputTokens: [
-        {
-          token: chainUSDC,
-          amount: totalToBridge - bridgeFee,
-          chainId,
-          walletAddress: tokens[0].walletAddress,
+    // Create one bridge step per wallet
+    for (const [walletAddress, walletAmount] of usdcByWallet.entries()) {
+      if (walletAmount === 0n) {
+        continue;
+      }
+
+      const bridgeFee = await getBridgeFee(walletAmount, chainId, destinationToken.chainId);
+      const amountAfterFee = walletAmount - bridgeFee;
+
+      if (amountAfterFee <= 0n) {
+        log(
+          `🔍 [DEBUG] Skipping bridge for wallet ${walletAddress} on chain ${chainId}: amount ${walletAmount.toString()} too small after fee ${bridgeFee.toString()}`,
+        );
+        continue;
+      }
+
+      const stepId = `step-${++counter}`;
+
+      bridgeSteps.push({
+        id: stepId,
+        type: "bridge",
+        status: "pending",
+        chainId,
+        inputTokens: [
+          {
+            token: chainUSDC,
+            amount: amountAfterFee,
+            chainId,
+            walletAddress,
+            symbol: "USDC",
+            decimals: 6,
+          },
+        ],
+        outputToken: {
+          token: destChainUSDC,
+          amount: amountAfterFee,
+          chainId: destinationToken.chainId,
+          walletAddress: destinationToken.walletAddress,
           symbol: "USDC",
           decimals: 6,
         },
-      ],
-      outputToken: {
-        token: destChainUSDC,
-        amount: totalToBridge - bridgeFee,
-        chainId: destinationToken.chainId,
-        walletAddress: destinationToken.walletAddress,
-        symbol: "USDC",
-        decimals: 6,
-      },
-      dependsOn: deps,
-      partialDependency: false,
-    });
+        dependsOn: deps,
+        partialDependency: false,
+      });
 
-    log(`🔍 [DEBUG] Added bridge step ${stepId} for chain ${chainId}`);
+      log(
+        `🔍 [DEBUG] Added bridge step ${stepId} for wallet ${walletAddress} on chain ${chainId}: amount=${amountAfterFee.toString()}, fee=${bridgeFee.toString()}`,
+      );
+    }
   }
 
   return { steps: bridgeSteps, nextCounter: counter };
@@ -443,6 +461,10 @@ async function createBridgeSteps(
  *
  * Both steps support partial dependencies, meaning they can proceed even if some
  * bridge transactions fail or are skipped.
+ *
+ * **Important:** This function creates exactly ONE attestation step per plan. Plans
+ * must contain at most one attestation step, as attestations are stored in global
+ * state metadata. This constraint is enforced by validation in planConsolidation().
  *
  * @param bridgeSteps - Array of bridge steps created in previous phase
  * @param destinationToken - Final target token and chain
@@ -652,7 +674,7 @@ async function createFinalSwap(
  * 4. Creates bridge steps to transfer USDC across chains via CCTP
  * 5. Creates attestation and claim steps for bridged USDC
  * 6. Creates final swap step if destination is not USDC
- * 7. Identifies bundling opportunities for parallel execution
+ * 7. Validates plan constraints (at most one attestation step)
  *
  * **Strategy:**
  * - Tokens are first swapped to USDC on their source chains
@@ -660,12 +682,16 @@ async function createFinalSwap(
  * - On destination chain, USDC is swapped to final token (if needed)
  * - Steps are bundled when they can execute in parallel
  *
+ * **Constraints:**
+ * - Plans must contain at most one attestation step (enforced by validation)
+ * - This ensures attestations stored in global state metadata don't conflict
+ *
  * @param sourceTokens - Array of tokens to consolidate (max 50)
  * @param destinationToken - Final target token and chain for consolidation
  * @param log - Optional logging function for debug output
  * @returns Array of transaction steps with dependencies and bundling information
  *
- * @throws {Error} PlanningError - Invalid inputs or too many tokens
+ * @throws {Error} PlanningError - Invalid inputs, too many tokens, or multiple attestation steps
  * @throws {Error} UnsupportedRouteError - Unsupported chain
  * @throws {Error} ExternalAPIError - Swap quote or bridge fee request failed
  *
@@ -719,9 +745,13 @@ export async function planConsolidation(
   const finalSwapResult = await createFinalSwap(allSteps, byChain, destinationToken, destChainUSDC, stepCounter, log);
   allSteps.push(...finalSwapResult.steps);
 
-  // Step 7: Identify bundling opportunities
+  // Step 7: Validate plan constraints
+  const attestationSteps = allSteps.filter((s) => s.type === "attestation");
+  if (attestationSteps.length > 1) {
+    throw new Error("PlanningError: Plans must contain at most one attestation step");
+  }
   log(
-    "🔍 [DEBUG] Generated steps before bundling:",
+    "🔍 [DEBUG] Generated steps:",
     allSteps.map((s) => ({
       id: s.id,
       type: s.type,
