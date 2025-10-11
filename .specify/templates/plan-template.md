@@ -101,8 +101,10 @@ app/
 ├── lib/               # Core logic (consolidation, cctp, odos, gas)
 │   └── *.test.ts      # Tests co-located with source files
 ├── data/              # Static data (contracts, chain configs)
-├── e2e/               # End-to-end test utilities
 └── routes/            # File-based routing (React Router 7)
+
+test/
+└── e2e/               # End-to-end integration tests
 ```
 
 **Structure Decision**: React Router 7 single-page application. All source in `app/`, tests co-located with source files (*.test.ts).
@@ -215,4 +217,4 @@ app/
 - [ ] Complexity deviations documented
 
 ---
-*Based on Constitution v1.0.0 - See `.specify/memory/constitution.md`*
+ *Based on Constitution v1.1.0 - See `.specify/memory/constitution.md`*
