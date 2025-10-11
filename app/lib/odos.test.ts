@@ -231,6 +231,18 @@ describe("odos", () => {
       expect(result.amount).toBe(0n);
     });
 
+    test("throws error when input array is empty", async () => {
+      const outputToken = {
+        token: mockTokenUSDT.token,
+        chainId: mockTokenUSDT.chainId,
+        symbol: mockTokenUSDT.symbol,
+        decimals: mockTokenUSDT.decimals,
+        walletAddress: mockTokenUSDC.walletAddress,
+      };
+
+      await expect(getSwapQuote([], outputToken)).rejects.toThrow("At least one input token is required");
+    });
+
     test("throws error when input and output tokens are on different chains", async () => {
       const outputTokenDifferentChain = {
         token: mockTokenUSDT.token,
