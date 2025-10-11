@@ -15,6 +15,8 @@ const tokensIn = [
     walletAddress: "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address,
     token: zeroAddress,
     amount: 0n,
+    symbol: "ETH",
+    decimals: 18,
   },
 ];
 const tokenOut = {
@@ -22,6 +24,8 @@ const tokenOut = {
   walletAddress: "0x19afE793Fb51902883F68f06685aE5277aF13857" as Address,
   token: zeroAddress,
   amount: 0n,
+  symbol: "ETH",
+  decimals: 18,
 };
 
 describe("gas", () => {
@@ -65,7 +69,7 @@ describe("gas", () => {
     });
     test("should throw an error if the chain is not supported", async () => {
       await expect(getNativeBalance(degen, "0xc30b007BC349d52850207F78c63b4bd0c823F122")).rejects.toThrow(
-        "Client not found for chain 666666666",
+        "No transport configured for chain 666666666",
       );
     });
   });
@@ -80,6 +84,8 @@ describe("gas", () => {
         walletAddress: "0x0000000020000000000000000000000000000002" as Address,
         token: zeroAddress,
         amount: 0n,
+        symbol: "ETH",
+        decimals: 18,
       };
       try {
         await ensureSufficientGas(tokensIn, insufficientTokenOut, transports);
