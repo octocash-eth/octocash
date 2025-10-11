@@ -18,12 +18,16 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
 
   // Sync incoming state
   useEffect(() => {
-    if (initialState === null) {
-      setState(null);
-      return;
-    }
-    setState((prev) => (prev?.id === initialState.id ? prev : initialState));
-  }, [initialState?.id, initialState]);
+    setState((prev) => {
+      // No initial state: reset
+      if (initialState === null) return null;
+      // Different ID: always accept the new state
+      if (prev?.id !== initialState.id) return initialState;
+      // Same ID: only accept if the incoming state is newer
+      if (prev.updatedAt >= initialState.updatedAt) return prev;
+      return initialState;
+    });
+  }, [initialState]);
 
   // Core execution helper
   const runExecution = useCallback(
