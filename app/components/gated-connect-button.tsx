@@ -14,20 +14,20 @@ import { Input } from "~/components/ui/input";
 export function GatedConnectButton() {
   const { openConnectModal } = useConnectModal();
   const [open, setOpen] = useState(false);
-  const [password, setPassword] = useState("");
+  const [confirmationText, setConfirmationText] = useState("");
   const [error, setError] = useState("");
-  const passwordId = useId();
+  const confirmationId = useId();
 
   const onRequestConnect = () => {
-    setPassword("");
+    setConfirmationText("");
     setError("");
     setOpen(true);
   };
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (password !== "alphacode") {
-      setError("Incorrect password. This app is in alpha.");
+    if (confirmationText !== "I understand the risks") {
+      setError("Please type exactly: I understand the risks");
       return;
     }
     setOpen(false);
@@ -42,22 +42,28 @@ export function GatedConnectButton() {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Alpha access required</DialogTitle>
+            <DialogTitle>Beta Warning</DialogTitle>
             <DialogDescription>
-              This app is under active development. Do not use it with real funds unless you know what you are doing.
+              This app is in beta and under active development. Do not use it with real funds yet, unless you know what
+              you are doing.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={onSubmit} className="space-y-3">
             <div className="space-y-2">
-              <label htmlFor={passwordId} className="text-sm font-medium">
-                Password
+              <label htmlFor={confirmationId} className="text-sm font-medium mb-5">
+                Type{" "}
+                <code className="bg-muted relative rounded px-[0.3rem] py-[0.2rem] font-mono text-sm font-semibold">
+                  I understand the risks
+                </code>{" "}
+                to confirm
               </label>
               <Input
-                id={passwordId}
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter alpha password"
+                id={confirmationId}
+                className="mt-2"
+                type="text"
+                value={confirmationText}
+                onChange={(e) => setConfirmationText(e.target.value)}
+                placeholder="I understand the risks"
                 aria-invalid={error ? true : undefined}
                 autoFocus
                 required
