@@ -8,6 +8,7 @@ import {
   parseEventLogs,
   zeroAddress,
 } from "viem";
+import { OCTOCASH_REFERRAL_CODE } from "~/data/odos";
 import type { SendCallsFn } from "~/lib/send-calls";
 import type { TokenAmount } from "~/lib/types";
 
@@ -114,7 +115,7 @@ async function fetchSwapQuote(
     ],
     userAddr: inputTokens[0].walletAddress,
     slippageLimitPercent: 0.3,
-    referralCode: 0,
+    referralCode: OCTOCASH_REFERRAL_CODE,
     disableRFQs: true,
     compact: true,
   };
