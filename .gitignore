@@ -17,3 +17,7 @@
 
 # Cursor
 .cursor
+.playwright-mcp
+
+# Specify
+.specify
