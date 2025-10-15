@@ -105,7 +105,24 @@ const happyPathState: ConsolidationState = {
       type: "attestation",
       status: "success",
       chainId: 1, // Ethereum
-      inputTokens: [],
+      inputTokens: [
+        {
+          token: USDC_ETHEREUM,
+          amount: 1000000n,
+          chainId: 1,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+        {
+          token: USDC_ETHEREUM,
+          amount: 800000000n,
+          chainId: 1,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ],
       outputToken: {
         token: USDC_ETHEREUM,
         amount: 0n,
@@ -122,7 +139,24 @@ const happyPathState: ConsolidationState = {
       type: "claim",
       status: "success",
       chainId: 1, // Ethereum
-      inputTokens: [],
+      inputTokens: [
+        {
+          token: USDC_ETHEREUM,
+          amount: 1000000n,
+          chainId: 1,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+        {
+          token: USDC_ETHEREUM,
+          amount: 800000000n,
+          chainId: 1,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ],
       outputToken: {
         token: USDC_ETHEREUM,
         amount: 801000000n,
@@ -356,7 +390,16 @@ const partialAdaptationState: ConsolidationState = {
       type: "attestation",
       status: "success",
       chainId: 1,
-      inputTokens: [],
+      inputTokens: [
+        {
+          token: USDC_ETHEREUM,
+          amount: 500000n,
+          chainId: 1,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ],
       outputToken: {
         token: USDC_ETHEREUM,
         amount: 0n,
@@ -374,7 +417,16 @@ const partialAdaptationState: ConsolidationState = {
       type: "claim",
       status: "success",
       chainId: 1,
-      inputTokens: [],
+      inputTokens: [
+        {
+          token: USDC_ETHEREUM,
+          amount: 500000n,
+          chainId: 1,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ],
       outputToken: {
         token: USDC_ETHEREUM,
         amount: 500000n, // Only from successful bridge
@@ -521,7 +573,16 @@ const pausedState: ConsolidationState = {
       type: "attestation",
       status: "failed",
       chainId: 1,
-      inputTokens: [],
+      inputTokens: [
+        {
+          token: USDC_ETHEREUM,
+          amount: 1000000n,
+          chainId: 1,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ],
       outputToken: {
         token: USDC_ETHEREUM,
         amount: 0n,
@@ -741,7 +802,16 @@ const executingState: ConsolidationState = {
       type: "attestation",
       status: "pending",
       chainId: 1,
-      inputTokens: [],
+      inputTokens: [
+        {
+          token: USDC_ETHEREUM,
+          amount: 400000000n,
+          chainId: 1,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ],
       outputToken: {
         token: USDC_ETHEREUM,
         amount: 0n,
@@ -758,7 +828,16 @@ const executingState: ConsolidationState = {
       type: "claim",
       status: "pending",
       chainId: 1,
-      inputTokens: [],
+      inputTokens: [
+        {
+          token: USDC_ETHEREUM,
+          amount: 400000000n,
+          chainId: 1,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ],
       outputToken: {
         token: USDC_ETHEREUM,
         amount: 400000000n,

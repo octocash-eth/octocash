@@ -46,7 +46,7 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
   let inputAmount = "";
   let outputAmount = "";
 
-  if (step.inputTokens.length > 0 && step.inputTokens[0].amount > 0n) {
+  if (step.inputTokens[0].amount > 0n) {
     inputAmount = formatAmount(step.inputTokens[0].amount, step.inputTokens[0].decimals || 18);
   }
 

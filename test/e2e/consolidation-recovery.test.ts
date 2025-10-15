@@ -99,7 +99,7 @@ describe("Scenario 8: Browser Recovery", () => {
 
   test("browser close mid-execution - state is persisted and recoverable", async () => {
     const sourceTokens: TokenAmount[] = [
-      makeToken(ETH_ADDRESS, 100000000000000000n, 137, { walletAddress: WALLET, symbol: "ETH", decimals: 18 }), // 0.1 ETH on Polygon
+      makeToken(ETH_ADDRESS, 100000000000000000n, 137, { walletAddress: WALLET, symbol: "POL", decimals: 18 }), // 0.1 ETH on Polygon
     ];
 
     const destinationToken = {
@@ -147,7 +147,7 @@ describe("Scenario 8: Browser Recovery", () => {
 
   test("recover from paused state - failed step can be retried", async () => {
     const sourceTokens: TokenAmount[] = [
-      makeToken(USDC_ADDRESS, 1000000n, 10, { walletAddress: WALLET }), // 1 USDC on Optimism
+      makeToken(USDC_ADDRESS, 1000000n, 10), // 1 USDC on Optimism
     ];
 
     const destinationToken = {
@@ -225,11 +225,11 @@ describe("Scenario 8: Browser Recovery", () => {
 
   test("multiple consolidations in storage - load correct one", async () => {
     const sourceTokens1: TokenAmount[] = [
-      makeToken(USDC_ADDRESS, 1000000n, 10, { walletAddress: WALLET }), // 1 USDC on Optimism
+      makeToken(USDC_ADDRESS, 1000000n, 10), // 1 USDC on Optimism
     ];
 
     const sourceTokens2: TokenAmount[] = [
-      makeToken(ETH_ADDRESS, 100000000000000000n, 137, { walletAddress: WALLET, symbol: "ETH", decimals: 18 }), // 0.1 ETH on Polygon
+      makeToken(ETH_ADDRESS, 100000000000000000n, 137, { walletAddress: WALLET, symbol: "POL", decimals: 18 }), // 0.1 ETH on Polygon
     ];
 
     const destinationToken = {
@@ -287,7 +287,7 @@ describe("Scenario 8: Browser Recovery", () => {
 
   test("recovery prompt shows on page load if incomplete consolidation exists", async () => {
     const sourceTokens: TokenAmount[] = [
-      makeToken(USDC_ADDRESS, 1000000n, 10, { walletAddress: WALLET }), // 1 USDC on Optimism
+      makeToken(USDC_ADDRESS, 1000000n, 10), // 1 USDC on Optimism
     ];
 
     const destinationToken = {
@@ -340,7 +340,7 @@ describe("Scenario 8: Browser Recovery", () => {
 
   test("completed consolidation not prompted for recovery", async () => {
     const sourceTokens: TokenAmount[] = [
-      makeToken(USDC_ADDRESS, 1000000n, 10, { walletAddress: WALLET }), // 1 USDC on Optimism
+      makeToken(USDC_ADDRESS, 1000000n, 10), // 1 USDC on Optimism
     ];
 
     const destinationToken = {
@@ -407,7 +407,7 @@ describe("Scenario 8: Browser Recovery", () => {
           stepId: plan[0].id,
           status: "success",
           chainId: plan[0].chainId,
-          actualOutput: makeToken(USDC_ADDRESS, 798450000n, 137, { walletAddress: WALLET }),
+          actualOutput: makeToken(USDC_ADDRESS, 798450000n, 137),
           transactionHash: "0xabc123",
         },
         [plan[1].id]: {

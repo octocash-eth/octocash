@@ -34,7 +34,7 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     vi.mocked(getSwapQuote).mockImplementation(async (input, outputToken) => {
       const inputArray = Array.isArray(input) ? input : [input];
       const totalAmount = inputArray.reduce((sum, token) => sum + token.amount, 0n);
-      return makeToken(outputToken.token, totalAmount / 2n, outputToken.chainId, { walletAddress: inputArray[0].walletAddress, symbol: "USDC", decimals: 6 });
+      return makeToken(outputToken.token, totalAmount / 2n, outputToken.chainId, { walletAddress: inputArray[0].walletAddress});
     });
 
     vi.mocked(getBridgeFee).mockResolvedValue(0n);
@@ -78,11 +78,11 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     // - 1 DAI (Polygon) -> swap to USDC -> bridge
     // Destination: WBTC (Ethereum)
     const sourceTokens: TokenAmount[] = [
-      makeToken(USDT_ADDRESS, 1000000n, 10, { walletAddress: WALLET, symbol: "USDT", decimals: 6 }), // 1 USDT on Optimism
-      makeToken(DAI_ADDRESS, 1000000000000000000n, 137, { walletAddress: WALLET, symbol: "DAI", decimals: 18 }), // 1 DAI on Polygon
+      makeToken(USDT_ADDRESS, 1000000n, 10, { symbol: "USDT", decimals: 6 }), // 1 USDT on Optimism
+      makeToken(DAI_ADDRESS, 1000000000000000000n, 137, { symbol: "DAI", decimals: 18 }), // 1 DAI on Polygon
     ];
 
-    const destinationToken = makeToken(WBTC_ADDRESS, 0n, 1, { walletAddress: WALLET, symbol: "WBTC", decimals: 8 });
+    const destinationToken = makeToken(WBTC_ADDRESS, 0n, 1, { symbol: "WBTC", decimals: 8 });
 
     // Generate plan
     const plan = await planConsolidation(sourceTokens, destinationToken);
@@ -201,8 +201,8 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
 
   test("verify user is shown clear explanation for skipped and adapted steps", async () => {
     const sourceTokens: TokenAmount[] = [
-      makeToken(USDT_ADDRESS, 1000000n, 10, { walletAddress: WALLET, symbol: "USDT", decimals: 6 }), // 1 USDT on Optimism
-      makeToken(DAI_ADDRESS, 1000000000000000000n, 137, { walletAddress: WALLET, symbol: "DAI", decimals: 18 }), // 1 DAI on Polygon
+      makeToken(USDT_ADDRESS, 1000000n, 10, { symbol: "USDT", decimals: 6 }), // 1 USDT on Optimism
+      makeToken(DAI_ADDRESS, 1000000000000000000n, 137, { symbol: "DAI", decimals: 18 }), // 1 DAI on Polygon
     ];
 
     const destinationToken = {
@@ -261,8 +261,8 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
 
   test("verify consolidation completes partially with correct final amount", async () => {
     const sourceTokens: TokenAmount[] = [
-      makeToken(USDC_ADDRESS, 500000n, 10, { walletAddress: WALLET }), // 0.5 USDC on Optimism
-      makeToken(USDC_ADDRESS, 500000n, 137, { walletAddress: WALLET }), // 0.5 USDC on Polygon
+      makeToken(USDC_ADDRESS, 500000n, 10), // 0.5 USDC on Optimism
+      makeToken(USDC_ADDRESS, 500000n, 137), // 0.5 USDC on Polygon
     ];
 
     const destinationToken = {
@@ -335,7 +335,7 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
 
   test("skip reason shows which dependency failed", async () => {
     const sourceTokens: TokenAmount[] = [
-      makeToken(DAI_ADDRESS, 1000000000000000000n, 137, { walletAddress: WALLET, symbol: "DAI", decimals: 18 }), // 1 DAI on Polygon
+      makeToken(DAI_ADDRESS, 1000000000000000000n, 137, { symbol: "DAI", decimals: 18 }), // 1 DAI on Polygon
     ];
 
     const destinationToken = {

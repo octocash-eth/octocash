@@ -89,7 +89,7 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
     // Step 1-4: User selects source tokens
     const sourceTokens: TokenAmount[] = [
       makeToken(USDC_OPTIMISM, 1000000n, 10, { walletAddress: WALLET }), // 1 USDC on Optimism
-      makeToken(ETH_ADDRESS, 200000000000000000n, 137, { walletAddress: WALLET, symbol: "ETH", decimals: 18 }), // 0.2 ETH on Polygon
+      makeToken(ETH_ADDRESS, 200000000000000000n, 137, { walletAddress: WALLET, symbol: "POL", decimals: 18 }), // 0.2 POL on Polygon
     ];
 
     const destinationToken = {

@@ -58,7 +58,7 @@ export interface TransactionStep {
   chainId: number; // Chain where this transaction executes
 
   // Input/Output
-  inputTokens: TokenAmount[]; // Tokens consumed by this step
+  inputTokens: [TokenAmount, ...TokenAmount[]]; // Tokens consumed by this step (minimum one)
   outputToken: TokenAmount; // Token produced (estimated pre-exec, actual post-exec)
 
   // Dependencies
