@@ -35,6 +35,7 @@ export interface TokenAmount {
   walletAddress: Address; // Wallet holding the token
   symbol: string; // Token symbol (ETH, USDC, etc.)
   decimals: number; // Token decimals
+  provenance?: string; // ID of step that produced this token (undefined for source tokens)
 }
 
 /**

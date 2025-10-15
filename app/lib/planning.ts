@@ -89,46 +89,152 @@ function validateInputs(
 /**
  * Groups source tokens by chain and wallet address for efficient processing
  *
- * Creates two groupings:
- * 1. By chain and wallet (key: "chainId-walletAddress") - for per-wallet swap operations
- * 2. By chain only - for bridge operations that aggregate across all wallets
- *
  * @param sourceTokens - Array of tokens to group
- * @param log - Logging function for debug output
- * @returns Object containing both grouping maps
+ * @param consolidateAmounts - If true, consolidates duplicate token addresses by summing amounts
+ * @returns Map with key "chainId-walletAddress" and value array of tokens
  *
  * @example
  * // Returns:
- * {
- *   byChainAndWallet: Map { "1-0xabc...": [token1, token2], "8453-0xabc...": [token3] },
- *   byChain: Map { 1: [token1, token2], 8453: [token3] }
- * }
+ * Map { "1-0xabc...": [token1, token2], "8453-0xabc...": [token3] }
  */
-function groupTokens(
+function groupTokensByChainAndWallet(
   sourceTokens: TokenAmount[],
-  log: (...args: unknown[]) => void,
-): { byChainAndWallet: Map<string, TokenAmount[]>; byChain: Map<number, TokenAmount[]> } {
-  const byChainAndWallet = new Map<string, TokenAmount[]>();
-  const byChain = new Map<number, TokenAmount[]>();
+  consolidateAmounts = false,
+): Map<string, TokenAmount[]> {
+  const grouped = new Map<string, TokenAmount[]>();
 
   for (const token of sourceTokens) {
-    // Group by chain and wallet
     const key = `${token.chainId}-${token.walletAddress}`;
-    if (!byChainAndWallet.has(key)) {
-      byChainAndWallet.set(key, []);
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
     }
-    byChainAndWallet.get(key)?.push(token);
-
-    // Group by chain
-    if (!byChain.has(token.chainId)) {
-      byChain.set(token.chainId, []);
-    }
-    byChain.get(token.chainId)?.push(token);
+    grouped.get(key)?.push(token);
   }
+
+  // Consolidate duplicate token addresses if requested
+  if (consolidateAmounts) {
+    for (const [key, tokens] of grouped.entries()) {
+      const consolidatedMap = new Map<Address, TokenAmount>();
+
+      for (const token of tokens) {
+        const normalizedAddress = getAddress(token.token);
+        const existing = consolidatedMap.get(normalizedAddress);
+
+        if (existing) {
+          // Sum the amounts for duplicate tokens
+          consolidatedMap.set(normalizedAddress, {
+            ...existing,
+            amount: existing.amount + token.amount,
+          });
+        } else {
+          consolidatedMap.set(normalizedAddress, {
+            ...token,
+            token: normalizedAddress,
+          });
+        }
+      }
+
+      grouped.set(key, Array.from(consolidatedMap.values()));
+    }
+  }
+
+  return grouped;
+}
+
+/**
+ * Creates swap steps from a list of tokens to a target token
+ *
+ * Batches tokens (max 6 per batch due to Odos limitation) and creates swap steps.
+ * Each swap step will depend on the provided dependencies.
+ *
+ * @param tokensToSwap - Tokens to swap to target
+ * @param targetToken - Target token specification (without amount)
+ * @param steps - Existing steps array to append to
+ * @param dependencies - Step IDs that these swaps depend on
+ * @param log - Logging function for debug output
+ * @returns Array of output tokens from the swaps
+ *
+ * @throws {Error} ExternalAPIError if any swap quote fails
+ */
+async function createSwapSteps(
+  tokensToSwap: TokenAmount[],
+  targetToken: Omit<TokenAmount, "amount">,
+  steps: TransactionStep[],
+  dependencies: string[],
+  log: (...args: unknown[]) => void,
+): Promise<TokenAmount[]> {
+  const outputTokens: TokenAmount[] = [];
+
+  if (tokensToSwap.length === 0) {
+    return outputTokens;
+  }
+
+  const batches = batchTokens(tokensToSwap, 6); // Odos limits to 6 tokens per step
+
+  for (const batch of batches) {
+    try {
+      const quote = await getSwapQuote(batch, targetToken);
+      const stepId = `step-${steps.length + 1}`;
+
+      const outputTokenWithProvenance = {
+        ...quote,
+        provenance: stepId, // Mark this token as coming from this swap step
+      };
+
+      steps.push({
+        id: stepId,
+        type: "swap",
+        status: "pending",
+        chainId: targetToken.chainId,
+        inputTokens: batch,
+        outputToken: outputTokenWithProvenance,
+        dependsOn: dependencies,
+        partialDependency: false,
+      });
+
+      outputTokens.push(outputTokenWithProvenance);
+
+      log(`🔍 [DEBUG] Added swap step ${stepId} for ${batch.length} tokens -> ${targetToken.symbol}`);
+    } catch (error) {
+      throw new Error(`ExternalAPIError: ${error instanceof Error ? error.message : "Swap quote failed"}`);
+    }
+  }
+
+  return outputTokens;
+}
+
+/**
+ * Processes all swap operations for non-destination chains
+ *
+ * For each wallet on each non-destination chain:
+ * 1. Swaps non-USDC tokens to USDC (for bridging)
+ * 2. Collects already-existing USDC tokens
+ *
+ * This function orchestrates the first phase of consolidation where tokens are
+ * swapped to USDC before bridging.
+ *
+ * @param sourceTokens - Array of all source tokens
+ * @param destinationToken - Final target token and chain
+ * @param log - Logging function for debug output
+ * @returns Object containing swap steps and all tokens (swapped outputs + existing USDC + destination chain tokens)
+ *
+ * @throws {Error} ExternalAPIError if any swap quote fails
+ */
+async function processChainWalletSwaps(
+  sourceTokens: TokenAmount[],
+  destinationToken: DestinationToken,
+  log: (...args: unknown[]) => void,
+): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
+  const steps: TransactionStep[] = [];
+  const swappedTokens: TokenAmount[] = [];
+  const tokensNotToSwap: TokenAmount[] = [];
+
+  // Group tokens by chain and wallet
+  const tokensByChainAndWallet = groupTokensByChainAndWallet(sourceTokens, true);
 
   log(
     "🔍 [DEBUG] Tokens grouped by chain and wallet:",
-    Array.from(byChainAndWallet.entries()).map(([key, tokens]) => ({
+    Array.from(tokensByChainAndWallet.entries()).map(([key, tokens]) => ({
       key,
       tokenCount: tokens.length,
       tokens: tokens.map((t) => ({
@@ -140,158 +246,8 @@ function groupTokens(
     })),
   );
 
-  return { byChainAndWallet, byChain };
-}
-
-/**
- * Categorizes tokens based on what swap operations they need
- *
- * Logic:
- * - If token is already the destination token → no swap needed
- * - If on destination chain and dest token is not USDC → swap directly to dest token
- * - If token is not USDC → swap to USDC (for bridging or when dest is USDC)
- * - If already USDC → will be bridged (if not on dest chain) or used directly
- *
- * @param tokens - Tokens from a specific chain and wallet to categorize
- * @param chainId - Chain ID where these tokens are located
- * @param destinationToken - Final target token and chain
- * @param log - Logging function for debug output
- * @returns Three arrays: tokens to swap to dest, tokens to swap to USDC, and tokens already correct
- */
-function categorizeTokens(
-  tokens: TokenAmount[],
-  chainId: number,
-  destinationToken: DestinationToken,
-  log: (...args: unknown[]) => void,
-): {
-  tokensToSwapToDestToken: TokenAmount[];
-  tokensToSwapToUSDC: TokenAmount[];
-  tokensAlreadyCorrect: TokenAmount[];
-} {
-  const tokensToSwapToDestToken: TokenAmount[] = [];
-  const tokensToSwapToUSDC: TokenAmount[] = [];
-  const tokensAlreadyCorrect: TokenAmount[] = [];
-  const isDestChain = chainId === destinationToken.chainId;
-  const chainUSDC = USDC_ADDRESSES[chainId as keyof typeof USDC_ADDRESSES] as Address;
-
-  for (const token of tokens) {
-    const isDestinationToken =
-      isAddressEqual(token.token, destinationToken.token) && token.chainId === destinationToken.chainId;
-
-    if (isDestinationToken) {
-      tokensAlreadyCorrect.push(token);
-      log(`🔍 [DEBUG] Token ${token.symbol} is already destination token on chain ${chainId}, no swap needed`);
-    } else if (isDestChain && !isAddressEqual(token.token, destinationToken.token)) {
-      tokensToSwapToDestToken.push(token);
-      log(
-        `🔍 [DEBUG] Token ${token.symbol} will be swapped to ${destinationToken.symbol} on destination chain ${chainId}`,
-      );
-    } else if (!isDestChain && !isAddressEqual(token.token, chainUSDC)) {
-      tokensToSwapToUSDC.push(token);
-      log(`🔍 [DEBUG] Token ${token.symbol} will be swapped to USDC on chain ${chainId}`);
-    } else {
-      // If it were USDC on destination chain, it would have been caught by the previous conditions
-      // The only option remaining is:
-      log(`🔍 [DEBUG] Already USDC on non-destination chain ${chainId}, will bridge`);
-    }
-  }
-
-  return { tokensToSwapToDestToken, tokensToSwapToUSDC, tokensAlreadyCorrect };
-}
-
-/**
- * Creates batched swap transaction steps for a list of tokens to a target token
- *
- * Batches tokens into groups of up to 6 tokens per swap (Odos limitation) and
- * requests swap quotes for each batch. Returns all created swap steps along with
- * the updated step counter.
- *
- * @param tokens - Array of tokens to swap
- * @param targetToken - Destination token for the swap (can be USDC or final destination)
- * @param chainId - Chain ID where the swap will occur
- * @param stepCounter - Current step counter for ID generation
- * @param log - Logging function for debug output
- * @returns Object containing array of swap steps and the next counter value
- *
- * @throws {Error} ExternalAPIError if swap quote request fails
- *
- * @example
- * const result = await createBatchedSwapSteps([token1, token2], usdcToken, 1, 0, log);
- * // Returns: { steps: [swapStep1], nextCounter: 1 }
- */
-async function createBatchedSwapSteps(
-  tokens: TokenAmount[],
-  targetToken: DestinationToken,
-  chainId: number,
-  stepCounter: number,
-  log: (...args: unknown[]) => void,
-): Promise<{ steps: TransactionStep[]; nextCounter: number }> {
-  if (tokens.length === 0) {
-    return { steps: [], nextCounter: stepCounter };
-  }
-
-  log(`🔍 [DEBUG] Creating batched swaps for ${tokens.length} tokens to ${targetToken.symbol}`);
-  const batches = batchTokens(tokens, 6);
-  const steps: TransactionStep[] = [];
-  let counter = stepCounter;
-
-  for (const batch of batches) {
-    try {
-      const quote = await getSwapQuote(batch, targetToken);
-      const stepId = `step-${++counter}`;
-
-      steps.push({
-        id: stepId,
-        type: "swap",
-        status: "pending",
-        chainId,
-        inputTokens: batch,
-        outputToken: quote,
-        dependsOn: [],
-        partialDependency: false,
-      });
-
-      log(`🔍 [DEBUG] Added batched swap step ${stepId} for ${batch.length} tokens -> ${targetToken.symbol}`);
-    } catch (error) {
-      throw new Error(`ExternalAPIError: ${error instanceof Error ? error.message : "Swap quote failed"}`);
-    }
-  }
-
-  return { steps, nextCounter: counter };
-}
-
-/**
- * Processes all swap operations for each chain-wallet combination
- *
- * For each wallet on each chain:
- * 1. Categorizes tokens into those needing swap to destination vs USDC
- * 2. Creates batched swap steps for tokens → destination token (if on dest chain)
- * 3. Creates batched swap steps for tokens → USDC (for bridging)
- *
- * This function orchestrates the first phase of consolidation where tokens are
- * swapped into the appropriate intermediate or final form before bridging.
- *
- * @param tokensByChainAndWallet - Map of tokens grouped by "chainId-walletAddress"
- * @param destinationToken - Final target token and chain
- * @param destChainUSDC - USDC address on the destination chain
- * @param stepCounter - Current step counter for ID generation
- * @param log - Logging function for debug output
- * @returns Object containing all swap steps and the next counter value
- *
- * @throws {Error} ExternalAPIError if any swap quote fails
- */
-async function processChainWalletSwaps(
-  tokensByChainAndWallet: Map<string, TokenAmount[]>,
-  destinationToken: DestinationToken,
-  stepCounter: number,
-  log: (...args: unknown[]) => void,
-): Promise<{ steps: TransactionStep[]; nextCounter: number }> {
-  const allSteps: TransactionStep[] = [];
-  let counter = stepCounter;
-
-  for (const [_key, tokens] of tokensByChainAndWallet.entries()) {
-    const chainId = tokens[0].chainId;
-    const walletAddress = tokens[0].walletAddress;
+  for (const tokens of tokensByChainAndWallet.values()) {
+    const { chainId, walletAddress } = tokens[0];
     const isDestChain = chainId === destinationToken.chainId;
 
     log(
@@ -303,153 +259,152 @@ async function processChainWalletSwaps(
       })),
     );
 
-    // Categorize tokens
-    const { tokensToSwapToDestToken, tokensToSwapToUSDC } = categorizeTokens(tokens, chainId, destinationToken, log);
-
     const chainUSDC = USDC_ADDRESSES[chainId as keyof typeof USDC_ADDRESSES] as Address;
+    const tokensToSwapToUSDC: TokenAmount[] = [];
 
-    // Create swap steps to destination token
-    const destTokenResult = await createBatchedSwapSteps(
-      tokensToSwapToDestToken,
-      destinationToken,
-      chainId,
-      counter,
-      log,
-    );
-    allSteps.push(...destTokenResult.steps);
-    counter = destTokenResult.nextCounter;
+    for (const token of tokens) {
+      const isUSDC = isAddressEqual(token.token, chainUSDC);
+
+      // If tokens are on the destination chain, they will be swapped in the final swap step
+      // If tokens are USDC on non-destination chain they won't be swapped but will be bridged
+      if (isDestChain || isUSDC) {
+        tokensNotToSwap.push(token);
+        continue;
+      }
+
+      // Token needs to be swapped to USDC (for bridging or if dest is USDC)
+      tokensToSwapToUSDC.push(token);
+    }
 
     // Create swap steps to USDC
-    const usdcTarget: DestinationToken = {
-      token: chainUSDC,
-      chainId,
-      walletAddress: tokens[0].walletAddress,
-      symbol: "USDC",
-      decimals: 6,
-    };
-    const usdcResult = await createBatchedSwapSteps(tokensToSwapToUSDC, usdcTarget, chainId, counter, log);
-    allSteps.push(...usdcResult.steps);
-    counter = usdcResult.nextCounter;
+    if (tokensToSwapToUSDC.length > 0) {
+      const chainUSDCToken: Omit<TokenAmount, "amount"> = {
+        token: chainUSDC,
+        chainId,
+        walletAddress,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      const swapOutputs = await createSwapSteps(tokensToSwapToUSDC, chainUSDCToken, steps, [], log);
+      swappedTokens.push(...swapOutputs);
+    }
   }
 
-  return { steps: allSteps, nextCounter: counter };
+  return { steps, tokens: [...swappedTokens, ...tokensNotToSwap] };
 }
 
 /**
  * Creates CCTP bridge steps to transfer USDC from source chains to destination chain
  *
- * For each non-destination chain:
- * 1. Calculates total USDC (existing + estimated swap outputs)
+ * For each non-destination chain wallet:
+ * 1. Calculates total USDC (existing + swap outputs)
  * 2. Gets bridge fee quote from CCTP
- * 3. Creates bridge step with dependencies on swap steps from that chain
+ * 3. Creates bridge step with dependencies on swap steps from that wallet
  *
- * Bridge steps aggregate all USDC from a chain (across wallets) into a single
- * cross-chain transfer to optimize gas costs.
- *
- * @param tokensByChain - Map of tokens grouped by chain ID
- * @param existingSteps - Previously created swap steps (needed to calculate dependencies and totals)
+ * @param steps - Previously created swap steps
+ * @param tokens - Tokens containing USDC to bridge (from processChainWalletSwaps)
  * @param destinationToken - Final target token and chain
- * @param destChainUSDC - USDC address on the destination chain
- * @param stepCounter - Current step counter for ID generation
  * @param log - Logging function for debug output
- * @returns Object containing bridge steps and the next counter value
+ * @returns Object containing all steps (input + bridge) and bridged USDC tokens on dest chain
  *
  * @throws {Error} If bridge fee calculation fails
  */
 async function createBridgeSteps(
-  tokensByChain: Map<number, TokenAmount[]>,
-  existingSteps: TransactionStep[],
+  steps: TransactionStep[],
+  tokens: TokenAmount[],
   destinationToken: DestinationToken,
-  destChainUSDC: Address,
-  stepCounter: number,
   log: (...args: unknown[]) => void,
-): Promise<{ steps: TransactionStep[]; nextCounter: number }> {
-  const bridgeSteps: TransactionStep[] = [];
-  let counter = stepCounter;
+): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
+  const bridgedTokens: TokenAmount[] = [];
+  const destChainUSDC = USDC_ADDRESSES[destinationToken.chainId as keyof typeof USDC_ADDRESSES] as Address;
 
-  for (const [chainId, tokens] of tokensByChain.entries()) {
-    const isDestChain = chainId === destinationToken.chainId;
+  // Extract destination chain tokens
+  const destinationChainTokens = tokens.filter((t) => t.chainId === destinationToken.chainId);
+  // The rest are USDC tokens to bridge
+  const usdcTokens = tokens.filter((t) => t.chainId !== destinationToken.chainId);
 
-    if (isDestChain) {
-      log(`🔍 [DEBUG] Chain ${chainId} is destination chain, skipping bridging`);
+  // Group USDC tokens by chain and wallet
+  const usdcTokensByChainAndWallet = groupTokensByChainAndWallet(usdcTokens).values();
+
+  for (const usdcTokens of usdcTokensByChainAndWallet) {
+    const { chainId, walletAddress } = usdcTokens[0];
+
+    const inputTokens: TokenAmount[] = [];
+    const deps: string[] = []; // Tokens from swap outputs come first (with dependencies), then existing USDC
+
+    // Find which tokens are swap outputs and track their step IDs
+    const swapStepsOnChain = steps.filter(
+      (s) => s.chainId === chainId && s.type === "swap" && s.outputToken.walletAddress === walletAddress,
+    );
+
+    for (const token of usdcTokens) {
+      // Check if this token is a swap output
+      const correspondingSwap = swapStepsOnChain.find(
+        (s) => s.outputToken.amount === token.amount && isAddressEqual(s.outputToken.token, token.token),
+      );
+
+      if (correspondingSwap) {
+        // This is a swap output - add it first with dependency
+        inputTokens.unshift(token);
+        deps.unshift(correspondingSwap.id);
+      } else {
+        // This is existing USDC - add it after swap outputs
+        inputTokens.push(token);
+      }
+    }
+
+    // Calculate total amount
+    const totalAmount = inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+
+    // TODO: Remove this check and check it on execution
+    if (totalAmount === 0n) {
+      log(`🔍 [DEBUG] Skipping bridge for wallet ${walletAddress} on chain ${chainId}: no USDC to bridge`);
       continue;
     }
 
-    log(`🔍 [DEBUG] Chain ${chainId} is not destination chain, processing bridging`);
-    const chainUSDC = USDC_ADDRESSES[chainId as keyof typeof USDC_ADDRESSES] as Address;
+    const bridgeFee = await getBridgeFee(totalAmount, chainId, destinationToken.chainId);
+    const amountAfterFee = totalAmount - bridgeFee;
 
-    // Group USDC tokens by wallet address
-    const usdcByWallet = new Map<Address, bigint>();
-    for (const t of tokens) {
-      if (isAddressEqual(t.token, chainUSDC)) {
-        const current = usdcByWallet.get(t.walletAddress) || 0n;
-        usdcByWallet.set(t.walletAddress, current + t.amount);
-      }
-    }
-
-    // Add swap outputs to their respective wallets
-    for (const swapStep of existingSteps.filter((s) => s.chainId === chainId && s.type === "swap")) {
-      const swapOutputWallet = swapStep.outputToken.walletAddress;
-      const swapAmount = swapStep.outputToken.amount || 0n;
-      const current = usdcByWallet.get(swapOutputWallet) || 0n;
-      usdcByWallet.set(swapOutputWallet, current + swapAmount);
-    }
-
-    // Find dependencies: bridge steps depend on swaps from this chain
-    const deps = existingSteps.filter((s) => s.chainId === chainId && s.type === "swap").map((s) => s.id);
-
-    // Create one bridge step per wallet
-    for (const [walletAddress, walletAmount] of usdcByWallet.entries()) {
-      if (walletAmount === 0n) {
-        continue;
-      }
-
-      const bridgeFee = await getBridgeFee(walletAmount, chainId, destinationToken.chainId);
-      const amountAfterFee = walletAmount - bridgeFee;
-
-      if (amountAfterFee <= 0n) {
-        log(
-          `🔍 [DEBUG] Skipping bridge for wallet ${walletAddress} on chain ${chainId}: amount ${walletAmount.toString()} too small after fee ${bridgeFee.toString()}`,
-        );
-        continue;
-      }
-
-      const stepId = `step-${++counter}`;
-
-      bridgeSteps.push({
-        id: stepId,
-        type: "bridge",
-        status: "pending",
-        chainId,
-        inputTokens: [
-          {
-            token: chainUSDC,
-            amount: walletAmount,
-            chainId,
-            walletAddress,
-            symbol: "USDC",
-            decimals: 6,
-          },
-        ],
-        outputToken: {
-          token: destChainUSDC,
-          amount: amountAfterFee,
-          chainId: destinationToken.chainId,
-          walletAddress: destinationToken.walletAddress,
-          symbol: "USDC",
-          decimals: 6,
-        },
-        dependsOn: deps,
-        partialDependency: false,
-      });
-
+    // TODO: Remove this check and check it on execution
+    if (amountAfterFee <= 0n) {
       log(
-        `🔍 [DEBUG] Added bridge step ${stepId} for wallet ${walletAddress} on chain ${chainId}: amount=${amountAfterFee.toString()}, fee=${bridgeFee.toString()}`,
+        `🔍 [DEBUG] Skipping bridge for wallet ${walletAddress} on chain ${chainId}: amount ${totalAmount.toString()} too small after fee ${bridgeFee.toString()}`,
       );
+      continue;
     }
+
+    const stepId = `step-${steps.length + 1}`;
+
+    const bridgeOutput: TokenAmount = {
+      token: destChainUSDC,
+      amount: amountAfterFee,
+      chainId: destinationToken.chainId,
+      walletAddress: destinationToken.walletAddress,
+      symbol: "USDC",
+      decimals: 6,
+      provenance: stepId, // Mark this token as coming from this bridge step
+    };
+
+    steps.push({
+      id: stepId,
+      type: "bridge",
+      status: "pending",
+      chainId,
+      inputTokens,
+      outputToken: bridgeOutput,
+      dependsOn: deps,
+      partialDependency: false,
+    });
+
+    bridgedTokens.push(bridgeOutput);
+
+    log(
+      `🔍 [DEBUG] Added bridge step ${stepId} for wallet ${walletAddress} on chain ${chainId}: ${deps.length} swap deps + ${inputTokens.length - deps.length} existing, total=${totalAmount.toString()}, amount=${amountAfterFee.toString()}, fee=${bridgeFee.toString()}`,
+    );
   }
 
-  return { steps: bridgeSteps, nextCounter: counter };
+  return { steps, tokens: [...bridgedTokens, ...destinationChainTokens] };
 }
 
 /**
@@ -466,45 +421,36 @@ async function createBridgeSteps(
  * must contain at most one attestation step, as attestations are stored in global
  * state metadata. This constraint is enforced by validation in planConsolidation().
  *
- * @param bridgeSteps - Array of bridge steps created in previous phase
+ * @param steps - All steps created so far (includes bridge steps)
+ * @param tokens - Bridged USDC tokens on destination chain
  * @param destinationToken - Final target token and chain
- * @param destChainUSDC - USDC address on the destination chain
- * @param stepCounter - Current step counter for ID generation
- * @returns Object containing attestation and claim steps (or empty if no bridges) and next counter
- *
- * @example
- * // If no bridge steps, returns empty:
- * createAttestationAndClaimSteps([], dest, usdc, 5) // { steps: [], nextCounter: 5 }
- *
- * // If bridge steps exist, returns 2 steps:
- * createAttestationAndClaimSteps([bridge1, bridge2], dest, usdc, 5)
- * // { steps: [attestation, claim], nextCounter: 7 }
+ * @returns Object containing all steps (input + attestation + claim) and claim output token
  */
 function createAttestationAndClaimSteps(
-  bridgeSteps: TransactionStep[],
+  steps: TransactionStep[],
+  tokens: TokenAmount[],
   destinationToken: DestinationToken,
-  destChainUSDC: Address,
-  stepCounter: number,
-): { steps: TransactionStep[]; nextCounter: number } {
+): { steps: TransactionStep[]; tokens: TokenAmount[] } {
+  const bridgeSteps = steps.filter((s) => s.type === "bridge");
+
   if (bridgeSteps.length === 0) {
-    return { steps: [], nextCounter: stepCounter };
+    return { steps, tokens };
   }
 
-  const steps: TransactionStep[] = [];
-  let counter = stepCounter;
+  const destChainUSDC = USDC_ADDRESSES[destinationToken.chainId as keyof typeof USDC_ADDRESSES] as Address;
   const bridgeStepIds = bridgeSteps.map((s) => s.id);
 
   // Create attestation step
-  const attestationStepId = `step-${++counter}`;
+  const attestationStepId = `step-${steps.length + 1}`;
   steps.push({
     id: attestationStepId,
     type: "attestation",
     status: "pending",
     chainId: destinationToken.chainId,
-    inputTokens: [],
+    inputTokens: bridgeSteps.map((s) => s.outputToken),
     outputToken: {
       token: destChainUSDC,
-      amount: 0n,
+      amount: bridgeSteps.reduce((sum, s) => sum + s.outputToken.amount, 0n),
       chainId: destinationToken.chainId,
       walletAddress: destinationToken.walletAddress,
       symbol: "USDC",
@@ -515,151 +461,191 @@ function createAttestationAndClaimSteps(
   });
 
   // Create claim step
-  const claimStepId = `step-${++counter}`;
-  const totalBridged = bridgeSteps.reduce((sum, bridge) => sum + (bridge.outputToken.amount || 0n), 0n);
+  const claimStepId = `step-${steps.length + 1}`;
+  const totalBridged = bridgeSteps.reduce((sum, s) => sum + s.outputToken.amount, 0n);
+
+  const claimOutput: TokenAmount = {
+    token: destChainUSDC,
+    amount: totalBridged,
+    chainId: destinationToken.chainId,
+    walletAddress: destinationToken.walletAddress,
+    symbol: "USDC",
+    decimals: 6,
+    provenance: claimStepId, // Mark this token as coming from this claim step
+  };
 
   steps.push({
     id: claimStepId,
     type: "claim",
     status: "pending",
     chainId: destinationToken.chainId,
-    inputTokens: [],
-    outputToken: {
-      token: destChainUSDC,
-      amount: totalBridged,
-      chainId: destinationToken.chainId,
-      walletAddress: destinationToken.walletAddress,
-      symbol: "USDC",
-      decimals: 6,
-    },
-    dependsOn: [attestationStepId],
+    inputTokens: bridgeSteps.map((s) => s.outputToken),
+    outputToken: claimOutput,
+    dependsOn: [...bridgeStepIds, attestationStepId],
     partialDependency: true,
   });
 
-  return { steps, nextCounter: counter };
+  // Filter out bridged tokens (they're now claimed) and add the claim output
+  // Bridged tokens have provenance from bridge steps - exclude them since they're being claimed
+  const bridgeStepProvenance = new Set(bridgeSteps.map((s) => s.id));
+  const destinationChainTokens = tokens.filter(
+    (t) => t.chainId === destinationToken.chainId && !bridgeStepProvenance.has(t.provenance || ""),
+  );
+  return { steps, tokens: [...destinationChainTokens, claimOutput] };
 }
 
 /**
- * Creates final swap step to convert USDC to the destination token on destination chain
+ * Creates final swap steps to convert remaining tokens to the destination token on destination chain
  *
- * This is the last step in consolidation when the destination token is not USDC.
+ * This is the last phase in consolidation when the destination token is not USDC.
  * It aggregates:
- * - USDC that was already on the destination chain (excluding tokens already swapped)
+ * - USDC that was already on the destination chain
  * - USDC that was bridged and claimed from other chains
  *
- * The final swap depends on claim steps (if any bridges exist).
+ * Batches USDC into groups of up to 6 tokens (Odos limitation) if needed.
+ * The final swaps depend on claim steps (if any bridges exist).
  *
- * @param allSteps - All steps created so far (swaps, bridges, attestation, claim)
- * @param tokensByChain - Map of original tokens grouped by chain (to find dest chain USDC)
+ * @param steps - All steps created so far (swaps, bridges, attestation, claim)
+ * @param tokens - Remaining tokens on destination chain (includes USDC that was already on the destination
+ * chain and USDC that was bridged and claimed from other chains, among other tokens)
  * @param destinationToken - Final target token and chain
- * @param destChainUSDC - USDC address on the destination chain
- * @param stepCounter - Current step counter for ID generation
  * @param log - Logging function for debug output
- * @returns Object containing final swap step (or empty if dest is USDC) and next counter
+ * @returns Object containing all steps (input + final swaps) and final output tokens
  *
  * @throws {Error} ExternalAPIError if swap quote fails
- *
- * @example
- * // If destination is USDC, returns empty:
- * createFinalSwap(steps, tokens, usdcDest, usdc, 10, log) // { steps: [], nextCounter: 10 }
- *
- * // If destination is ETH, returns swap step:
- * createFinalSwap(steps, tokens, ethDest, usdc, 10, log) // { steps: [finalSwap], nextCounter: 11 }
  */
-async function createFinalSwap(
-  allSteps: TransactionStep[],
-  tokensByChain: Map<number, TokenAmount[]>,
+async function createFinalSwaps(
+  steps: TransactionStep[],
+  tokens: TokenAmount[],
   destinationToken: DestinationToken,
-  destChainUSDC: Address,
-  stepCounter: number,
   log: (...args: unknown[]) => void,
-): Promise<{ steps: TransactionStep[]; nextCounter: number }> {
-  if (isAddressEqual(destinationToken.token, destChainUSDC)) {
-    log(`🔍 [DEBUG] Destination token is USDC, no final swap needed`);
-    return { steps: [], nextCounter: stepCounter };
-  }
-
+): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
   log(
-    `🔍 [DEBUG] Destination token is not USDC, need final swap. Dest token: ${destinationToken.token}, USDC: ${destChainUSDC}`,
+    "🔍 [DEBUG] createFinalSwaps called with tokens:",
+    tokens.map((t) => ({
+      symbol: t.symbol,
+      amount: t.amount.toString(),
+      token: t.token,
+      wallet: t.walletAddress,
+      provenance: t.provenance,
+    })),
   );
 
-  // Calculate total USDC on destination chain
-  const destChainTokens = tokensByChain.get(destinationToken.chainId) || [];
-  const tokensAlreadySwappedToDest = allSteps
-    .filter(
-      (s) =>
-        s.chainId === destinationToken.chainId &&
-        s.type === "swap" &&
-        isAddressEqual(s.outputToken.token, destinationToken.token),
-    )
-    .flatMap((s) => s.inputTokens.map((t) => getAddress(t.token)));
-
-  const destChainUSDCAmount = destChainTokens
-    .filter((t) => isAddressEqual(t.token, destChainUSDC) && !tokensAlreadySwappedToDest.includes(getAddress(t.token)))
-    .reduce((sum, t) => sum + t.amount, 0n);
+  // Group tokens by chain and wallet, consolidating duplicate token addresses
+  const tokensByChainAndWallet = groupTokensByChainAndWallet(tokens, true);
 
   log(
-    `🔍 [DEBUG] Destination chain ${destinationToken.chainId} USDC tokens:`,
-    destChainTokens
-      .filter((t) => isAddressEqual(t.token, destChainUSDC))
-      .map((t) => ({
+    "🔍 [DEBUG] Tokens grouped by wallet (consolidated):",
+    Array.from(tokensByChainAndWallet.entries()).map(([key, tokens]) => ({
+      key,
+      tokenCount: tokens.length,
+    })),
+  );
+
+  const swappedTokens: TokenAmount[] = [];
+  const tokensNeedingTransfer: TokenAmount[] = [];
+
+  // Determine dependencies - should depend on claim step if it exists
+  const claimSteps = steps.filter((s) => s.type === "claim");
+  const dependencies = claimSteps.map((s) => s.id);
+
+  // Step 1: Process each wallet - swap all tokens to destination token
+  for (const consolidatedTokens of tokensByChainAndWallet.values()) {
+    const walletAddress = consolidatedTokens[0].walletAddress;
+
+    log(
+      `🔍 [DEBUG] Wallet ${walletAddress} - Consolidated tokens:`,
+      consolidatedTokens.map((t) => ({
         symbol: t.symbol,
         amount: t.amount.toString(),
         token: t.token,
       })),
-  );
-  log(`🔍 [DEBUG] Tokens already swapped to dest:`, tokensAlreadySwappedToDest);
+    );
 
-  const bridgedUSDC = allSteps.find((s) => s.type === "claim")?.outputToken.amount || 0n;
-  const totalUSDC = destChainUSDCAmount + bridgedUSDC;
+    // Separate tokens that need swapping from those that don't
+    const tokensToSwap = consolidatedTokens.filter((token) => !isAddressEqual(token.token, destinationToken.token));
 
-  log(
-    `🔍 [DEBUG] Final swap calculation: destChainUSDC=${destChainUSDCAmount.toString()}, bridgedUSDC=${bridgedUSDC.toString()}, totalUSDC=${totalUSDC.toString()}`,
-  );
+    const alreadyDestToken = consolidatedTokens.filter((token) => isAddressEqual(token.token, destinationToken.token));
 
-  if (totalUSDC === 0n) {
-    log(`🔍 [DEBUG] No USDC to swap on destination chain ${destinationToken.chainId}`);
-    return { steps: [], nextCounter: stepCounter };
+    // Swap tokens to destination token, outputting directly to destination wallet
+    if (tokensToSwap.length > 0) {
+      log(
+        `🔍 [DEBUG] Wallet ${walletAddress} - Creating final swap for ${tokensToSwap.length} tokens to ${destinationToken.symbol} at destination wallet, dependencies: ${dependencies.join(", ")}`,
+      );
+
+      // Create swap steps that output directly to destination wallet
+      const walletSwapOutputs = await createSwapSteps(
+        tokensToSwap,
+        destinationToken, // Output to destination wallet
+        steps,
+        dependencies,
+        log,
+      );
+
+      swappedTokens.push(...walletSwapOutputs);
+    }
+
+    // Tokens already at destination token: transfer only if at wrong wallet
+    for (const token of alreadyDestToken) {
+      if (isAddressEqual(token.walletAddress, destinationToken.walletAddress)) {
+        // Already at destination wallet, no action needed
+        log(
+          `🔍 [DEBUG] Wallet ${walletAddress} - Token already destination token and at destination wallet, no swap needed`,
+        );
+        swappedTokens.push(token);
+      } else {
+        // At wrong wallet, needs transfer
+        log(`🔍 [DEBUG] Wallet ${walletAddress} - Token already destination token but needs transfer`);
+        tokensNeedingTransfer.push(token);
+      }
+    }
   }
 
-  log(`🔍 [DEBUG] Getting swap quote for ${totalUSDC.toString()} USDC to ${destinationToken.symbol}`);
-  const quote = await getSwapQuote(
-    {
-      token: destChainUSDC,
-      amount: totalUSDC,
-      chainId: destinationToken.chainId,
+  // Step 2: Create transfer steps only for tokens that need them
+  // (tokens already at destination token but wrong wallet)
+  const transferOutputs: TokenAmount[] = [];
+
+  for (const token of tokensNeedingTransfer) {
+    const stepId = `step-${steps.length + 1}`;
+
+    const transferOutput: TokenAmount = {
+      ...token,
       walletAddress: destinationToken.walletAddress,
-      symbol: "USDC",
-      decimals: 6,
-    },
-    destinationToken,
+    };
+
+    steps.push({
+      id: stepId,
+      type: "transfer",
+      status: "pending",
+      chainId: destinationToken.chainId,
+      inputTokens: [token],
+      outputToken: transferOutput,
+      dependsOn: dependencies,
+      partialDependency: false,
+    });
+
+    transferOutputs.push(transferOutput);
+
+    log(
+      `🔍 [DEBUG] Added transfer step ${stepId} from wallet ${token.walletAddress} to ${destinationToken.walletAddress}`,
+    );
+  }
+
+  // Step 3: Final consolidation - sum up all destination tokens at destination wallet
+  const allFinalTokens = [...swappedTokens, ...transferOutputs];
+  const grouped = groupTokensByChainAndWallet(allFinalTokens, true);
+  const finalTokens = Array.from(grouped.values()).flat();
+
+  log(
+    "🔍 [DEBUG] Final tokens after consolidation:",
+    finalTokens.map((t) => ({
+      symbol: t.symbol,
+      amount: t.amount.toString(),
+      wallet: t.walletAddress,
+    })),
   );
 
-  const finalSwapId = `step-${++stepCounter}`;
-  const deps = allSteps.filter((s) => s.type === "claim").map((s) => s.id);
-
-  const finalStep: TransactionStep = {
-    id: finalSwapId,
-    type: "swap",
-    status: "pending",
-    chainId: destinationToken.chainId,
-    inputTokens: [
-      {
-        token: destChainUSDC,
-        amount: totalUSDC,
-        chainId: destinationToken.chainId,
-        walletAddress: destinationToken.walletAddress,
-        symbol: "USDC",
-        decimals: 6,
-      },
-    ],
-    outputToken: quote,
-    dependsOn: deps,
-    partialDependency: false,
-  };
-
-  log(`🔍 [DEBUG] Added final swap step ${finalSwapId} for USDC -> ${destinationToken.symbol}`);
-  return { steps: [finalStep], nextCounter: stepCounter };
+  return { steps, tokens: finalTokens };
 }
 
 /**
@@ -711,48 +697,24 @@ export async function planConsolidation(
   destinationToken: DestinationToken,
   log: (...args: unknown[]) => void = () => {},
 ): Promise<TransactionStep[]> {
-  // Step 1: Validate inputs
+  // Validate inputs
   validateInputs(sourceTokens, destinationToken, log);
 
-  // Step 2: Group tokens
-  const { byChainAndWallet, byChain } = groupTokens(sourceTokens, log);
+  // Build consolidation pipeline
+  let { steps, tokens } = await processChainWalletSwaps(sourceTokens, destinationToken, log);
+  ({ steps, tokens } = await createBridgeSteps(steps, tokens, destinationToken, log));
+  ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, destinationToken));
+  ({ steps, tokens } = await createFinalSwaps(steps, tokens, destinationToken, log));
 
-  // Get destination chain USDC address
-  const destChainUSDC = USDC_ADDRESSES[destinationToken.chainId as keyof typeof USDC_ADDRESSES] as Address;
-
-  // Step 3: Process swaps for each chain-wallet group
-  let stepCounter = 0;
-  const swapResult = await processChainWalletSwaps(byChainAndWallet, destinationToken, stepCounter, log);
-  stepCounter = swapResult.nextCounter;
-  const allSteps = [...swapResult.steps];
-
-  // Step 4: Create bridge steps
-  const bridgeResult = await createBridgeSteps(byChain, allSteps, destinationToken, destChainUSDC, stepCounter, log);
-  stepCounter = bridgeResult.nextCounter;
-  allSteps.push(...bridgeResult.steps);
-
-  // Step 5: Create attestation and claim steps
-  const attestClaimResult = createAttestationAndClaimSteps(
-    bridgeResult.steps,
-    destinationToken,
-    destChainUSDC,
-    stepCounter,
-  );
-  stepCounter = attestClaimResult.nextCounter;
-  allSteps.push(...attestClaimResult.steps);
-
-  // Step 6: Create final swap on destination chain
-  const finalSwapResult = await createFinalSwap(allSteps, byChain, destinationToken, destChainUSDC, stepCounter, log);
-  allSteps.push(...finalSwapResult.steps);
-
-  // Step 7: Validate plan constraints
-  const attestationSteps = allSteps.filter((s) => s.type === "attestation");
+  // Validate plan constraints
+  const attestationSteps = steps.filter((s) => s.type === "attestation");
   if (attestationSteps.length > 1) {
     throw new Error("PlanningError: Plans must contain at most one attestation step");
   }
+
   log(
     "🔍 [DEBUG] Generated steps:",
-    allSteps.map((s) => ({
+    steps.map((s) => ({
       id: s.id,
       type: s.type,
       chainId: s.chainId,
@@ -762,5 +724,5 @@ export async function planConsolidation(
     })),
   );
 
-  return allSteps;
+  return steps;
 }

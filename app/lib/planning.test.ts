@@ -652,4 +652,173 @@ describe("planConsolidation", () => {
     expect(attestationStep?.dependsOn).toContain(wallet2BridgeStep?.id);
     expect(attestationStep?.dependsOn).toContain(wallet3BridgeStep?.id);
   });
+
+  test("provenance tracking - swap outputs should have provenance set", async () => {
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: ETH_ADDRESS,
+        amount: 1000000000000000000n, // 1 ETH
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "ETH",
+        decimals: 18,
+      },
+    ];
+
+    const destinationToken = {
+      token: USDC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    };
+
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: USDC_ADDRESS,
+      amount: 3000000000n, // 3000 USDC
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    });
+
+    const result = await planConsolidation(sourceTokens, destinationToken);
+
+    const swapStep = result.find((s) => s.type === "swap");
+    expect(swapStep).toBeDefined();
+    expect(swapStep?.outputToken.provenance).toBe(swapStep?.id);
+  });
+
+  test("provenance tracking - bridge outputs should have provenance set", async () => {
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: USDC_OPTIMISM, // Use Optimism USDC address
+        amount: 1000000n, // 1 USDC on Optimism
+        chainId: 10,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+
+    const destinationToken = {
+      token: USDC_ADDRESS, // Ethereum USDC
+      chainId: 1, // Ethereum
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    };
+
+    vi.mocked(getBridgeFee).mockResolvedValue(100n);
+
+    const result = await planConsolidation(sourceTokens, destinationToken);
+
+    const bridgeStep = result.find((s) => s.type === "bridge");
+    expect(bridgeStep).toBeDefined();
+    expect(bridgeStep?.outputToken.provenance).toBe(bridgeStep?.id);
+  });
+
+  test("provenance tracking - claim outputs should have provenance set", async () => {
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: USDC_OPTIMISM, // Use Optimism USDC address
+        amount: 1000000n,
+        chainId: 10, // Optimism
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+
+    const destinationToken = {
+      token: USDC_ADDRESS, // Ethereum USDC
+      chainId: 1, // Ethereum
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    };
+
+    vi.mocked(getBridgeFee).mockResolvedValue(100n);
+
+    const result = await planConsolidation(sourceTokens, destinationToken);
+
+    const claimStep = result.find((s) => s.type === "claim");
+    expect(claimStep).toBeDefined();
+    expect(claimStep?.outputToken.provenance).toBe(claimStep?.id);
+  });
+
+  test("provenance tracking - bridge should preserve provenance from swap outputs", async () => {
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: ETH_ADDRESS,
+        amount: 1000000000000000000n, // 1 ETH
+        chainId: 137, // Polygon
+        walletAddress: WALLET,
+        symbol: "POL",
+        decimals: 18,
+      },
+    ];
+
+    const destinationToken = {
+      token: USDC_ADDRESS,
+      chainId: 1, // Ethereum
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    };
+
+    // Mock swap ETH -> USDC
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: USDC_ADDRESS,
+      amount: 3000000000n, // 3000 USDC
+      chainId: 137,
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    });
+
+    vi.mocked(getBridgeFee).mockResolvedValue(1000000n); // 1 USDC fee
+
+    const result = await planConsolidation(sourceTokens, destinationToken);
+
+    const swapStep = result.find((s) => s.type === "swap");
+    const bridgeStep = result.find((s) => s.type === "bridge");
+
+    expect(swapStep).toBeDefined();
+    expect(bridgeStep).toBeDefined();
+
+    // Bridge input should have provenance from swap
+    expect(bridgeStep?.inputTokens[0].provenance).toBe(swapStep?.id);
+  });
+
+  test("provenance tracking - existing USDC should not have provenance", async () => {
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: USDC_OPTIMISM, // Use Optimism USDC address
+        amount: 1000000n, // 1 USDC already on source chain
+        chainId: 10, // Optimism
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+
+    const destinationToken = {
+      token: USDC_ADDRESS, // Ethereum USDC
+      chainId: 1, // Ethereum
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    };
+
+    vi.mocked(getBridgeFee).mockResolvedValue(100n);
+
+    const result = await planConsolidation(sourceTokens, destinationToken);
+
+    const bridgeStep = result.find((s) => s.type === "bridge");
+
+    expect(bridgeStep).toBeDefined();
+    // Existing USDC should not have provenance (it didn't come from a step)
+    expect(bridgeStep?.inputTokens[0].provenance).toBeUndefined();
+  });
 });
