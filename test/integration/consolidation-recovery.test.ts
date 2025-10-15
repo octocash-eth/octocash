@@ -25,12 +25,11 @@ describe("Scenario 8: Browser Recovery", () => {
   const ETH_ADDRESS = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE" as Address;
 
   let mockWalletClient: WalletClient<HttpTransport, Chain, Account>;
-  const stateStorage = new Map<string, ConsolidationState>();
+
 
   beforeEach(() => {
     vi.clearAllMocks();
-    stateStorage.clear();
-    
+
     // Create mock wallet client
     mockWalletClient = {
       account: { address: WALLET } as Account,
@@ -84,17 +83,6 @@ describe("Scenario 8: Browser Recovery", () => {
       const txHash = `0x${Math.random().toString(16).substring(2)}`;
       return [txHash, []];
     });
-    
-    // Clear localStorage before each test
-    if (typeof localStorage !== "undefined") {
-      localStorage.clear();
-    }
-  });
-
-  afterEach(() => {
-    if (typeof localStorage !== "undefined") {
-      localStorage.clear();
-    }
   });
 
   test("browser close mid-execution - state is persisted and recoverable", async () => {

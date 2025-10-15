@@ -161,6 +161,7 @@ export const executeCCTPBurn = async (
     sourceChainId,
     from,
     await getApproveAndBurnUsdcCalls(sourceChainId, amount, destinationChainId, destinationAddress),
+    "atomic-steps",
   );
 
   return [burnTx, sourceChainId];
@@ -203,7 +204,7 @@ export const executeCCTPMint = async (
     return ["", []];
   }
 
-  const [mintTx, mintLogs] = await sendCalls("mint", chainId, walletAddress, calls, "non-atomic-batch");
+  const [mintTx, mintLogs] = await sendCalls("mint", chainId, walletAddress, calls, "non-atomic-multicall");
   return [mintTx, mintLogs];
 };
 

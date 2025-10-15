@@ -24,11 +24,10 @@ import { stringify, parse } from "superjson";
 describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
 
   let mockWalletClient: WalletClient<HttpTransport, Chain, Account>;
-  const stateStorage = new Map<string, ConsolidationState>();
+
 
   beforeEach(() => {
     vi.clearAllMocks();
-    stateStorage.clear();
 
     // Create mock wallet client
     mockWalletClient = {

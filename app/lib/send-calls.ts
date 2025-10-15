@@ -1,6 +1,13 @@
 import type { Account, Address, Call, Chain, Hex, HttpTransport, WalletClient } from "viem";
+import { encodeFunctionData, parseAbi } from "viem";
 import { waitForTransactionReceipt } from "viem/actions";
 import { chains } from "~/data/supported-chains";
+
+/**
+ * Multicall3 contract address (same across all chains)
+ * See: https://github.com/mds1/multicall3
+ */
+const MULTICALL3_ADDRESS: Address = "0xcA11bde05977b3631167028862bE2a173976CA11";
 
 /**
  * Switch to a chain in the connected wallet, adding it if missing.
@@ -19,7 +26,9 @@ export type SendCallsMode =
   | "atomic-batch" // All calls in one batch, atomic (all-or-nothing)
   | "non-atomic-batch" // All calls in one batch, non-atomic (partial success allowed)
   | "atomic-steps" // One call at a time, stop on first failure
-  | "non-atomic-steps"; // One call at a time, continue on failures
+  | "non-atomic-steps" // One call at a time, continue on failures
+  | "atomic-multicall" // All calls via Multicall3, must all succeed
+  | "non-atomic-multicall"; // All calls via Multicall3, partial success OK
 
 export type SendCallsFn = (
   txId: string,
@@ -35,6 +44,7 @@ export type SendCallsFn = (
  *
  * @param client - Wallet client used to send and wait for calls.
  * @param waitForReceipt - Optional function to wait for transaction receipt (for testing)
+ * @param switchChainFn - Optional function to switch chains (for testing)
  * @returns A function:
  * (txId, chainId, from, calls, mode?) =>
  *   Promise<[txHash: string, results: { address: Address; data: Hex; topics: Hex[] }[][]>
@@ -44,16 +54,19 @@ export type SendCallsFn = (
  * - non-atomic-batch: All calls in one batch via sendCalls, allows partial success
  * - atomic-steps: Execute calls one by one via sendTransaction, stop on first failure
  * - non-atomic-steps: Execute calls one by one via sendTransaction, continue on failures
+ * - atomic-multicall: All calls via Multicall3, must all succeed
+ * - non-atomic-multicall: All calls via Multicall3, partial success OK
  */
 export const prepareSendCalls = (
   client: WalletClient<HttpTransport, Chain, Account>,
   waitForReceipt: typeof waitForTransactionReceipt = waitForTransactionReceipt,
+  switchChainFn: typeof switchChain = switchChain,
 ): SendCallsFn => {
   return async (txId, chainId, from, calls, mode = "atomic-batch") => {
     if (!calls?.length) {
       return ["", []];
     }
-    await switchChain(client, chainId);
+    await switchChainFn(client, chainId);
 
     const chain = chains[chainId as keyof typeof chains] as Chain;
 
@@ -99,6 +112,50 @@ export const prepareSendCalls = (
       }
 
       return [lastTx ?? "", allLogs];
+    }
+
+    // Multicall3 modes
+    if (mode === "atomic-multicall" || mode === "non-atomic-multicall") {
+      if (calls.some((call) => (call.value ?? 0n) > 0n)) {
+        throw new Error("Sending value is not supported currently in multicall mode");
+      }
+
+      const allowFailure = mode === "non-atomic-multicall";
+
+      // Build Call3[] array for Multicall3
+      const call3Array = calls.map((call) => ({
+        target: call.to ?? "0x0000000000000000000000000000000000000000",
+        allowFailure,
+        callData: call.data ?? "0x",
+      }));
+
+      // Encode aggregate3 call
+      const callData = encodeFunctionData({
+        abi: parseAbi([
+          "function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[])",
+        ]),
+        functionName: "aggregate3",
+        args: [call3Array],
+      });
+
+      // Send transaction to Multicall3
+      const hash = await client.sendTransaction({
+        account: from,
+        to: MULTICALL3_ADDRESS,
+        data: callData,
+        chain,
+      });
+
+      // Wait for transaction receipt
+      const receipt = await waitForReceipt(client, { hash });
+
+      if (receipt.status !== "success") {
+        throw new Error(`${txId} transaction reverted`);
+      }
+
+      // Transaction succeeded (even if some/all calls failed internally)
+      const logs = (receipt.logs ?? []) as { address: Address; data: Hex; topics: Hex[] }[];
+      return [hash, [logs]];
     }
 
     // Batch modes (using sendCalls)

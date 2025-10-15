@@ -110,7 +110,7 @@ describe("cctp", () => {
 
       expect(txHash).toBe("0xburnhash");
       expect(chainId).toBe(1);
-      expect(mockSendCalls).toHaveBeenCalledWith("burn", 1, WALLET, expect.any(Array));
+      expect(mockSendCalls).toHaveBeenCalledWith("burn", 1, WALLET, expect.any(Array), "atomic-steps");
       expect(mockSendCalls).toHaveBeenCalledTimes(1);
 
       // Verify the calls structure
@@ -170,7 +170,7 @@ describe("cctp", () => {
 
       await executeCCTPBurn(tokenIn, tokenOut, mockSendCalls);
 
-      expect(mockSendCalls).toHaveBeenCalledWith("burn", 10, WALLET, expect.any(Array));
+      expect(mockSendCalls).toHaveBeenCalledWith("burn", 10, WALLET, expect.any(Array), "atomic-steps");
     });
   });
 
@@ -523,7 +523,7 @@ describe("cctp", () => {
       expect(txHash).toBe("0xminthash");
       expect(logs).toHaveLength(1);
       expect(logs[0]).toHaveLength(1);
-      expect(mockSendCalls).toHaveBeenCalledWith("mint", 1, WALLET, expect.any(Array), "non-atomic-batch");
+      expect(mockSendCalls).toHaveBeenCalledWith("mint", 1, WALLET, expect.any(Array), "non-atomic-multicall");
     });
 
     test("throws error when no attestations provided", async () => {
@@ -638,7 +638,7 @@ describe("cctp", () => {
       const [txHash, _logs] = await executeCCTPMint(mockAttestations, tokenOut, mockSendCalls);
 
       expect(txHash).toBe("0xminthash");
-      expect(mockSendCalls).toHaveBeenCalledWith("mint", 1, WALLET, expect.any(Array), "non-atomic-batch");
+      expect(mockSendCalls).toHaveBeenCalledWith("mint", 1, WALLET, expect.any(Array), "non-atomic-multicall");
 
       // Verify only one call was made (for the unused nonce)
       const calls = mockSendCalls.mock.calls[0][3];
@@ -670,7 +670,7 @@ describe("cctp", () => {
 
       await executeCCTPBurn(tokenIn, tokenOut, mockSendCalls);
 
-      expect(mockSendCalls).toHaveBeenCalledWith("burn", 1, WALLET, expect.any(Array));
+      expect(mockSendCalls).toHaveBeenCalledWith("burn", 1, WALLET, expect.any(Array), "atomic-steps");
     });
   });
 });

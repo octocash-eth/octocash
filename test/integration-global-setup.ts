@@ -8,10 +8,10 @@ const basePort = 8545;
 const mnemonic = "memory dream rib champion cradle century antenna purchase smart company spoon reason";
 
 async function getLatestBlockNumber(rpcUrl: string): Promise<number> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
 
+  try {
     const response = await fetch(rpcUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -31,11 +31,16 @@ async function getLatestBlockNumber(rpcUrl: string): Promise<number> {
 
     const data = await response.json();
     if (data.result) {
-      return Number.parseInt(data.result, 16);
+      const blockNumber = Number.parseInt(data.result, 16);
+      if (Number.isNaN(blockNumber)) {
+        throw new Error(`Invalid hex block number received: ${data.result}`);
+      }
+      return blockNumber;
     }
     throw new Error(`Failed to fetch block number from RPC: ${data.error?.message || 'Unknown error'}`);
   } catch (error) {
     console.error(`Error fetching block number from ${rpcUrl}:`, error);
+    clearTimeout(timeoutId);
     throw error;
   }
 }
@@ -44,19 +49,19 @@ export default async function setup() {
   if (!process.env.VITE_DRPC_API_KEY) {
     throw new Error("VITE_DRPC_API_KEY is not set")
   }
-
+  
   console.log('📊 Fetching latest block numbers...');
   const mainnetRpc = `https://lb.drpc.org/ethereum/${process.env.VITE_DRPC_API_KEY}`;
   const optimismRpc = `https://lb.drpc.org/optimism/${process.env.VITE_DRPC_API_KEY}`;
   const baseRpc = `https://lb.drpc.org/base/${process.env.VITE_DRPC_API_KEY}`;
-
+  
   const [mainnetBlock, optimismBlock, baseBlock] = await Promise.all([
     getLatestBlockNumber(mainnetRpc),
     getLatestBlockNumber(optimismRpc),
     getLatestBlockNumber(baseRpc),
   ]);
   console.log(`📦 Latest blocks - Mainnet: ${mainnetBlock}, Optimism: ${optimismBlock}, Base: ${baseBlock}`);
-
+  
   const [proolMainnet, proolOptimism, proolBase] = [
     {
       chain: mainnet,
@@ -75,34 +80,47 @@ export default async function setup() {
     },
   ].map(({ chain, forkUrl, forkBlockNumber }) =>
     createServer({
-    host: "localhost",
-    port: basePort + chain.id,
-    instance: anvil({
-      forkUrl,
-      forkChainId: chain.id,
-      forkBlockNumber,
-      accounts: 2,
-      mnemonic,
-      autoImpersonate: true,
-    }),
-  })
-);
+      host: "localhost",
+      port: basePort + chain.id,
+      instance: anvil({
+        forkUrl,
+        forkChainId: chain.id,
+        forkBlockNumber,
+        accounts: 2,
+        mnemonic,
+        autoImpersonate: true,
+      }),
+    })
+  );
 
-console.log('🚀 Starting Prool server');
-await proolMainnet.start();
-await waitForRpc(`http://localhost:${basePort + mainnet.id}/1`);
-await proolOptimism.start();
-await waitForRpc(`http://localhost:${basePort + optimism.id}/1`);
-await proolBase.start();
-await waitForRpc(`http://localhost:${basePort + base.id}/1`);
-console.log('✅ Prool RPCs are ready');
+  console.log('🚀 Starting Prool server');
+  const startedServers: Array<typeof proolMainnet> = [];
+  try {
+    await proolMainnet.start();
+    startedServers.push(proolMainnet);
+    await waitForRpc(`http://localhost:${basePort + mainnet.id}/1`);
+    
+    await proolOptimism.start();
+    startedServers.push(proolOptimism);
+    await waitForRpc(`http://localhost:${basePort + optimism.id}/1`);
+    
+    await proolBase.start();
+    startedServers.push(proolBase);
+    await waitForRpc(`http://localhost:${basePort + base.id}/1`);
+    
+    console.log('✅ Prool RPCs are ready');
+  } catch (error) {
+    console.error('Failed to start servers, cleaning up...');
+    await Promise.allSettled(startedServers.map(s => s.stop()));
+    throw error;
+  }
 
-return async () => {
-  console.log('🛑 Stopping Prool server');
-  await proolMainnet.stop();
-  await proolOptimism.stop();
-  await proolBase.stop();
-}
+  return async () => {
+    console.log('🛑 Stopping Prool server');
+    await proolMainnet.stop();
+    await proolOptimism.stop();
+    await proolBase.stop();
+  }
 }
 
 async function waitForRpc(url: string, { attempts = 100, delayMs = 500 }: { attempts?: number; delayMs?: number } = {}) {
@@ -127,15 +145,26 @@ async function waitForRpc(url: string, { attempts = 100, delayMs = 500 }: { atte
 
 export const getTestClients = (chainId: number) => {
   const url = `http://localhost:${basePort + chainId}/1`;
+  const chain = [mainnet, optimism, base].find((c) => c.id === chainId);
+  if (!chain) {
+    throw new Error(
+      `Unsupported chainId: ${chainId}. Expected one of: ${[
+        mainnet.id,
+        optimism.id,
+        base.id,
+      ].join(', ')}`
+    );
+  }
+  
   return {
     testClient: createTestClient({
-      chain: [mainnet, optimism, base].find((c) => c.id === chainId) as Chain,
+      chain,
       transport: http(url),
       mode: "anvil",
       account: mnemonicToAccount(mnemonic),
     }),
     publicClient: createPublicClient({
-      chain: [mainnet, optimism, base].find((c) => c.id === chainId) as Chain,
+      chain,
       transport: http(url),
     }),
     transport: http(url),

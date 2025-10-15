@@ -16,10 +16,35 @@ export default defineConfig({
     allowedHosts: ["host.docker.internal"],
   },
   test: {
-    environment: "jsdom",
-    globals: true,
-    globalSetup: "./test/globalSetup.ts",
-    setupFiles: ["./test/setup.ts"],
+    projects: [
+      {
+        plugins: [tsconfigPaths()],
+        test: {
+          name: "unit",
+          environment: "jsdom",
+          globals: true,
+          setupFiles: ["./test/setup.ts"],
+          include: ["app/**/*.test.ts", "app/**/*.test.tsx"],
+        },
+      },
+      {
+        plugins: [tsconfigPaths()],
+        test: {
+          name: "integration",
+          environment: "jsdom",
+          globals: true,
+          globalSetup: "./test/integration-global-setup.ts",
+          setupFiles: ["./test/setup.ts"],
+          include: ["test/integration/**/*.test.ts"],
+          pool: "forks",
+          poolOptions: {
+            forks: {
+              singleFork: true,
+            },
+          },
+        },
+      },
+    ],
     coverage: {
       reporter: ["json", "html"],
       include: ["app/lib/**/*"],

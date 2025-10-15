@@ -34,7 +34,11 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     vi.mocked(getSwapQuote).mockImplementation(async (input, outputToken) => {
       const inputArray = Array.isArray(input) ? input : [input];
       const totalAmount = inputArray.reduce((sum, token) => sum + token.amount, 0n);
-      return makeToken(outputToken.token, totalAmount / 2n, outputToken.chainId, { walletAddress: inputArray[0].walletAddress});
+      return makeToken(outputToken.token, totalAmount / 2n, outputToken.chainId, {
+        walletAddress: inputArray[0].walletAddress,
+        symbol: outputToken.symbol,
+        decimals: outputToken.decimals
+      });
     });
 
     vi.mocked(getBridgeFee).mockResolvedValue(0n);
