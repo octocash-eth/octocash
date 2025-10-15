@@ -173,7 +173,7 @@ describe("executeConsolidationPlan", () => {
       type: "bridge",
       status: "pending",
       chainId: 1,
-      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)], // Based on step-1 estimate
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1, { provenance: "step-1" })], // Based on step-1 estimate
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
       dependsOn: ["step-1"],
       partialDependency: false,
@@ -294,7 +294,7 @@ describe("executeConsolidationPlan", () => {
       status: "pending",
       chainId: 1,
       inputTokens: [],
-      outputToken: makeToken(USDC_ADDRESS, 0n, 1, WALLET, "USDC", 6),
+      outputToken: makeToken(USDC_ADDRESS, 0n, 1),
       dependsOn: ["bridge-1"],
       partialDependency: false,
     };
@@ -320,7 +320,7 @@ describe("executeConsolidationPlan", () => {
       status: "pending",
       chainId: 1,
       inputTokens: [],
-      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1, WALLET, "USDC", 6),
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
       dependsOn: [],
       partialDependency: false,
     };
@@ -352,10 +352,10 @@ describe("executeConsolidationPlan", () => {
       status: "pending",
       chainId: 1,
       inputTokens: [
-        makeToken(USDC_ADDRESS, 1000000n, 1, WALLET, "USDC", 6),
-        makeToken(DAI_ADDRESS, 2000000n, 1, WALLET, "DAI", 18), // Second input - invalid!
+        makeToken(USDC_ADDRESS, 1000000n, 1),
+        makeToken(DAI_ADDRESS, 2000000n, 1, { walletAddress: WALLET, symbol: "DAI", decimals: 18 }), // Second input - invalid!
       ],
-      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1, WALLET, "USDC", 6),
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
       dependsOn: [],
       partialDependency: false,
     };
@@ -378,8 +378,8 @@ describe("executeConsolidationPlan", () => {
       type: "transfer",
       status: "pending",
       chainId: 1,
-      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1, WALLET, "USDC", 6)], // Chain 1
-      outputToken: makeToken(USDC_ADDRESS, 1000000n, 137, WALLET, "USDC", 6), // Chain 137 - mismatch!
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)], // Chain 1
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 137), // Chain 137 - mismatch!
       dependsOn: [],
       partialDependency: false,
     };
@@ -404,7 +404,7 @@ describe("executeConsolidationPlan", () => {
       status: "pending" as const,
       chainId: 1,
       inputTokens: [],
-      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1, WALLET, "USDC", 6),
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
       dependsOn: [],
       partialDependency: false,
     };
@@ -427,8 +427,8 @@ describe("executeConsolidationPlan", () => {
       type: "swap",
       status: "pending",
       chainId: 1,
-      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1, WALLET, "USDC", 6)],
-      outputToken: makeToken(USDC_ADDRESS, 500000n, 1, WALLET, "USDC", 6),
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 500000n, 1),
       dependsOn: [],
       partialDependency: false,
     };
@@ -438,8 +438,8 @@ describe("executeConsolidationPlan", () => {
       type: "swap",
       status: "pending",
       chainId: 1,
-      inputTokens: [makeToken(USDC_ADDRESS, 500000n, 1, WALLET, "USDC", 6)],
-      outputToken: makeToken(USDC_ADDRESS, 250000n, 1, WALLET, "USDC", 6),
+      inputTokens: [makeToken(USDC_ADDRESS, 500000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 250000n, 1),
       dependsOn: ["step-1"],
       partialDependency: false,
     };
@@ -455,7 +455,7 @@ describe("executeConsolidationPlan", () => {
     // Mock getSwapQuote to fail on recalculation for step2
     vi.mocked(getSwapQuote)
       .mockRejectedValueOnce(new Error("Quote API failed")) // Fails during recalculation
-      .mockResolvedValueOnce(makeToken(USDC_ADDRESS, 250000n, 1, WALLET, "USDC", 6)); // But step2 still executes
+      .mockResolvedValueOnce(makeToken(USDC_ADDRESS, 250000n, 1)); // But step2 still executes
 
     // Second swap succeeds despite quote failure
     vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
@@ -539,7 +539,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       "step-2",
       "bridge",
       ["step-1"],
-      [makeToken(USDC_ADDRESS, 2000000n, 1)],
+      [makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-1" })],
       makeToken(USDC_ADDRESS, 2000000n, 10),
     );
 
@@ -547,7 +547,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       "step-3",
       "claim",
       ["step-2"],
-      [makeToken(USDC_ADDRESS, 2000000n, 10)],
+      [makeToken(USDC_ADDRESS, 2000000n, 10, { provenance: "step-2" })],
       makeToken(USDC_ADDRESS, 2000000n, 10),
     );
 
@@ -555,7 +555,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       "step-4",
       "swap",
       ["step-3"],
-      [makeToken(USDC_ADDRESS, 2000000n, 10)],
+      [makeToken(USDC_ADDRESS, 2000000n, 10, { provenance: "step-3" })],
       makeToken(DAI_ADDRESS, 2000000n, 10),
     );
 
@@ -612,7 +612,10 @@ describe("recalculatePlan - comprehensive coverage", () => {
       "step-2",
       "swap",
       ["step-1"],
-      [makeToken(USDC_ADDRESS, 2000000n, 1), makeToken(USDT_ADDRESS, 3000000n, 1)],
+      [
+        makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-1" }), // Has provenance
+        makeToken(USDT_ADDRESS, 3000000n, 1), // No provenance
+      ],
       makeToken(DAI_ADDRESS, 5000000n, 1),
     );
 
@@ -665,7 +668,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       "step-2",
       "transfer",
       ["step-1"],
-      [makeToken(USDC_ADDRESS, 2000000n, 1)],
+      [makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-1" })],
       {
         ...makeToken(USDC_ADDRESS, 2000000n, 1),
         walletAddress: WALLET_2,
@@ -698,46 +701,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     expect(finalState.plan[1].outputToken.amount).toBe(2300000n);
   });
 
-  test("recalculation handles step with no matching inputs (new token added)", async () => {
-    const step1: TransactionStep = createStep(
-      "step-1",
-      "swap",
-      [],
-      [makeToken(WETH_ADDRESS, 1000000n, 1)],
-      makeToken(USDC_ADDRESS, 2000000n, 1),
-    );
-
-    const step2: TransactionStep = createStep("step-2", "swap", ["step-1"], [], makeToken(DAI_ADDRESS, 2000000n, 1));
-
-    const state: ConsolidationState = {
-      id: "test",
-      plan: [step1, step2],
-      currentStepIndex: 0,
-      status: "ready",
-      results: {},
-      sourceTokens: [],
-      destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
-
-    // Step 1 completes
-    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
-      amount: 2000000n,
-      transactionHash: "0xswap1",
-    });
-
-    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(DAI_ADDRESS, 2000000n, 1));
-
-    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
-
-    // Step 2 should have the new token added as input
-    expect(finalState.plan[1].inputTokens.length).toBe(1);
-    expect(finalState.plan[1].inputTokens[0].token).toBe(USDC_ADDRESS);
-    expect(finalState.plan[1].inputTokens[0].amount).toBe(2000000n);
-  });
-
   test("recalculation skips steps that don't depend on completed step", async () => {
     const step1: TransactionStep = createStep(
       "step-1",
@@ -759,7 +722,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       "step-3",
       "bridge",
       ["step-1"],
-      [makeToken(USDC_ADDRESS, 2000000n, 1)],
+      [makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-1" })],
       makeToken(USDC_ADDRESS, 2000000n, 10),
     );
 
@@ -840,43 +803,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     expect(finalState.plan[1].outputToken.amount).toBe(0n);
   });
 
-  test("recalculation handles swap with empty inputs gracefully", async () => {
-    const step1: TransactionStep = createStep(
-      "step-1",
-      "swap",
-      [],
-      [makeToken(WETH_ADDRESS, 1000000n, 1)],
-      makeToken(USDC_ADDRESS, 2000000n, 1),
-    );
-
-    const step2: TransactionStep = createStep("step-2", "swap", ["step-1"], [], makeToken(DAI_ADDRESS, 2000000n, 1));
-
-    const state: ConsolidationState = {
-      id: "test",
-      plan: [step1, step2],
-      currentStepIndex: 0,
-      status: "ready",
-      results: {},
-      sourceTokens: [],
-      destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
-
-    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
-      amount: 2000000n,
-      transactionHash: "0xswap1",
-    });
-
-    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(DAI_ADDRESS, 2000000n, 1));
-
-    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
-
-    // Should add the dependency output as input
-    expect(finalState.plan[1].inputTokens.length).toBeGreaterThan(0);
-  });
-
   test("recalculation preserves inputs that don't match changed output", async () => {
     const USDT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7" as Address;
 
@@ -892,7 +818,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       "step-2",
       "swap",
       ["step-1"],
-      [makeToken(USDC_ADDRESS, 2000000n, 1), makeToken(USDT_ADDRESS, 5000000n, 1)],
+      [makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-1" }), makeToken(USDT_ADDRESS, 5000000n, 1)],
       makeToken(DAI_ADDRESS, 7000000n, 1),
     );
 
@@ -924,7 +850,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
     expect(finalState.plan[1].inputTokens[1].amount).toBe(5000000n);
   });
 
-  test("recalculation updates only first matching input when multiple match", async () => {
+  test("recalculation updates only correct matching input when multiple tokens match", async () => {
     const WALLET_2 = "0x2234567890123456789012345678901234567890" as Address;
 
     const step1: TransactionStep = createStep(
@@ -939,7 +865,10 @@ describe("recalculatePlan - comprehensive coverage", () => {
       "step-2",
       "swap",
       ["step-1"],
-      [makeToken(USDC_ADDRESS, 2000000n, 1), makeToken(USDC_ADDRESS, 1000000n, 1, WALLET_2)],
+      [
+        makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-1" }),
+        makeToken(USDC_ADDRESS, 1000000n, 1, { walletAddress: WALLET_2 }),
+      ],
       makeToken(DAI_ADDRESS, 3000000n, 1),
     );
 
@@ -986,7 +915,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       "step-2",
       "bridge",
       ["step-1"],
-      [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      [makeToken(USDC_ADDRESS, 1000000n, 1, { provenance: "step-1" })],
       makeToken(USDC_ADDRESS, 1000000n, 10),
     );
 
@@ -994,7 +923,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       "step-3",
       "claim",
       ["step-2"],
-      [makeToken(USDC_ADDRESS, 1000000n, 10)],
+      [makeToken(USDC_ADDRESS, 1000000n, 10, { provenance: "step-2" })],
       makeToken(USDC_ADDRESS, 1000000n, 10),
     );
 
@@ -1002,7 +931,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       "step-4",
       "transfer",
       ["step-3"],
-      [makeToken(USDC_ADDRESS, 1000000n, 10)],
+      [makeToken(USDC_ADDRESS, 1000000n, 10, { provenance: "step-3" })],
       makeToken(USDC_ADDRESS, 1000000n, 10),
     );
 
@@ -1042,6 +971,91 @@ describe("recalculatePlan - comprehensive coverage", () => {
     expect(finalState.plan[3].inputTokens[0].amount).toBe(1200000n);
     expect(finalState.plan[3].outputToken.amount).toBe(1200000n);
   });
+
+  test("bridge with multiple swaps + existing USDC - recalculation preserves all sources", async () => {
+    // Setup: 2 swaps + existing USDC → bridge
+    // Uses provenance: inputTokens[0,1] have provenance, inputTokens[2] does not
+    const existingUSDC = makeToken(USDC_ADDRESS, 398000000n, 10); // No provenance - existing USDC
+
+    const swap1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [],
+      [makeToken(WETH_ADDRESS, 1000000n, 10)],
+      makeToken(USDC_ADDRESS, 784000000n, 10, { provenance: "step-1" }), // Has provenance
+    );
+
+    const swap2: TransactionStep = createStep(
+      "step-2",
+      "swap",
+      [],
+      [makeToken(DAI_ADDRESS, 500000n, 10)],
+      makeToken(USDC_ADDRESS, 201000000n, 10, { provenance: "step-2" }), // Has provenance
+    );
+
+    const bridge: TransactionStep = createStep(
+      "step-3",
+      "bridge",
+      ["step-1", "step-2"], // Depends on both swaps for skip management
+      [
+        makeToken(USDC_ADDRESS, 784000000n, 10, { provenance: "step-1" }), // Has provenance from step-1
+        makeToken(USDC_ADDRESS, 201000000n, 10, { provenance: "step-2" }), // Has provenance from step-2
+        existingUSDC, // No provenance - won't be updated
+      ],
+      makeToken(USDC_ADDRESS, 1383000000n, 1, { provenance: "step-3" }), // Output on different chain
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [swap1, swap2, bridge],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    // Mock swap1 to produce actual amount 784.5 USDC
+    vi.mocked(executeOdosSwapOrTransfer)
+      .mockResolvedValueOnce({ amount: 784500000n, transactionHash: "0xswap1" })
+      .mockResolvedValueOnce({ amount: 200500000n, transactionHash: "0xswap2" });
+
+    // Mock bridge execution
+    vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xbridge", 10]);
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // Verify swap 1 completed
+    expect(finalState.results["step-1"].status).toBe("success");
+    expect(finalState.results["step-1"].actualOutput?.amount).toBe(784500000n);
+
+    // Verify swap 2 completed
+    expect(finalState.results["step-2"].status).toBe("success");
+    expect(finalState.results["step-2"].actualOutput?.amount).toBe(200500000n);
+
+    // CRITICAL: Verify bridge has all 3 inputs preserved with correct amounts
+    const bridgeStep = finalState.plan[2];
+    expect(bridgeStep.inputTokens).toHaveLength(3);
+
+    // First input: swap1 output (updated to actual via provenance)
+    expect(bridgeStep.inputTokens[0].amount).toBe(784500000n);
+    expect(bridgeStep.inputTokens[0].provenance).toBe("step-1");
+
+    // Second input: swap2 output (updated to actual via provenance)
+    expect(bridgeStep.inputTokens[1].amount).toBe(200500000n);
+    expect(bridgeStep.inputTokens[1].provenance).toBe("step-2");
+
+    // Third input: existing USDC (unchanged - no provenance)
+    expect(bridgeStep.inputTokens[2].amount).toBe(398000000n);
+    expect(bridgeStep.inputTokens[2].provenance).toBeUndefined();
+
+    // Verify bridge output reflects sum of all inputs
+    const totalInput = 784500000n + 200500000n + 398000000n;
+    expect(bridgeStep.outputToken.amount).toBe(totalInput);
+  });
 });
 
 describe("shouldSkipStep", () => {
@@ -1051,7 +1065,11 @@ describe("shouldSkipStep", () => {
     status: "pending",
     chainId: 1,
     inputTokens: [],
-    outputToken: makeToken("0x123" as Address, 1000n, 1, "0x456" as Address, "USDC", 6),
+    outputToken: makeToken("0x123" as Address, 1000n, 1, {
+      walletAddress: "0x456" as Address,
+      symbol: "USDC",
+      decimals: 6,
+    }),
     dependsOn,
     partialDependency,
   });

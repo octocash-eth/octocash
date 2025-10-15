@@ -10,6 +10,13 @@ export const USDT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7" as Addr
 export const ETH_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
 export const WALLET = "0x1234567890123456789012345678901234567890" as Address;
 
+export type MakeTokenOptions = {
+  walletAddress?: Address;
+  symbol?: string;
+  decimals?: number;
+  provenance?: string;
+};
+
 /**
  * Helper to create test TokenAmount
  */
@@ -17,16 +24,15 @@ export const makeToken = (
   token: Address,
   amount: bigint,
   chainId: number,
-  walletAddress: Address = WALLET,
-  symbol = "USDC",
-  decimals = 6,
+  options?: MakeTokenOptions,
 ): TokenAmount => ({
   token,
   amount,
   chainId,
-  walletAddress,
-  symbol,
-  decimals,
+  walletAddress: options?.walletAddress || WALLET,
+  symbol: options?.symbol || "USDC",
+  decimals: options?.decimals || 6,
+  provenance: options?.provenance,
 });
 
 /**
@@ -42,7 +48,7 @@ export const makeStep = (
   status: "pending",
   chainId: 1,
   inputTokens: [],
-  outputToken: makeToken("0x456" as Address, 1000n, 1, WALLET, "USDC", 6),
+  outputToken: makeToken("0x456" as Address, 1000n, 1),
   dependsOn,
   partialDependency,
 });

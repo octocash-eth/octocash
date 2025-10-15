@@ -202,6 +202,7 @@ async function executeStep(
       const actualOutput: TokenAmount = {
         ...step.outputToken,
         amount: actualAmount,
+        provenance: step.id, // When swap is successful, the amout of all dependent steps will update
       };
 
       return {
@@ -214,13 +215,21 @@ async function executeStep(
     }
 
     case "bridge": {
+      // Sum all input amounts (bridge may have multiple USDC sources)
+      const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+      const combinedInput = { ...step.inputTokens[0], amount: totalAmount };
+
       // Execute CCTP burn
-      const [burnTx] = await executeCCTPBurn(step.inputTokens[0], step.outputToken, sendCalls);
+      const [burnTx] = await executeCCTPBurn(combinedInput, step.outputToken, sendCalls);
 
       return {
         stepId: step.id,
         status: "success",
         chainId: step.chainId,
+        actualOutput: {
+          ...step.outputToken,
+          provenance: step.id, // When bridge is successful, the amount of all dependent steps will update
+        },
         transactionHash: burnTx,
       };
     }
@@ -258,6 +267,7 @@ async function executeStep(
       const actualOutput: TokenAmount = {
         ...step.outputToken,
         amount: actualAmount,
+        provenance: step.id, // When attestation is successful, the amount of all dependent steps will update
       };
 
       return {
@@ -290,6 +300,7 @@ async function executeStep(
       const actualOutput: TokenAmount = {
         ...step.outputToken,
         amount: actualAmount,
+        provenance: step.id, // When claim is successful, the amount of all dependent steps will update
       };
 
       return {
@@ -332,7 +343,11 @@ async function executeStep(
         stepId: step.id,
         status: "success",
         chainId: step.chainId,
-        actualOutput: inputToken,
+        actualOutput: {
+          ...inputToken,
+          walletAddress: step.outputToken.walletAddress,
+          provenance: step.id, // When transfer is successful, the amount of all dependent steps will update
+        },
         transactionHash,
       };
     }
@@ -456,12 +471,12 @@ async function calculateStepOutput(step: TransactionStep, updatedInputs: TokenAm
       return step.outputToken;
 
     case "bridge":
-      // Bridge outputs what it inputs (1:1, same token/amount)
+      // Bridge outputs sum of all inputs (minus bridge fees, handled elsewhere)
       if (updatedInputs.length > 0) {
-        const firstInput = updatedInputs[0];
+        const totalAmount = updatedInputs.reduce((sum, t) => sum + t.amount, 0n);
         return {
           ...step.outputToken,
-          amount: firstInput.amount,
+          amount: totalAmount,
         };
       }
       return step.outputToken;
@@ -529,46 +544,23 @@ async function recalculatePlan(
       continue; // Skip, no updates needed
     }
 
-    // Update inputs: replace any input that matches a changed output
+    // Update inputs: check each token's provenance to see if it needs updating
     const updatedInputs: TokenAmount[] = [];
 
     for (const input of step.inputTokens) {
-      // Find if this input matches any changed output
-      let matchingChange: TokenAmount | undefined;
-      for (const changedOutput of changedOutputs.values()) {
-        if (
-          changedOutput.token === input.token &&
-          changedOutput.chainId === input.chainId &&
-          changedOutput.walletAddress === input.walletAddress
-        ) {
-          matchingChange = changedOutput;
-          break;
+      const sourceStepId = input.provenance;
+
+      if (sourceStepId) {
+        const changedOutput = changedOutputs.get(sourceStepId);
+        if (changedOutput) {
+          // Update amount but preserve other metadata including provenance
+          updatedInputs.push({ ...input, amount: changedOutput.amount });
+          continue;
         }
       }
 
-      if (matchingChange) {
-        updatedInputs.push({ ...input, amount: matchingChange.amount });
-      } else {
-        updatedInputs.push(input);
-      }
-    }
-
-    // Handle case where dependency added a new token (not in original inputs)
-    for (const depId of step.dependsOn) {
-      const changedOutput = changedOutputs.get(depId);
-      if (changedOutput) {
-        // Check if this output is already in updatedInputs
-        const existsInInputs = updatedInputs.some(
-          (input) =>
-            input.token === changedOutput.token &&
-            input.chainId === changedOutput.chainId &&
-            input.walletAddress === changedOutput.walletAddress,
-        );
-
-        if (!existsInInputs) {
-          updatedInputs.push(changedOutput);
-        }
-      }
+      // No provenance or no change: keep input unchanged
+      updatedInputs.push(input);
     }
 
     // Recalculate output based on step type

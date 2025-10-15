@@ -88,8 +88,8 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
   test("complete consolidation flow - all steps succeed", async () => {
     // Step 1-4: User selects source tokens
     const sourceTokens: TokenAmount[] = [
-      makeToken(USDC_OPTIMISM, 1000000n, 10, WALLET), // 1 USDC on Optimism
-      makeToken(ETH_ADDRESS, 200000000000000000n, 137, WALLET, "ETH", 18), // 0.2 ETH on Polygon
+      makeToken(USDC_OPTIMISM, 1000000n, 10, { walletAddress: WALLET }), // 1 USDC on Optimism
+      makeToken(ETH_ADDRESS, 200000000000000000n, 137, { walletAddress: WALLET, symbol: "ETH", decimals: 18 }), // 0.2 ETH on Polygon
     ];
 
     const destinationToken = {
@@ -202,7 +202,7 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
 
   test("verify estimated vs actual amounts are tracked", async () => {
     const sourceTokens: TokenAmount[] = [
-      makeToken(ETH_ADDRESS, 200000000000000000n, 137, WALLET, "POL", 18), // 0.2 POL on Polygon
+      makeToken(ETH_ADDRESS, 200000000000000000n, 137, { walletAddress: WALLET, symbol: "POL", decimals: 18 }), // 0.2 POL on Polygon
     ];
 
     const destinationToken = {
@@ -254,7 +254,7 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
 
   test("verify transaction cards show correct states during execution", async () => {
     const sourceTokens: TokenAmount[] = [
-      makeToken(USDC_OPTIMISM, 1000000n, 10, WALLET), // 1 USDC on Optimism
+      makeToken(USDC_OPTIMISM, 1000000n, 10, { walletAddress: WALLET }), // 1 USDC on Optimism
     ];
 
     const destinationToken = {
