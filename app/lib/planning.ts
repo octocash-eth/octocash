@@ -186,7 +186,7 @@ async function createSwapSteps(
         type: "swap",
         status: "pending",
         chainId: targetToken.chainId,
-        inputTokens: batch,
+        inputTokens: batch as [TokenAmount, ...TokenAmount[]],
         outputToken: outputTokenWithProvenance,
         dependsOn: dependencies,
         partialDependency: false,
@@ -334,20 +334,12 @@ async function createBridgeSteps(
     const deps: string[] = []; // Tokens from swap outputs come first (with dependencies), then existing USDC
 
     // Find which tokens are swap outputs and track their step IDs
-    const swapStepsOnChain = steps.filter(
-      (s) => s.chainId === chainId && s.type === "swap" && s.outputToken.walletAddress === walletAddress,
-    );
-
     for (const token of usdcTokens) {
-      // Check if this token is a swap output
-      const correspondingSwap = swapStepsOnChain.find(
-        (s) => s.outputToken.amount === token.amount && isAddressEqual(s.outputToken.token, token.token),
-      );
-
-      if (correspondingSwap) {
+      // Check if this token has provenance from a swap step
+      if (token.provenance) {
         // This is a swap output - add it first with dependency
         inputTokens.unshift(token);
-        deps.unshift(correspondingSwap.id);
+        deps.unshift(token.provenance);
       } else {
         // This is existing USDC - add it after swap outputs
         inputTokens.push(token);
@@ -391,7 +383,7 @@ async function createBridgeSteps(
       type: "bridge",
       status: "pending",
       chainId,
-      inputTokens,
+      inputTokens: inputTokens as [TokenAmount, ...TokenAmount[]],
       outputToken: bridgeOutput,
       dependsOn: deps,
       partialDependency: false,
@@ -447,7 +439,7 @@ function createAttestationAndClaimSteps(
     type: "attestation",
     status: "pending",
     chainId: destinationToken.chainId,
-    inputTokens: bridgeSteps.map((s) => s.outputToken),
+    inputTokens: bridgeSteps.map((s) => s.outputToken) as [TokenAmount, ...TokenAmount[]],
     outputToken: {
       token: destChainUSDC,
       amount: bridgeSteps.reduce((sum, s) => sum + s.outputToken.amount, 0n),
@@ -479,7 +471,7 @@ function createAttestationAndClaimSteps(
     type: "claim",
     status: "pending",
     chainId: destinationToken.chainId,
-    inputTokens: bridgeSteps.map((s) => s.outputToken),
+    inputTokens: bridgeSteps.map((s) => s.outputToken) as [TokenAmount, ...TokenAmount[]],
     outputToken: claimOutput,
     dependsOn: [...bridgeStepIds, attestationStepId],
     partialDependency: true,

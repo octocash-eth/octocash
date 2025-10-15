@@ -225,11 +225,6 @@ export async function getSwapQuote(
 ): Promise<TokenAmount> {
   const inputTokens = Array.isArray(input) ? input : [input];
 
-  // Validate at least one input token is provided
-  if (inputTokens.length === 0) {
-    throw new Error("At least one input token is required");
-  }
-
   // Validate all inputs are on the same chain
   for (const token of inputTokens) {
     if (token.chainId !== outputToken.chainId) {

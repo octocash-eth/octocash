@@ -218,7 +218,7 @@ describe("executeConsolidationPlan", () => {
       type: "attestation",
       status: "pending",
       chainId: 1,
-      inputTokens: [],
+      inputTokens: [bridge1.outputToken, bridge2.outputToken],
       outputToken: makeToken(USDC_ADDRESS, 0n, 1),
       dependsOn: ["bridge-1", "bridge-2"], // Depends on both bridges
       partialDependency: true, // Can adapt to partial dependencies
@@ -293,7 +293,7 @@ describe("executeConsolidationPlan", () => {
       type: "attestation",
       status: "pending",
       chainId: 1,
-      inputTokens: [],
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 0n, 1),
       dependsOn: ["bridge-1"],
       partialDependency: false,
@@ -319,7 +319,7 @@ describe("executeConsolidationPlan", () => {
       type: "claim",
       status: "pending",
       chainId: 1,
-      inputTokens: [],
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
       dependsOn: [],
       partialDependency: false,
@@ -403,7 +403,7 @@ describe("executeConsolidationPlan", () => {
       type: "unknown-type" as any,
       status: "pending" as const,
       chainId: 1,
-      inputTokens: [],
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)] as [TokenAmount, ...TokenAmount[]],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
       dependsOn: [],
       partialDependency: false,
@@ -484,13 +484,13 @@ describe("recalculatePlan - comprehensive coverage", () => {
     id: string,
     type: TransactionStep["type"],
     dependsOn: string[],
-    inputTokens: TokenAmount[],
+    inputTokens: [TokenAmount, ...TokenAmount[]],
     outputToken: TokenAmount,
   ): TransactionStep => ({
     id,
     type,
     status: "pending",
-    chainId: inputTokens.length > 0 ? inputTokens[0].chainId : outputToken.chainId,
+    chainId: inputTokens[0].chainId,
     inputTokens,
     outputToken,
     dependsOn,
@@ -765,7 +765,13 @@ describe("recalculatePlan - comprehensive coverage", () => {
       makeToken(USDC_ADDRESS, 2000000n, 10),
     );
 
-    const step2: TransactionStep = createStep("step-2", "attestation", ["step-1"], [], makeToken(USDC_ADDRESS, 0n, 10));
+    const step2: TransactionStep = createStep(
+      "step-2",
+      "attestation",
+      ["step-1"],
+      [makeToken(USDC_ADDRESS, 2000000n, 10)],
+      makeToken(USDC_ADDRESS, 0n, 10),
+    );
 
     const state: ConsolidationState = {
       id: "test",
@@ -1064,7 +1070,7 @@ describe("shouldSkipStep", () => {
     type: "swap",
     status: "pending",
     chainId: 1,
-    inputTokens: [],
+    inputTokens: [makeToken("0x789" as Address, 500n, 1)],
     outputToken: makeToken("0x123" as Address, 1000n, 1, {
       walletAddress: "0x456" as Address,
       symbol: "USDC",

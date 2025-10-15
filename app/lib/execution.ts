@@ -202,7 +202,7 @@ async function executeStep(
       const actualOutput: TokenAmount = {
         ...step.outputToken,
         amount: actualAmount,
-        provenance: step.id, // When swap is successful, the amout of all dependent steps will update
+        provenance: step.id, // When swap is successful, the amount of all dependent steps will update
       };
 
       return {
@@ -215,6 +215,25 @@ async function executeStep(
     }
 
     case "bridge": {
+      // Validate all input tokens are homogeneous before combining
+      if (step.inputTokens.length > 1) {
+        const firstToken = step.inputTokens[0];
+        for (let i = 1; i < step.inputTokens.length; i++) {
+          const token = step.inputTokens[i];
+          if (
+            token.token !== firstToken.token ||
+            token.chainId !== firstToken.chainId ||
+            token.walletAddress !== firstToken.walletAddress
+          ) {
+            throw new Error(
+              `Cannot combine heterogeneous input tokens for bridge step ${step.id}: ` +
+                `token[0]={token: ${firstToken.token}, chainId: ${firstToken.chainId}, wallet: ${firstToken.walletAddress}} vs ` +
+                `token[${i}]={token: ${token.token}, chainId: ${token.chainId}, wallet: ${token.walletAddress}}`,
+            );
+          }
+        }
+      }
+
       // Sum all input amounts (bridge may have multiple USDC sources)
       const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
       const combinedInput = { ...step.inputTokens[0], amount: totalAmount };
@@ -457,52 +476,40 @@ function getSkipReason(step: TransactionStep, results: Record<string, StepResult
  * @param updatedInputs - Updated input token amounts
  * @returns Updated output token amount
  */
-async function calculateStepOutput(step: TransactionStep, updatedInputs: TokenAmount[]): Promise<TokenAmount> {
+async function calculateStepOutput(
+  step: TransactionStep,
+  updatedInputs: [TokenAmount, ...TokenAmount[]],
+): Promise<TokenAmount> {
   switch (step.type) {
     case "swap":
       // Re-quote with ALL inputs for proportional adjustment
-      if (updatedInputs.length > 0) {
-        try {
-          return await getSwapQuote(updatedInputs, step.outputToken);
-        } catch (_error) {
-          return step.outputToken; // Keep original on failure
-        }
+      try {
+        return await getSwapQuote(updatedInputs, step.outputToken);
+      } catch (_error) {
+        return step.outputToken; // Keep original on failure
       }
-      return step.outputToken;
-
-    case "bridge":
+    case "bridge": {
       // Bridge outputs sum of all inputs (minus bridge fees, handled elsewhere)
-      if (updatedInputs.length > 0) {
-        const totalAmount = updatedInputs.reduce((sum, t) => sum + t.amount, 0n);
-        return {
-          ...step.outputToken,
-          amount: totalAmount,
-        };
-      }
-      return step.outputToken;
 
+      const totalAmount = updatedInputs.reduce((sum, t) => sum + t.amount, 0n);
+      return {
+        ...step.outputToken,
+        amount: totalAmount,
+      };
+    }
     case "claim":
       // Claim outputs what it claims (1:1, amount from dependency)
-      if (updatedInputs.length > 0) {
-        const firstInput = updatedInputs[0];
-        return {
-          ...step.outputToken,
-          amount: firstInput.amount,
-        };
-      }
-      return step.outputToken;
 
+      return {
+        ...step.outputToken,
+        amount: updatedInputs[0].amount,
+      };
     case "transfer":
       // Transfer outputs what it inputs (1:1)
-      if (updatedInputs.length > 0) {
-        const firstInput = updatedInputs[0];
-        return {
-          ...step.outputToken,
-          amount: firstInput.amount,
-        };
-      }
-      return step.outputToken;
-
+      return {
+        ...step.outputToken,
+        amount: updatedInputs[0].amount,
+      };
     case "attestation":
       // Attestations don't change amounts
       return step.outputToken;
@@ -545,23 +552,20 @@ async function recalculatePlan(
     }
 
     // Update inputs: check each token's provenance to see if it needs updating
-    const updatedInputs: TokenAmount[] = [];
-
-    for (const input of step.inputTokens) {
+    const updatedInputs = step.inputTokens.map((input) => {
       const sourceStepId = input.provenance;
 
       if (sourceStepId) {
         const changedOutput = changedOutputs.get(sourceStepId);
         if (changedOutput) {
           // Update amount but preserve other metadata including provenance
-          updatedInputs.push({ ...input, amount: changedOutput.amount });
-          continue;
+          return { ...input, amount: changedOutput.amount };
         }
       }
 
       // No provenance or no change: keep input unchanged
-      updatedInputs.push(input);
-    }
+      return input;
+    }) as [TokenAmount, ...TokenAmount[]];
 
     // Recalculate output based on step type
     const newOutput = await calculateStepOutput(step, updatedInputs);
