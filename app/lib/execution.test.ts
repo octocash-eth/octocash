@@ -1062,6 +1062,177 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const totalInput = 784500000n + 200500000n + 398000000n;
     expect(bridgeStep.outputToken.amount).toBe(totalInput);
   });
+
+  test("swap with some zero-amount tokens - should filter them out and execute", async () => {
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [],
+      [
+        makeToken(WETH_ADDRESS, 1000000n, 1), // Non-zero
+        makeToken(USDC_ADDRESS, 0n, 1), // Zero - should be filtered
+        makeToken(DAI_ADDRESS, 500000n, 1), // Non-zero
+      ],
+      makeToken(USDC_ADDRESS, 1500000n, 1),
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 1400000n,
+      transactionHash: "0xswap1",
+    });
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-1"].status).toBe("success");
+
+    // Verify that executeOdosSwapOrTransfer was called with only non-zero tokens
+    expect(executeOdosSwapOrTransfer).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ token: WETH_ADDRESS, amount: 1000000n }),
+        expect.objectContaining({ token: DAI_ADDRESS, amount: 500000n }),
+      ]),
+      expect.anything(),
+      expect.anything(),
+    );
+
+    // Verify zero-amount token was filtered out
+    const callArgs = vi.mocked(executeOdosSwapOrTransfer).mock.calls[0][0];
+    expect(callArgs).toHaveLength(2); // Only 2 tokens, not 3
+    expect(callArgs.every((t: TokenAmount) => t.amount > 0n)).toBe(true);
+  });
+
+  test("swap with all zero-amount tokens - should throw error", async () => {
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [],
+      [
+        makeToken(WETH_ADDRESS, 0n, 1), // Zero
+        makeToken(USDC_ADDRESS, 0n, 1), // Zero
+      ],
+      makeToken(DAI_ADDRESS, 0n, 1),
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("paused");
+    expect(finalState.results["step-1"].status).toBe("failed");
+
+    // Check the error details (original error) instead of the user-friendly message
+    const errorDetails = finalState.results["step-1"].error?.details;
+    expect(errorDetails instanceof Error).toBe(true);
+    expect((errorDetails as Error).message).toContain("Cannot execute swap with zero input amounts");
+
+    // Verify executeOdosSwapOrTransfer was never called
+    expect(executeOdosSwapOrTransfer).not.toHaveBeenCalled();
+  });
+
+  test("bridge with some zero-amount tokens - should filter them out and execute", async () => {
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "bridge",
+      [],
+      [
+        makeToken(USDC_ADDRESS, 1000000n, 1), // Non-zero
+        makeToken(USDC_ADDRESS, 0n, 1), // Zero - should be filtered
+        makeToken(USDC_ADDRESS, 500000n, 1), // Non-zero
+      ],
+      makeToken(USDC_ADDRESS, 1500000n, 10),
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xburn1", 1]);
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-1"].status).toBe("success");
+
+    // Verify that executeCCTPBurn was called with summed non-zero amounts
+    expect(executeCCTPBurn).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 1500000n }), // 1000000n + 500000n (zero filtered out)
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  test("bridge with all zero-amount tokens - should throw error", async () => {
+    const step1: TransactionStep = createStep(
+      "step-1",
+      "bridge",
+      [],
+      [
+        makeToken(USDC_ADDRESS, 0n, 1), // Zero
+        makeToken(USDC_ADDRESS, 0n, 1), // Zero
+      ],
+      makeToken(USDC_ADDRESS, 0n, 10),
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("paused");
+    expect(finalState.results["step-1"].status).toBe("failed");
+
+    // Check the error details (original error) instead of the user-friendly message
+    const errorDetails = finalState.results["step-1"].error?.details;
+    expect(errorDetails instanceof Error).toBe(true);
+    expect((errorDetails as Error).message).toContain("Cannot execute bridge with zero input amounts");
+
+    // Verify executeCCTPBurn was never called
+    expect(executeCCTPBurn).not.toHaveBeenCalled();
+  });
 });
 
 describe("shouldSkipStep", () => {
@@ -1181,5 +1352,416 @@ describe("adaptStepForPartialDependencies", () => {
     const adapted = adaptStepForPartialDependencies(step, results);
     expect(adapted.dependsOn).toEqual(["dep-1"]);
     expect(adapted.adaptedFrom).toEqual(["dep-1", "dep-2"]);
+  });
+});
+
+describe("Additional edge cases for complete coverage", () => {
+  const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+  const DAI_ADDRESS = "0x6B175474E89094C44Da98b954EedeAC495271d0F" as Address;
+
+  let mockWalletClient: WalletClient<HttpTransport, Chain, Account>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    mockWalletClient = {
+      account: { address: WALLET } as Account,
+      chain: { id: 1 } as Chain,
+    } as WalletClient<HttpTransport, Chain, Account>;
+
+    vi.mocked(getSwapQuote).mockResolvedValue(makeToken(USDC_ADDRESS, 1000000n, 1));
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap" });
+    vi.mocked(executeCCTPBurn).mockResolvedValue(["0xburn", 1]);
+    vi.mocked(retrieveAttestations).mockResolvedValue([
+      {
+        message: `0x${"00".repeat(32)}`,
+        attestation: `0x${"00".repeat(65)}`,
+        status: "complete",
+        decodedMessage: {
+          nonce: `0x${"00".repeat(32)}`,
+          destinationDomain: "0",
+          decodedMessageBody: {
+            amount: "1000000",
+            feeExecuted: "0",
+          },
+        },
+      },
+    ]);
+    vi.mocked(executeCCTPMint).mockResolvedValue(["0xmint", []]);
+  });
+
+  test("bridge with heterogeneous tokens - different token addresses", async () => {
+    const bridgeStep: TransactionStep = {
+      id: "bridge-1",
+      type: "bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken(USDC_ADDRESS, 1000000n, 1),
+        makeToken(DAI_ADDRESS, 2000000n, 1), // Different token!
+      ],
+      outputToken: makeToken(USDC_ADDRESS, 3000000n, 10),
+      dependsOn: [],
+      partialDependency: false,
+    };
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [bridgeStep],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("paused");
+    expect(finalState.results["bridge-1"].status).toBe("failed");
+    const errorDetails = finalState.results["bridge-1"].error?.details;
+    expect(errorDetails).toBeInstanceOf(Error);
+    expect((errorDetails as Error).message).toContain("Cannot combine heterogeneous input tokens");
+    expect((errorDetails as Error).message).toContain("token:");
+  });
+
+  test("bridge with heterogeneous tokens - different chain IDs", async () => {
+    const bridgeStep: TransactionStep = {
+      id: "bridge-1",
+      type: "bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken(USDC_ADDRESS, 1000000n, 1),
+        makeToken(USDC_ADDRESS, 2000000n, 137), // Different chain!
+      ],
+      outputToken: makeToken(USDC_ADDRESS, 3000000n, 10),
+      dependsOn: [],
+      partialDependency: false,
+    };
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [bridgeStep],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("paused");
+    expect(finalState.results["bridge-1"].status).toBe("failed");
+    const errorDetails = finalState.results["bridge-1"].error?.details;
+    expect(errorDetails).toBeInstanceOf(Error);
+    expect((errorDetails as Error).message).toContain("Cannot combine heterogeneous input tokens");
+    expect((errorDetails as Error).message).toContain("chainId:");
+  });
+
+  test("bridge with heterogeneous tokens - different wallet addresses", async () => {
+    const WALLET_2 = "0x2234567890123456789012345678901234567890" as Address;
+
+    const bridgeStep: TransactionStep = {
+      id: "bridge-1",
+      type: "bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken(USDC_ADDRESS, 1000000n, 1),
+        makeToken(USDC_ADDRESS, 2000000n, 1, { walletAddress: WALLET_2 }), // Different wallet!
+      ],
+      outputToken: makeToken(USDC_ADDRESS, 3000000n, 10),
+      dependsOn: [],
+      partialDependency: false,
+    };
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [bridgeStep],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("paused");
+    expect(finalState.results["bridge-1"].status).toBe("failed");
+    const errorDetails = finalState.results["bridge-1"].error?.details;
+    expect(errorDetails).toBeInstanceOf(Error);
+    expect((errorDetails as Error).message).toContain("Cannot combine heterogeneous input tokens");
+    expect((errorDetails as Error).message).toContain("wallet:");
+  });
+
+  test("resume from 'executing' status - recovery scenario", async () => {
+    const step1: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      dependsOn: [],
+      partialDependency: false,
+    };
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1],
+      currentStepIndex: 0,
+      status: "executing", // Resume from executing status
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-1"].status).toBe("success");
+  });
+
+  test("resume execution from middle of plan - currentStepIndex > 0", async () => {
+    const step1: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "success",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
+      dependsOn: [],
+      partialDependency: false,
+      transactionHash: "0xhash1",
+    };
+
+    const step2: TransactionStep = {
+      id: "step-2",
+      type: "bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 900000n, 1, { provenance: "step-1" })],
+      outputToken: makeToken(USDC_ADDRESS, 900000n, 10),
+      dependsOn: ["step-1"],
+      partialDependency: false,
+    };
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2],
+      currentStepIndex: 1, // Start from step 2
+      status: "paused",
+      results: {
+        "step-1": {
+          stepId: "step-1",
+          status: "success",
+          chainId: 1,
+          transactionHash: "0xhash1",
+          actualOutput: makeToken(USDC_ADDRESS, 900000n, 1, { provenance: "step-1" }),
+        },
+      },
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xbridge", 1]);
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-1"].status).toBe("success"); // Should stay success
+    expect(finalState.results["step-2"].status).toBe("success"); // Should be executed
+  });
+
+  test("skip step when dependency is already skipped - cascading skip", async () => {
+    const step1: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "skipped",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      dependsOn: [],
+      partialDependency: false,
+    };
+
+    const step2: TransactionStep = {
+      id: "step-2",
+      type: "bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1, { provenance: "step-1" })],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 10),
+      dependsOn: ["step-1"],
+      partialDependency: false,
+    };
+
+    const step3: TransactionStep = {
+      id: "step-3",
+      type: "swap",
+      status: "pending",
+      chainId: 10,
+      inputTokens: [makeToken(DAI_ADDRESS, 500000n, 10)],
+      outputToken: makeToken(USDC_ADDRESS, 450000n, 10),
+      dependsOn: [],
+      partialDependency: false,
+    };
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2, step3],
+      currentStepIndex: 1, // Start from step 2 since step 1 is already processed
+      status: "paused",
+      results: {
+        "step-1": {
+          stepId: "step-1",
+          status: "skipped",
+          chainId: 1,
+          skipReason: "Previous step failed",
+        },
+      },
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: true,
+    };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("partial");
+    expect(finalState.results["step-1"].status).toBe("skipped");
+    expect(finalState.results["step-2"].status).toBe("skipped");
+    expect(finalState.results["step-2"].skipReason).toContain("skipped step step-1");
+    expect(finalState.results["step-3"].status).toBe("success");
+  });
+
+  test("execution skips already completed steps", async () => {
+    const step1: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "success",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
+      dependsOn: [],
+      partialDependency: false,
+      transactionHash: "0xhash1",
+      executedAt: Date.now(),
+    };
+
+    const step2: TransactionStep = {
+      id: "step-2",
+      type: "bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 900000n, 1, { provenance: "step-1" })],
+      outputToken: makeToken(USDC_ADDRESS, 900000n, 10),
+      dependsOn: ["step-1"],
+      partialDependency: false,
+    };
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2],
+      currentStepIndex: 0, // Start from beginning
+      status: "ready",
+      results: {
+        "step-1": {
+          stepId: "step-1",
+          status: "success",
+          chainId: 1,
+          transactionHash: "0xhash1",
+          actualOutput: makeToken(USDC_ADDRESS, 900000n, 1, { provenance: "step-1" }),
+        },
+      },
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xbridge", 1]);
+
+    // Execute step 1 should NOT be called again (already successful)
+    vi.mocked(executeOdosSwapOrTransfer).mockClear();
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-1"].status).toBe("success");
+    expect(finalState.results["step-2"].status).toBe("success");
+    // Verify step 1 was NOT re-executed
+    expect(executeOdosSwapOrTransfer).not.toHaveBeenCalled();
+  });
+
+  test("execution skips already failed steps", async () => {
+    const step1: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "failed",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
+      dependsOn: [],
+      partialDependency: false,
+    };
+
+    const step2: TransactionStep = {
+      id: "step-2",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(DAI_ADDRESS, 500000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 450000n, 1),
+      dependsOn: [],
+      partialDependency: false,
+    };
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [step1, step2],
+      currentStepIndex: 0,
+      status: "paused",
+      results: {
+        "step-1": {
+          stepId: "step-1",
+          status: "failed",
+          chainId: 1,
+        },
+      },
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: true,
+    };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("partial");
+    expect(finalState.results["step-1"].status).toBe("failed");
+    expect(finalState.results["step-2"].status).toBe("success");
+    // Verify step 1 was NOT re-executed
+    expect(executeOdosSwapOrTransfer).toHaveBeenCalledTimes(1); // Only step 2
   });
 });

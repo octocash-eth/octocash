@@ -37,143 +37,155 @@ export async function* executeConsolidationPlan(
 
   let pausedDueToFailure = false;
 
-  try {
-    // Execute steps in order
-    for (let i = workingState.currentStepIndex; i < workingState.plan.length; i++) {
-      const step = workingState.plan[i];
-      const updatedState = {
-        ...workingState,
-        currentStepIndex: i,
+  // Execute steps in order
+  for (let i = workingState.currentStepIndex; i < workingState.plan.length; i++) {
+    const step = workingState.plan[i];
+    const updatedState = {
+      ...workingState,
+      currentStepIndex: i,
+    };
+    Object.assign(workingState, updatedState);
+
+    // Skip if already completed or failed
+    const existingResult = workingState.results[step.id];
+    if (existingResult?.status === "success" || existingResult?.status === "failed") {
+      continue;
+    }
+
+    // Check if step should be skipped (T015)
+    if (shouldSkipStep(step, workingState.results)) {
+      const skipReason = getSkipReason(step, workingState.results);
+      const skippedStep = { ...step, status: "skipped" as const };
+      workingState.results = {
+        ...workingState.results,
+        [step.id]: {
+          stepId: step.id,
+          status: "skipped",
+          chainId: step.chainId,
+          skipReason,
+        },
       };
-      Object.assign(workingState, updatedState);
-
-      // Skip if already completed or failed
-      const existingResult = workingState.results[step.id];
-      if (existingResult?.status === "success" || existingResult?.status === "failed") {
-        continue;
-      }
-
-      // Check if step should be skipped (T015)
-      if (shouldSkipStep(step, workingState.results)) {
-        const skipReason = getSkipReason(step, workingState.results);
-        const skippedStep = { ...step, status: "skipped" as const };
-        workingState.results = {
-          ...workingState.results,
-          [step.id]: {
-            stepId: step.id,
-            status: "skipped",
-            chainId: step.chainId,
-            skipReason,
-          },
-        };
-        workingState.plan = [...workingState.plan];
-        workingState.plan[i] = skippedStep;
-        workingState.updatedAt = Date.now();
-
-        // Yield state after skipping step
-        yield structuredClone(workingState);
-        continue;
-      }
-
-      // Adapt step for partial dependencies (T015)
-      const adaptedStep = adaptStepForPartialDependencies(step, workingState.results);
       workingState.plan = [...workingState.plan];
-      workingState.plan[i] = adaptedStep;
-
-      // Execute step - create new step reference with executing status
-      const executingStep = { ...adaptedStep, status: "executing" as const };
-      workingState.plan = [...workingState.plan];
-      workingState.plan[i] = executingStep;
+      workingState.plan[i] = skippedStep;
       workingState.updatedAt = Date.now();
 
-      // Yield state when starting step execution
+      // Yield state after skipping step
       yield structuredClone(workingState);
-
-      try {
-        const result = await executeStep(executingStep, workingState, walletClient);
-
-        // Success - create new step reference with success status
-        const successStep = {
-          ...executingStep,
-          status: "success" as const,
-          transactionHash: result.transactionHash,
-          executedAt: Date.now(),
-        };
-        workingState.results = {
-          ...workingState.results,
-          [successStep.id]: result,
-        };
-        workingState.plan = [...workingState.plan];
-        workingState.plan[i] = successStep;
-        workingState.updatedAt = Date.now();
-
-        // Recalculate remaining steps with actual amounts (T016)
-        if (result.actualOutput) {
-          await recalculatePlan(workingState, i, result.actualOutput);
-          workingState.updatedAt = Date.now();
-        }
-
-        // Yield state after successful step execution
-        yield structuredClone(workingState);
-      } catch (error) {
-        // Failure - create new step reference with failed status
-        const txError = createTransactionError(error);
-        const failedStep = {
-          ...executingStep,
-          status: "failed" as const,
-          error: txError,
-        };
-        workingState.results = {
-          ...workingState.results,
-          [failedStep.id]: {
-            stepId: failedStep.id,
-            status: "failed",
-            chainId: failedStep.chainId,
-            error: txError,
-          },
-        };
-        workingState.plan = [...workingState.plan];
-        workingState.plan[i] = failedStep;
-        workingState.updatedAt = Date.now();
-
-        // If hasSubsequentExecution is false, pause for retry
-        if (!workingState.hasSubsequentExecution) {
-          pausedDueToFailure = true;
-          workingState.status = "paused";
-          workingState.currentStepIndex = i;
-
-          // Yield paused state and return
-          yield structuredClone(workingState);
-          return;
-        }
-
-        // Otherwise, yield state and continue to next step
-        yield structuredClone(workingState);
-      }
+      continue;
     }
 
-    // All steps completed (only if we didn't pause)
-    if (!pausedDueToFailure) {
-      const hasSkipped = Object.values(workingState.results).some((r) => r.status === "skipped");
-      const hasFailed = Object.values(workingState.results).some((r) => r.status === "failed");
-      const finalStatus = hasSkipped || hasFailed ? ("partial" as const) : ("completed" as const);
-      workingState.status = finalStatus;
-      workingState.currentStepIndex = workingState.plan.length;
-      workingState.updatedAt = Date.now();
+    // Adapt step for partial dependencies (T015)
+    const adaptedStep = adaptStepForPartialDependencies(step, workingState.results);
+    workingState.plan = [...workingState.plan];
+    workingState.plan[i] = adaptedStep;
 
-      // Yield final state and return
-      yield structuredClone(workingState);
-      return;
-    }
-  } catch (error) {
-    // Unexpected error
-    workingState.status = "paused";
+    // Execute step - create new step reference with executing status
+    const executingStep = { ...adaptedStep, status: "executing" as const };
+    workingState.plan = [...workingState.plan];
+    workingState.plan[i] = executingStep;
     workingState.updatedAt = Date.now();
 
-    // Yield error state before throwing
+    // Yield state when starting step execution
     yield structuredClone(workingState);
-    throw error;
+
+    try {
+      const result = await executeStep(executingStep, workingState, walletClient);
+
+      // Success - create new step reference with success status
+      const successStep = {
+        ...executingStep,
+        status: "success" as const,
+        transactionHash: result.transactionHash,
+        executedAt: Date.now(),
+      };
+      workingState.results = {
+        ...workingState.results,
+        [successStep.id]: result,
+      };
+      workingState.plan = [...workingState.plan];
+      workingState.plan[i] = successStep;
+      workingState.updatedAt = Date.now();
+
+      // Recalculate remaining steps with actual amounts (T016)
+      if (result.actualOutput) {
+        await recalculatePlan(workingState, i, result.actualOutput);
+        workingState.updatedAt = Date.now();
+      }
+
+      // Yield state after successful step execution
+      yield structuredClone(workingState);
+    } catch (error) {
+      // Failure - create new step reference with failed status
+      const txError = createTransactionError(error);
+      const failedStep = {
+        ...executingStep,
+        status: "failed" as const,
+        error: txError,
+      };
+      workingState.results = {
+        ...workingState.results,
+        [failedStep.id]: {
+          stepId: failedStep.id,
+          status: "failed",
+          chainId: failedStep.chainId,
+          error: txError,
+        },
+      };
+      workingState.plan = [...workingState.plan];
+      workingState.plan[i] = failedStep;
+      workingState.updatedAt = Date.now();
+
+      // If hasSubsequentExecution is false, pause for retry
+      if (!workingState.hasSubsequentExecution) {
+        pausedDueToFailure = true;
+        workingState.status = "paused";
+        workingState.currentStepIndex = i;
+
+        // Yield paused state and return
+        yield structuredClone(workingState);
+        return;
+      }
+
+      // Otherwise, yield state and continue to next step
+      yield structuredClone(workingState);
+    }
   }
+
+  // All steps completed (only if we didn't pause)
+  if (!pausedDueToFailure) {
+    const hasSkipped = Object.values(workingState.results).some((r) => r.status === "skipped");
+    const hasFailed = Object.values(workingState.results).some((r) => r.status === "failed");
+    const finalStatus = hasSkipped || hasFailed ? ("partial" as const) : ("completed" as const);
+    workingState.status = finalStatus;
+    workingState.currentStepIndex = workingState.plan.length;
+    workingState.updatedAt = Date.now();
+
+    // Yield final state and return
+    yield structuredClone(workingState);
+    return;
+  }
+}
+
+/**
+ * Filters out tokens with zero amounts and validates at least one token remains
+ * @param tokens - Array of tokens to filter
+ * @param stepId - Step ID for error message
+ * @param stepType - Step type for error message
+ * @returns Non-empty array of tokens with amounts > 0
+ * @throws {Error} If all tokens have zero amounts
+ */
+function filterZeroAmounts(
+  tokens: readonly TokenAmount[],
+  stepId: string,
+  stepType: string,
+): [TokenAmount, ...TokenAmount[]] {
+  const nonZeroTokens = tokens.filter((t) => t.amount > 0n);
+
+  if (nonZeroTokens.length === 0) {
+    throw new Error(`Cannot execute ${stepType} with zero input amounts for step ${stepId}`);
+  }
+
+  return nonZeroTokens as [TokenAmount, ...TokenAmount[]];
 }
 
 /**
@@ -192,9 +204,12 @@ async function executeStep(
 
   switch (step.type) {
     case "swap": {
-      // Execute swap using Odos
+      // Filter out tokens with zero amounts
+      const nonZeroTokens = filterZeroAmounts(step.inputTokens, step.id, "swap");
+
+      // Execute swap using Odos with non-zero tokens
       const { amount: actualAmount, transactionHash } = await executeOdosSwapOrTransfer(
-        step.inputTokens,
+        nonZeroTokens,
         step.outputToken,
         sendCalls,
       );
@@ -234,9 +249,12 @@ async function executeStep(
         }
       }
 
-      // Sum all input amounts (bridge may have multiple USDC sources)
-      const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
-      const combinedInput = { ...step.inputTokens[0], amount: totalAmount };
+      // Filter out tokens with zero amounts
+      const nonZeroTokens = filterZeroAmounts(step.inputTokens, step.id, "bridge");
+
+      // Sum all non-zero input amounts (bridge may have multiple USDC sources)
+      const totalAmount = nonZeroTokens.reduce((sum, t) => sum + t.amount, 0n);
+      const combinedInput = { ...nonZeroTokens[0], amount: totalAmount };
 
       // Execute CCTP burn
       const [burnTx] = await executeCCTPBurn(combinedInput, step.outputToken, sendCalls);

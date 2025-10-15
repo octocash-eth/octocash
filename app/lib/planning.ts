@@ -349,22 +349,8 @@ async function createBridgeSteps(
     // Calculate total amount
     const totalAmount = inputTokens.reduce((sum, t) => sum + t.amount, 0n);
 
-    // TODO: Remove this check and check it on execution
-    if (totalAmount === 0n) {
-      log(`🔍 [DEBUG] Skipping bridge for wallet ${walletAddress} on chain ${chainId}: no USDC to bridge`);
-      continue;
-    }
-
     const bridgeFee = await getBridgeFee(totalAmount, chainId, destinationToken.chainId);
     const amountAfterFee = totalAmount - bridgeFee;
-
-    // TODO: Remove this check and check it on execution
-    if (amountAfterFee <= 0n) {
-      log(
-        `🔍 [DEBUG] Skipping bridge for wallet ${walletAddress} on chain ${chainId}: amount ${totalAmount.toString()} too small after fee ${bridgeFee.toString()}`,
-      );
-      continue;
-    }
 
     const stepId = `step-${steps.length + 1}`;
 
