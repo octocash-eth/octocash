@@ -821,4 +821,174 @@ describe("planConsolidation", () => {
     // Existing USDC should not have provenance (it didn't come from a step)
     expect(bridgeStep?.inputTokens[0].provenance).toBeUndefined();
   });
+
+  test("transfer step - destination token at wrong wallet should create transfer step", async () => {
+    const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: WBTC_ADDRESS,
+        amount: 10000000n, // 0.1 WBTC already as destination token but in different wallet
+        chainId: 1, // Ethereum (destination chain)
+        walletAddress: WALLET_2, // Different wallet
+        symbol: "WBTC",
+        decimals: 8,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1, // Ethereum
+      walletAddress: WALLET, // Destination wallet
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    const result = await planConsolidation(sourceTokens, destinationToken);
+
+    // Should have exactly one transfer step
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("transfer");
+
+    // Verify transfer step details
+    const transferStep = result[0];
+    expect(transferStep.chainId).toBe(1);
+    expect(transferStep.inputTokens).toHaveLength(1);
+    expect(transferStep.inputTokens[0].walletAddress).toBe(WALLET_2);
+    expect(transferStep.inputTokens[0].token).toBe(WBTC_ADDRESS);
+    expect(transferStep.inputTokens[0].amount).toBe(10000000n);
+
+    // Output should be at destination wallet
+    expect(transferStep.outputToken.walletAddress).toBe(WALLET);
+    expect(transferStep.outputToken.token).toBe(WBTC_ADDRESS);
+    expect(transferStep.outputToken.amount).toBe(10000000n);
+
+    // Transfer should have no dependencies since no bridges
+    expect(transferStep.dependsOn).toEqual([]);
+    expect(transferStep.partialDependency).toBe(false);
+
+    // No swap calls should be made
+    expect(getSwapQuote).not.toHaveBeenCalled();
+  });
+
+  test("transfer step - multiple wallets with destination token should create multiple transfer steps", async () => {
+    const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+    const WALLET_3 = "0x3333333333333333333333333333333333333333" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: WBTC_ADDRESS,
+        amount: 10000000n, // 0.1 WBTC in wallet 2
+        chainId: 1,
+        walletAddress: WALLET_2,
+        symbol: "WBTC",
+        decimals: 8,
+      },
+      {
+        token: WBTC_ADDRESS,
+        amount: 20000000n, // 0.2 WBTC in wallet 3
+        chainId: 1,
+        walletAddress: WALLET_3,
+        symbol: "WBTC",
+        decimals: 8,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET, // Different from source wallets
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    const result = await planConsolidation(sourceTokens, destinationToken);
+
+    // Should have two transfer steps
+    const transferSteps = result.filter((s: TransactionStep) => s.type === "transfer");
+    expect(transferSteps).toHaveLength(2);
+
+    // Verify each wallet has its transfer step
+    const wallet2Transfer = transferSteps.find((s: TransactionStep) => s.inputTokens[0].walletAddress === WALLET_2);
+    const wallet3Transfer = transferSteps.find((s: TransactionStep) => s.inputTokens[0].walletAddress === WALLET_3);
+
+    expect(wallet2Transfer).toBeDefined();
+    expect(wallet3Transfer).toBeDefined();
+
+    // Verify wallet 2 transfer
+    expect(wallet2Transfer?.inputTokens[0].amount).toBe(10000000n);
+    expect(wallet2Transfer?.outputToken.walletAddress).toBe(WALLET);
+    expect(wallet2Transfer?.outputToken.amount).toBe(10000000n);
+
+    // Verify wallet 3 transfer
+    expect(wallet3Transfer?.inputTokens[0].amount).toBe(20000000n);
+    expect(wallet3Transfer?.outputToken.walletAddress).toBe(WALLET);
+    expect(wallet3Transfer?.outputToken.amount).toBe(20000000n);
+
+    // No swaps should be called
+    expect(getSwapQuote).not.toHaveBeenCalled();
+  });
+
+  test("transfer step - mix of tokens needing swap and transfer", async () => {
+    const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: USDC_ADDRESS,
+        amount: 1000000n, // 1 USDC in wallet 1 - needs swap
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      },
+      {
+        token: WBTC_ADDRESS,
+        amount: 10000000n, // 0.1 WBTC in wallet 2 - needs transfer
+        chainId: 1,
+        walletAddress: WALLET_2,
+        symbol: "WBTC",
+        decimals: 8,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET, // Destination wallet
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: WBTC_ADDRESS,
+      amount: 5000000n, // 0.05 WBTC
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    });
+
+    const result = await planConsolidation(sourceTokens, destinationToken);
+
+    // Should have one swap and one transfer
+    const swapSteps = result.filter((s: TransactionStep) => s.type === "swap");
+    const transferSteps = result.filter((s: TransactionStep) => s.type === "transfer");
+
+    expect(swapSteps).toHaveLength(1);
+    expect(transferSteps).toHaveLength(1);
+
+    // Verify swap (USDC -> WBTC at wallet 1)
+    expect(swapSteps[0].inputTokens[0].token).toBe(USDC_ADDRESS);
+    expect(swapSteps[0].inputTokens[0].walletAddress).toBe(WALLET);
+    expect(swapSteps[0].outputToken.token).toBe(WBTC_ADDRESS);
+    expect(swapSteps[0].outputToken.walletAddress).toBe(WALLET);
+
+    // Verify transfer (WBTC from wallet 2 to wallet 1)
+    expect(transferSteps[0].inputTokens[0].token).toBe(WBTC_ADDRESS);
+    expect(transferSteps[0].inputTokens[0].walletAddress).toBe(WALLET_2);
+    expect(transferSteps[0].outputToken.walletAddress).toBe(WALLET);
+
+    // Verify swap was called
+    expect(getSwapQuote).toHaveBeenCalledTimes(1);
+  });
 });
