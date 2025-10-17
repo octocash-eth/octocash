@@ -1,6 +1,7 @@
 import {
   type Address,
   type Call,
+  decodeFunctionData,
   encodeFunctionData,
   type Hex,
   type Log,
@@ -8,7 +9,7 @@ import {
   parseEventLogs,
   zeroAddress,
 } from "viem";
-import { OCTOCASH_REFERRAL_CODE } from "~/data/odos";
+import { OCTOCASH_REFERRAL_INFO } from "~/data/odos";
 import type { SendCallsFn } from "~/lib/send-calls";
 import type { TokenAmount } from "~/lib/types";
 
@@ -29,9 +30,19 @@ interface OdosAssembleResponse {
 const ODOS_QUOTE_URL = "https://api.odos.xyz/sor/quote/v3";
 const ODOS_ASSEMBLE_URL = "https://api.odos.xyz/sor/assemble";
 
-const swapAbi = parseAbi([
+const odosRouterV3Abi = parseAbi([
   "event Swap(address sender, uint256 inputAmount, address inputToken, uint256 amountOut, address outputToken, int256 slippage, uint64 referralCode, uint64 referralFee, address referralFeeRecipient)",
   "event SwapMulti(address sender, uint256[] amountsIn, address[] tokensIn, uint256[] amountsOut, address[] tokensOut, int256[] slippage, uint64 referralCode, uint64 referralFee, address referralFeeRecipient)",
+  "function swap((address inputToken, uint256 inputAmount, address inputReceiver, address outputToken, uint256 outputQuote, uint256 outputMin, address outputReceiver) tokenInfo, bytes pathDefinition, address executor, (uint64 code, uint64 fee, address feeRecipient) referralInfo) payable returns (uint256 amountOut)",
+  "function swapMulti((address tokenAddress, uint256 amountIn, address receiver)[] inputs, (address tokenAddress, uint256 amountQuote, uint256 amountMin, address receiver)[] outputs, bytes pathDefinition, address executor, (uint64 code, uint64 fee, address feeRecipient) referralInfo) payable returns (uint256[] amountsOut)",
+  // "function swapCompact() payable returns (uint256)",
+  // "function swapMultiCompact() payable returns (uint256[] amountsOut)",
+  // "function swapMultiPermit2((address contractAddress, uint256 nonce, uint256 deadline, bytes signature) permit2, (address tokenAddress, uint256 amountIn, address receiver)[] inputs, (address tokenAddress, uint256 amountQuote, uint256 amountMin, address receiver)[] outputs, bytes pathDefinition, address executor, (uint64 code, uint64 fee, address feeRecipient) referralInfo) payable returns (uint256[] amountsOut)",
+  // "function swapMultiPermit2WithHook((address contractAddress, uint256 nonce, uint256 deadline, bytes signature) permit2, (address tokenAddress, uint256 amountIn, address receiver)[] inputs, (address tokenAddress, uint256 amountQuote, uint256 amountMin, address receiver)[] outputs, bytes pathDefinition, address executor, (uint64 code, uint64 fee, address feeRecipient) referralInfo, address hookTarget, bytes hookData) payable returns (uint256[] amountsOut)",
+  // "function swapMultiWithHook((address tokenAddress, uint256 amountIn, address receiver)[] inputs, (address tokenAddress, uint256 amountQuote, uint256 amountMin, address receiver)[] outputs, bytes pathDefinition, address executor, (uint64 code, uint64 fee, address feeRecipient) referralInfo, address hookTarget, bytes hookData) payable returns (uint256[] amountsOut)",
+  // "function swapPermit2((address contractAddress, uint256 nonce, uint256 deadline, bytes signature) permit2, (address inputToken, uint256 inputAmount, address inputReceiver, address outputToken, uint256 outputQuote, uint256 outputMin, address outputReceiver) tokenInfo, bytes pathDefinition, address executor, (uint64 code, uint64 fee, address feeRecipient) referralInfo) returns (uint256 amountOut)",
+  // "function swapPermit2WithHook((address contractAddress, uint256 nonce, uint256 deadline, bytes signature) permit2, (address inputToken, uint256 inputAmount, address inputReceiver, address outputToken, uint256 outputQuote, uint256 outputMin, address outputReceiver) tokenInfo, bytes pathDefinition, address executor, (uint64 code, uint64 fee, address feeRecipient) referralInfo, address hookTarget, bytes hookData) returns (uint256 amountOut)",
+  // "function swapWithHook((address inputToken, uint256 inputAmount, address inputReceiver, address outputToken, uint256 outputQuote, uint256 outputMin, address outputReceiver) tokenInfo, bytes pathDefinition, address executor, (uint64 code, uint64 fee, address feeRecipient) referralInfo, address hookTarget, bytes hookData) payable returns (uint256 amountOut)",
 ]);
 
 async function fetchJson<T>(url: string, body: unknown): Promise<T> {
@@ -100,6 +111,7 @@ function buildTransferCall(token: TokenAmount, to: Address): Call {
 async function fetchSwapQuote(
   inputTokens: TokenAmount[],
   outputToken: Omit<TokenAmount, "amount">,
+  simple: boolean = false,
 ): Promise<OdosQuoteResponse> {
   const quoteBody = {
     chainId: outputToken.chainId,
@@ -115,12 +127,90 @@ async function fetchSwapQuote(
     ],
     userAddr: inputTokens[0].walletAddress,
     slippageLimitPercent: 0.3,
-    referralCode: OCTOCASH_REFERRAL_CODE,
+    referralCode: 0,
     disableRFQs: true,
-    compact: true,
+    compact: false,
+    simple,
   };
   const quote = await fetchJson<OdosQuoteResponse>(ODOS_QUOTE_URL, quoteBody);
   return quote;
+}
+
+function addReferralInfo(to: Address, data: Hex, value: bigint): Call {
+  const decoded = decodeFunctionData({
+    abi: odosRouterV3Abi,
+    data,
+  });
+  if (decoded.functionName === "swap") {
+    const [tokenInfo, pathDefinition, executor] = decoded.args as [
+      {
+        inputToken: `0x${string}`;
+        inputAmount: bigint;
+        inputReceiver: `0x${string}`;
+        outputToken: `0x${string}`;
+        outputQuote: bigint;
+        outputMin: bigint;
+        outputReceiver: `0x${string}`;
+      },
+      `0x${string}`,
+      `0x${string}`,
+      {
+        code: bigint;
+        fee: bigint;
+        feeRecipient: `0x${string}`;
+      },
+    ];
+
+    const tokenInfoAfterFee = {
+      ...tokenInfo,
+      outputMin: (tokenInfo.outputMin * (1000000000000000000n - OCTOCASH_REFERRAL_INFO.fee)) / 1000000000000000000n,
+    };
+
+    const encoded = encodeFunctionData({
+      abi: odosRouterV3Abi,
+      functionName: "swap",
+      args: [tokenInfoAfterFee, pathDefinition, executor, OCTOCASH_REFERRAL_INFO],
+    });
+
+    return { to, data: encoded, value };
+  }
+
+  if (decoded.functionName === "swapMulti") {
+    const [inputs, outputs, pathDefinition, executor] = decoded.args as [
+      {
+        tokenAddress: `0x${string}`;
+        amountIn: bigint;
+        receiver: `0x${string}`;
+      }[],
+      {
+        tokenAddress: `0x${string}`;
+        amountQuote: bigint;
+        amountMin: bigint;
+        receiver: `0x${string}`;
+      }[],
+      `0x${string}`,
+      `0x${string}`,
+      {
+        code: bigint;
+        fee: bigint;
+        feeRecipient: `0x${string}`;
+      },
+    ];
+
+    const outputsAfterFee = outputs.map((output) => ({
+      ...output,
+      amountMin: (output.amountMin * (1000000000000000000n - OCTOCASH_REFERRAL_INFO.fee)) / 1000000000000000000n,
+    }));
+
+    const encoded = encodeFunctionData({
+      abi: odosRouterV3Abi,
+      functionName: "swapMulti",
+      args: [inputs, outputsAfterFee, pathDefinition, executor, OCTOCASH_REFERRAL_INFO],
+    });
+
+    return { to, data: encoded, value };
+  }
+  return { to, data, value };
 }
 
 export async function buildOdosCalls(tokensToSwap: TokenAmount[], tokenOut: TokenAmount): Promise<Call[]> {
@@ -133,7 +223,8 @@ export async function buildOdosCalls(tokensToSwap: TokenAmount[], tokenOut: Toke
   };
   const assembled = await fetchJson<OdosAssembleResponse>(ODOS_ASSEMBLE_URL, assembleBody);
   const { to, data, value } = assembled.transaction;
-  return [...buildApproveCalls(tokensToSwap, to), { to, data, value: BigInt(value) }];
+  const swapWithRerralInfo = addReferralInfo(to, data, BigInt(value));
+  return [...buildApproveCalls(tokensToSwap, to), swapWithRerralInfo];
 }
 
 /**
@@ -189,13 +280,13 @@ export async function executeOdosSwapOrTransfer(
   const flattenedLogs = logs.flat();
 
   const singleSwapLogs = parseEventLogs({
-    abi: swapAbi,
+    abi: odosRouterV3Abi,
     eventName: "Swap",
     logs: flattenedLogs as Log[],
   });
 
   const multiSwapLogs = parseEventLogs({
-    abi: swapAbi,
+    abi: odosRouterV3Abi,
     eventName: "SwapMulti",
     logs: flattenedLogs as Log[],
   });
@@ -241,7 +332,7 @@ export async function getSwapQuote(
   }
 
   try {
-    const quote = await fetchSwapQuote(inputTokens, outputToken);
+    const quote = await fetchSwapQuote(inputTokens, outputToken, true);
     const outputAmount = quote.outAmounts?.[0] ? BigInt(quote.outAmounts[0]) : 0n;
     return {
       ...outputToken,
