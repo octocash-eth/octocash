@@ -10,9 +10,67 @@
   --font-sans:
     "DM Sans", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
     "Noto Color Emoji";
-  --font-heading:
-    "Clash Grotesk", "DM Sans", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
-    "Segoe UI Symbol", "Noto Color Emoji";
+  --font-grotesc: "Clash Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", monospace;
+}
+
+@theme {
+  --color-pink-50: #fff1f7;
+  --color-pink-100: #ffd3e5;
+  --color-pink-200: #ffbdd9;
+  --color-pink-300: #ff9fc7;
+  --color-pink-400: #ff8dbd;
+  --color-pink-500: #ff70ac;
+  --color-pink-600: #e8669d;
+  --color-pink-700: #b5507a;
+  --color-pink-800: #8c3e5f;
+  --color-pink-900: #6b2f48;
+  --color-pink-950: #500724;
+  --color-violet-50: #eae6ec;
+  --color-violet-100: #bcb1c3;
+  --color-violet-200: #9c8ca6;
+  --color-violet-300: #6f577d;
+  --color-violet-400: #533664;
+  --color-violet-500: #28043d;
+  --color-violet-600: #240438;
+  --color-violet-700: #1c032b;
+  --color-violet-800: #160222;
+  --color-violet-900: #11021a;
+  --color-violet-950: #1e1b4b;
+  --color-purple-50: #f8ecf8;
+  --color-purple-100: #e9c4e9;
+  --color-purple-200: #dfa7df;
+  --color-purple-300: #d07fd0;
+  --color-purple-400: #c766c7;
+  --color-purple-500: #b940b9;
+  --color-purple-600: #a83aa8;
+  --color-purple-700: #832d83;
+  --color-purple-800: #662366;
+  --color-purple-900: #4e1b4e;
+  --color-purple-950: #3b0764;
+  --color-sky-blue-50: #f2fbfe;
+  --color-sky-blue-100: #d8f1fd;
+  --color-sky-blue-200: #c5eafb;
+  --color-sky-blue-300: #aae1fa;
+  --color-sky-blue-400: #99dbf9;
+  --color-sky-blue-500: #80d2f7;
+  --color-sky-blue-600: #74bfe1;
+  --color-sky-blue-700: #5b95af;
+  --color-sky-blue-800: #467488;
+  --color-sky-blue-900: #365868;
+  --color-sky-blue-950: #082f49;
+  --color-yellow-50: #fffaef;
+  --color-yellow-100: #fff0cc;
+  --color-yellow-200: #ffe8b4;
+  --color-yellow-300: #ffde91;
+  --color-yellow-400: #ffd77c;
+  --color-yellow-500: #ffcd5b;
+  --color-yellow-600: #e8bb53;
+  --color-yellow-700: #b59241;
+  --color-yellow-800: #8c7132;
+  --color-yellow-900: #6b5626;
+  --color-yellow-950: #422006;
+  --color-base-black: var(--color-violet-500);
 }
 
 html,
@@ -44,6 +102,7 @@ body {
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -60,99 +119,111 @@ body {
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --shadow-button: var(--shadow-button);
+  --shadow-button-active: var(--shadow-button-active);
+  --shadow-button-destructive: var(--shadow-button-destructive);
+  --color-button-primary: var(--color-button-primary);
+  --color-button-primary-foreground: var(--color-button-primary-foreground);
+  --color-button-secondary-foreground: var(--color-button-secondary-foreground);
+  --color-border-button: var(--color-border-button);
+  --color-destructive-shadow: var(--destructive-shadow);
+  --color-destructive-hover: var(--destructive-hover);
+  --color-destructive-hover-foreground: var(--destructive-hover-foreground);
+  --color-button-link-foreground: var(--button-link-foreground);
+  --color-button-link-hover-foreground: var(--button-link-hover-foreground);
+  --color-button-link-active-foreground: var(--button-link-active-foreground);
 }
 
 :root {
   --radius: 0.625rem;
-  --background: #f2fbfe;
-  --foreground: #241f2b;
-  --card: #ffffff;
-  --card-foreground: #241f2b;
-  --popover: #ffffff;
-  --popover-foreground: #241f2b;
-  /* Brand primary = Foundation/Pink 500 */
-  --primary: #ff70ac;
-  --primary-foreground: #ffffff;
-  --secondary: #f3f3f3;
-  --secondary-foreground: #241f2b;
-  --muted: #f3f3f3;
-  --muted-foreground: #6b6b6b;
-  /* Brand accent = Foundation/Pink 500 */
-  --accent: #e8669d;
-  --accent-foreground: #ffffff;
-  /* Destructive/Alert */
-  --destructive: #fe645a;
-  --border: #e9e9ee;
-  --input: #e9e9ee;
-  /* Focus ring = Foundation/Purple 500 */
-  --ring: #b940b9;
-  /* Chart palette aligned to brand */
-  --chart-1: #b940b9; /* purple */
-  --chart-2: #ff70ac; /* pink */
-  --chart-3: #3b9cfe; /* blue */
-  --chart-4: #fecc5b; /* yellow */
-  --chart-5: #0757cf; /* deep blue */
-  --sidebar: #ffffff;
-  --sidebar-foreground: #241f2b;
-  --sidebar-primary: #28043d;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #ff70ac;
-  --sidebar-accent-foreground: #28043d;
-  --sidebar-border: #e9e9ee;
-  --sidebar-ring: #b940b9;
+  --background: var(--color-white);
+  --foreground: var(--color-violet-500);
+  --card: var(--color-white);
+  --card-foreground: var(--color-violet-500);
+  --popover: var(--color-violet-500);
+  --popover-foreground: var(--color-white);
+  --primary: var(--color-pink-500);
+  --primary-foreground: var(--color-white);
+  --secondary: var(--color-violet-500);
+  --secondary-foreground: var(--color-white);
+  --muted: var(--color-neutral-100);
+  --muted-foreground: var(--color-neutral-500);
+  --accent: var(--color-neutral-100);
+  --accent-foreground: var(--color-neutral-900);
+  --destructive: var(--color-red-600);
+  --destructive-foreground: var(--color-red-50);
+  --destructive-shadow: var(--color-red-800);
+  --destructive-hover: var(--color-red-700);
+  --destructive-hover-foreground: var(--color-red-50);
+  --border: var(--color-neutral-200);
+  --input: var(--color-neutral-200);
+  --ring: var(--color-neutral-400);
+  --chart-1: var(--color-orange-600);
+  --chart-2: var(--color-teal-600);
+  --chart-3: var(--color-cyan-900);
+  --chart-4: var(--color-amber-400);
+  --chart-5: var(--color-amber-500);
+  --sidebar: var(--color-neutral-50);
+  --sidebar-foreground: var(--color-neutral-950);
+  --sidebar-primary: var(--color-neutral-900);
+  --sidebar-primary-foreground: var(--color-white);
+  --sidebar-accent: var(--color-neutral-100);
+  --sidebar-accent-foreground: var(--color-white);
+  --sidebar-border: var(--color-neutral-200);
+  --sidebar-ring: var(--color-neutral-400);
+  --shadow-button: 3px 3px 0 0 var(--color-violet-500);
+  --shadow-button-active: inset 0 4px 4px 0 color-mix(in srgb, var(--color-violet-500) 30%, transparent);
+  --shadow-button-destructive: 3px 3px 0 0 var(--color-destructive-shadow);
+  --color-button-primary: var(--color-white);
+  --color-button-primary-foreground: var(--color-pink-500);
+  --color-button-secondary-foreground: var(--color-violet-500);
+  --color-border-button: var(--color-violet-500);
+  --button-link-foreground: var(--color-violet-500);
+  --button-link-hover-foreground: var(--color-pink-500);
+  --button-link-active-foreground: var(--color-pink-700);
 }
-
+/* 
 .dark {
-  --background: #141017;
-  --foreground: #f5f5f7;
-  --card: #1b1521;
-  --card-foreground: #f5f5f7;
-  --popover: #1b1521;
-  --popover-foreground: #f5f5f7;
-  /* Use brighter brand tints on dark */
-  --primary: #ff70ac; /* pink for emphasis */
-  --primary-foreground: #28043d;
-  --secondary: #211a28;
-  --secondary-foreground: #f5f5f7;
-  --muted: #211a28;
-  --muted-foreground: #b5b5bb;
-  --accent: #b940b9; /* purple accent */
-  --accent-foreground: #ffffff;
-  --destructive: #fe645a;
-  --border: #ffffff1a; /* 10% */
-  --input: #ffffff26; /* 15% */
-  --ring: #b940b9;
-  --chart-1: #ff70ac;
-  --chart-2: #b940b9;
-  --chart-3: #63c0fd;
-  --chart-4: #fecc5b;
-  --chart-5: #0757cf;
-  --sidebar: #1b1521;
-  --sidebar-foreground: #f5f5f7;
-  --sidebar-primary: #ff70ac;
-  --sidebar-primary-foreground: #28043d;
-  --sidebar-accent: #211a28;
-  --sidebar-accent-foreground: #f5f5f7;
-  --sidebar-border: #ffffff1a;
-  --sidebar-ring: #b940b9;
-}
+  --background: var(--color-neutral-950);
+  --foreground: var(--color-neutral-50);
+  --card: var(--color-neutral-900);
+  --card-foreground: var(--color-neutral-50);
+  --popover: var(--color-neutral-800);
+  --popover-foreground: var(--color-neutral-50);
+  --primary: var(--color-neutral-200);
+  --primary-foreground: var(--color-neutral-900);
+  --secondary: var(--color-neutral-800);
+  --secondary-foreground: var(--color-neutral-50);
+  --muted: var(--color-neutral-800);
+  --muted-foreground: var(--color-neutral-400);
+  --accent: var(--color-neutral-700);
+  --accent-foreground: var(--color-neutral-50);
+  --destructive: var(--color-red-400);
+  --destructive-foreground: var(--color-red-50);
+  --border: var(--color-neutral-50);
+  --input: var(--color-neutral-50);
+  --ring: var(--color-neutral-500);
+  --chart-1: var(--color-blue-700);
+  --chart-2: var(--color-emerald-500);
+  --chart-3: var(--color-amber-500);
+  --chart-4: var(--color-purple-500);
+  --chart-5: var(--color-rose-500);
+  --sidebar: var(--color-neutral-900);
+  --sidebar-foreground: var(--color-neutral-50);
+  --sidebar-primary: var(--color-blue-700);
+  --sidebar-primary-foreground: var(--color-neutral-50);
+  --sidebar-accent: var(--color-neutral-800);
+  --sidebar-accent-foreground: var(--color-neutral-50);
+  --sidebar-border: var(--color-neutral-50);
+  --sidebar-ring: var(--color-neutral-600);
+} */
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground font-sans;
-  }
-  h1,
-  h2,
-  h3,
-  h4,
-  h5,
-  h6 {
-    font-family: var(--font-heading);
-    letter-spacing: 0.01em; /* 1% per Figma heading spec */
-    color: var(--accent);
+    @apply bg-background text-foreground;
   }
 
   /* Hide number input spinners */
