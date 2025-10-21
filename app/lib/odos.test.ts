@@ -1,5 +1,12 @@
 import type { Address, Hex, Log } from "viem";
-import { encodeAbiParameters, encodeEventTopics, parseAbi, parseAbiParameters, zeroAddress } from "viem";
+import {
+  encodeAbiParameters,
+  encodeEventTopics,
+  encodeFunctionData,
+  parseAbi,
+  parseAbiParameters,
+  zeroAddress,
+} from "viem";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -8,6 +15,37 @@ import type { TokenAmount } from "./types";
 
 type SendCallsReturn = [Hex, Log[][]];
 type SendCallsFn = Mock<(...args: unknown[]) => Promise<SendCallsReturn>>;
+
+// Helper ABI for encoding swap function calls in tests
+const odosRouterV3Abi = parseAbi([
+  "function swap((address inputToken, uint256 inputAmount, address inputReceiver, address outputToken, uint256 outputQuote, uint256 outputMin, address outputReceiver) tokenInfo, bytes pathDefinition, address executor, (uint64 code, uint64 fee, address feeRecipient) referralInfo) payable returns (uint256 amountOut)",
+]);
+
+// Helper function to create valid encoded swap data for tests
+function createMockSwapData(): Hex {
+  return encodeFunctionData({
+    abi: odosRouterV3Abi,
+    functionName: "swap",
+    args: [
+      {
+        inputToken: zeroAddress,
+        inputAmount: 1000000n,
+        inputReceiver: zeroAddress,
+        outputToken: zeroAddress,
+        outputQuote: 1000000n,
+        outputMin: 950000n,
+        outputReceiver: zeroAddress,
+      },
+      "0x00" as Hex, // pathDefinition
+      zeroAddress, // executor
+      {
+        code: 0n,
+        fee: 0n,
+        feeRecipient: zeroAddress,
+      },
+    ],
+  });
+}
 
 describe("odos", () => {
   const mockTokenUSDC: TokenAmount = {
@@ -57,7 +95,7 @@ describe("odos", () => {
               json: async () => ({
                 transaction: {
                   to: "0x0000000000000000000000000000000000000001",
-                  data: "0x1",
+                  data: createMockSwapData(),
                   value: "0x2",
                 },
               }),
@@ -94,7 +132,11 @@ describe("odos", () => {
           to: mockTokenUSDT.token,
         },
         // Swap
-        { to: "0x0000000000000000000000000000000000000001", data: "0x1", value: 2n },
+        {
+          to: "0x0000000000000000000000000000000000000001",
+          data: expect.any(String),
+          value: 2n,
+        },
       ]);
     });
 
@@ -106,7 +148,7 @@ describe("odos", () => {
       expect(calls[0].to).toBe(mockTokenUSDC.token);
       expect(calls[1]).toEqual({
         to: "0x0000000000000000000000000000000000000001",
-        data: "0x1",
+        data: expect.any(String),
         value: 2n,
       });
     });
@@ -186,7 +228,7 @@ describe("odos", () => {
 
       expect(result).toEqual({
         ...outputToken,
-        amount: 3000000n,
+        amount: 2997000n, // 3000000n - 0.1% referral fee
       });
     });
 
@@ -203,7 +245,7 @@ describe("odos", () => {
 
       expect(result).toEqual({
         ...outputToken,
-        amount: 3000000n,
+        amount: 2997000n, // 3000000n - 0.1% referral fee
       });
     });
 
@@ -306,7 +348,7 @@ describe("odos", () => {
               json: async () => ({
                 transaction: {
                   to: "0x0000000000000000000000000000000000000001",
-                  data: "0x1",
+                  data: createMockSwapData(),
                   value: "0x0",
                 },
               }),

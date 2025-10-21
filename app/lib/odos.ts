@@ -136,6 +136,10 @@ async function fetchSwapQuote(
   return quote;
 }
 
+function applyFee(amount: bigint): bigint {
+  return (amount * (1000000000000000000n - OCTOCASH_REFERRAL_INFO.fee)) / 1000000000000000000n;
+}
+
 function addReferralInfo(to: Address, data: Hex, value: bigint): Call {
   const decoded = decodeFunctionData({
     abi: odosRouterV3Abi,
@@ -163,7 +167,7 @@ function addReferralInfo(to: Address, data: Hex, value: bigint): Call {
 
     const tokenInfoAfterFee = {
       ...tokenInfo,
-      outputMin: (tokenInfo.outputMin * (1000000000000000000n - OCTOCASH_REFERRAL_INFO.fee)) / 1000000000000000000n,
+      outputMin: applyFee(tokenInfo.outputMin),
     };
 
     const encoded = encodeFunctionData({
@@ -199,7 +203,7 @@ function addReferralInfo(to: Address, data: Hex, value: bigint): Call {
 
     const outputsAfterFee = outputs.map((output) => ({
       ...output,
-      amountMin: (output.amountMin * (1000000000000000000n - OCTOCASH_REFERRAL_INFO.fee)) / 1000000000000000000n,
+      amountMin: applyFee(output.amountMin),
     }));
 
     const encoded = encodeFunctionData({
@@ -336,7 +340,7 @@ export async function getSwapQuote(
     const outputAmount = quote.outAmounts?.[0] ? BigInt(quote.outAmounts[0]) : 0n;
     return {
       ...outputToken,
-      amount: outputAmount,
+      amount: applyFee(outputAmount),
       walletAddress: firstWallet,
     };
   } catch (error) {
