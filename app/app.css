@@ -132,6 +132,8 @@ body {
   --color-button-link-foreground: var(--button-link-foreground);
   --color-button-link-hover-foreground: var(--button-link-hover-foreground);
   --color-button-link-active-foreground: var(--button-link-active-foreground);
+  --color-accordion: var(--accordion);
+  --color-accordion-foreground: var(--accordion-foreground);
 }
 
 :root {
@@ -181,6 +183,8 @@ body {
   --button-link-foreground: var(--color-violet-500);
   --button-link-hover-foreground: var(--color-pink-500);
   --button-link-active-foreground: var(--color-pink-700);
+  --accordion: var(--color-white);
+  --accordion-foreground: var(--color-violet-500);
 }
 /* 
 .dark {
@@ -222,10 +226,12 @@ body {
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    scroll-behavior: smooth;
+  }
   body {
     @apply bg-background text-foreground;
   }
-
   /* Hide number input spinners */
   input[type="number"]::-webkit-outer-spin-button,
   input[type="number"]::-webkit-inner-spin-button {
