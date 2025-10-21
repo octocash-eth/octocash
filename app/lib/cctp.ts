@@ -51,7 +51,7 @@ const getApproveAndBurnUsdcCalls = async (
           chainIdToDomain[destinationChainId],
           mintRecipient as Hex,
           tokenAddresses[sourceChainId as keyof typeof tokenAddresses] as `0x${string}`,
-          `0x${"00".repeat(32)}`,
+          mintRecipient as Hex,
           maxFee,
           finalityThreshold,
         ],
@@ -204,7 +204,7 @@ export const executeCCTPMint = async (
     return ["", []];
   }
 
-  const [mintTx, mintLogs] = await sendCalls("mint", chainId, walletAddress, calls, "non-atomic-multicall");
+  const [mintTx, mintLogs] = await sendCalls("mint", chainId, walletAddress, calls, "atomic-multicall");
   return [mintTx, mintLogs];
 };
 

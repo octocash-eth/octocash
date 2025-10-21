@@ -523,7 +523,7 @@ describe("cctp", () => {
       expect(txHash).toBe("0xminthash");
       expect(logs).toHaveLength(1);
       expect(logs[0]).toHaveLength(1);
-      expect(mockSendCalls).toHaveBeenCalledWith("mint", 1, WALLET, expect.any(Array), "non-atomic-multicall");
+      expect(mockSendCalls).toHaveBeenCalledWith("mint", 1, WALLET, expect.any(Array), "atomic-multicall");
     });
 
     test("throws error when no attestations provided", async () => {
@@ -638,7 +638,7 @@ describe("cctp", () => {
       const [txHash, _logs] = await executeCCTPMint(mockAttestations, tokenOut, mockSendCalls);
 
       expect(txHash).toBe("0xminthash");
-      expect(mockSendCalls).toHaveBeenCalledWith("mint", 1, WALLET, expect.any(Array), "non-atomic-multicall");
+      expect(mockSendCalls).toHaveBeenCalledWith("mint", 1, WALLET, expect.any(Array), "atomic-multicall");
 
       // Verify only one call was made (for the unused nonce)
       const calls = mockSendCalls.mock.calls[0][3];
