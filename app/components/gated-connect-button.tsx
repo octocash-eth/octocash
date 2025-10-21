@@ -1,5 +1,7 @@
 import { useConnectModal } from "@rainbow-me/rainbowkit";
+import { WalletIcon } from "lucide-react";
 import { useId, useState } from "react";
+import { useDisconnect } from "wagmi";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
@@ -10,13 +12,18 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
+import { useConnectedAddresses } from "~/hooks/use-connected-addresses";
+
+const CONFIRMATION_TEXT = "I understand the risks";
 
 export function GatedConnectButton() {
   const { openConnectModal } = useConnectModal();
+  const connectedAddresses = useConnectedAddresses();
   const [open, setOpen] = useState(false);
   const [confirmationText, setConfirmationText] = useState("");
   const [error, setError] = useState("");
   const confirmationId = useId();
+  const { disconnect } = useDisconnect();
 
   const onRequestConnect = () => {
     setConfirmationText("");
@@ -26,8 +33,8 @@ export function GatedConnectButton() {
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (confirmationText !== "I understand the risks") {
-      setError("Please type exactly: I understand the risks");
+    if (confirmationText !== CONFIRMATION_TEXT) {
+      setError(`Please type exactly: ${CONFIRMATION_TEXT}`);
       return;
     }
     setOpen(false);
@@ -36,9 +43,22 @@ export function GatedConnectButton() {
     }, 0);
   };
 
+  const hasConnectedWallets = connectedAddresses.length > 0;
+
+  const handleClick = () => {
+    if (hasConnectedWallets) {
+      disconnect();
+    } else {
+      onRequestConnect();
+    }
+  };
+
   return (
     <>
-      <Button onClick={onRequestConnect}>Connect Wallet</Button>
+      <Button onClick={handleClick} variant={hasConnectedWallets ? "outline" : "default"}>
+        <WalletIcon />
+        {hasConnectedWallets ? "Disconnect Wallet" : "Connect Wallet"}
+      </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
@@ -53,7 +73,7 @@ export function GatedConnectButton() {
               <label htmlFor={confirmationId} className="text-sm font-medium mb-5">
                 Type{" "}
                 <code className="bg-muted relative rounded px-[0.3rem] py-[0.2rem] font-mono text-sm font-semibold">
-                  I understand the risks
+                  {CONFIRMATION_TEXT}
                 </code>{" "}
                 to confirm
               </label>
@@ -63,7 +83,7 @@ export function GatedConnectButton() {
                 type="text"
                 value={confirmationText}
                 onChange={(e) => setConfirmationText(e.target.value)}
-                placeholder="I understand the risks"
+                placeholder={CONFIRMATION_TEXT}
                 aria-invalid={error ? true : undefined}
                 autoFocus
                 required
@@ -71,7 +91,7 @@ export function GatedConnectButton() {
               {error ? <p className="text-sm text-destructive">{error}</p> : null}
             </div>
             <DialogFooter>
-              <Button type="submit" className="w-full">
+              <Button type="submit" className="w-full" disabled={confirmationText !== CONFIRMATION_TEXT}>
                 Continue
               </Button>
             </DialogFooter>
