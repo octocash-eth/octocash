@@ -63,6 +63,7 @@ function Button({
   isLoading = false,
   disabled,
   children,
+  onClick,
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
@@ -70,13 +71,34 @@ function Button({
     isLoading?: boolean;
   }) {
   const Comp = asChild ? Slot : "button";
+  const isDisabledOrLoading = disabled || isLoading;
+
+  // For non-button elements (when using asChild), we need additional
+  // accessibility attributes and event handling since they don't support
+  // the native disabled attribute
+  const enhancedProps =
+    asChild && isDisabledOrLoading
+      ? {
+          "aria-disabled": true,
+          ...(isLoading && { "aria-busy": true }),
+          tabIndex: -1,
+          onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
+            event.preventDefault();
+            event.stopPropagation();
+            // Don't call the original onClick when disabled/loading
+          },
+        }
+      : {
+          ...(onClick && { onClick }),
+        };
 
   return (
     <Comp
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
-      disabled={disabled || isLoading}
+      disabled={isDisabledOrLoading}
       {...props}
+      {...enhancedProps}
     >
       {isLoading && <Loader2 className="animate-spin" />}
       {children}
