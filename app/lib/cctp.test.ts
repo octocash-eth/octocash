@@ -46,14 +46,48 @@ vi.mock("~/data/cctp-contracts", () => ({
 
 vi.mock("~/data/supported-chains", () => ({
   chains: {
-    1: { id: 1, name: "Ethereum" },
-    137: { id: 137, name: "Polygon" },
-    10: { id: 10, name: "Optimism" },
+    1: {
+      id: 1,
+      name: "Ethereum",
+      contracts: {
+        multicall3: {
+          address: "0xcA11bde05977b3631167028862bE2a173976CA11",
+        },
+      },
+    },
+    137: {
+      id: 137,
+      name: "Polygon",
+      contracts: {
+        multicall3: {
+          address: "0xcA11bde05977b3631167028862bE2a173976CA11",
+        },
+      },
+    },
+    10: {
+      id: 10,
+      name: "Optimism",
+      contracts: {
+        multicall3: {
+          address: "0xcA11bde05977b3631167028862bE2a173976CA11",
+        },
+      },
+    },
+    42161: {
+      id: 42161,
+      name: "Arbitrum",
+      contracts: {
+        multicall3: {
+          address: "0xcA11bde05977b3631167028862bE2a173976CA11",
+        },
+      },
+    },
   },
   transports: {
     1: {},
     137: {},
     10: {},
+    42161: {},
   },
 }));
 
