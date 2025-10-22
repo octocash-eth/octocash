@@ -175,41 +175,43 @@ export default function Home() {
             alt=""
             width={251}
             height={329}
-            className="absolute top-0 left-0 h-70 w-auto hidden lg:block"
+            className="absolute top-0 left-0 h-50 w-auto hidden lg:block xl:h-70"
           />
         </section>
 
         {/* Support Section */}
         {/* biome-ignore lint/correctness/useUniqueElementIds: Static IDs are intentional for navigation anchors on homepage */}
-        <section id="donate" className="relative px-4 sm:px-6 lg:px-8 py-20 md:py-32">
-          <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-24">
-            {/* Text and Buttons */}
-            <div className="flex-1 space-y-8">
-              <div>
-                <h2 className="font-grotesc text-4xl md:text-5xl font-bold mb-8 text-pink-500 leading-none">
-                  {SUPPORT_CONTENT.title}
-                </h2>
-                <p className="text-3xl md:text-4xl text-violet-500 max-w-2xl leading-tight">
-                  {SUPPORT_CONTENT.description}
-                </p>
+        <section id="join" className="relative px-4 sm:px-6 lg:px-8 py-20 md:py-32">
+          <div className="max-w-7xl mx-auto">
+            <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-24">
+              {/* Text and Buttons */}
+              <div className="flex-1 space-y-8">
+                <div>
+                  <h2 className="font-grotesc text-4xl md:text-5xl font-bold mb-8 text-pink-500 leading-none">
+                    {SUPPORT_CONTENT.title}
+                  </h2>
+                  <p className="text-3xl md:text-4xl text-violet-500 max-w-2xl leading-tight">
+                    {SUPPORT_CONTENT.description}
+                  </p>
+                </div>
+
+                <div className="flex flex-row gap-4">
+                  <a href={SUPPORT_CONTENT.ctaLink} target="_blank" rel="noopener noreferrer">
+                    <Button size="2xl">{SUPPORT_CONTENT.cta}</Button>
+                  </a>
+                </div>
               </div>
 
-              <div className="flex flex-row gap-4">
-                <a href={SUPPORT_CONTENT.ctaLink} target="_blank" rel="noopener noreferrer">
-                  <Button size="2xl">{SUPPORT_CONTENT.cta}</Button>
-                </a>
+              {/* Illustration */}
+              <div className="flex-shrink-0">
+                <img
+                  src="/decorations/support-illustration.svg"
+                  alt="Support illustration"
+                  width={441}
+                  height={450}
+                  className="w-full max-w-md h-auto"
+                />
               </div>
-            </div>
-
-            {/* Illustration */}
-            <div className="flex-shrink-0">
-              <img
-                src="/decorations/support-illustration.svg"
-                alt="Support illustration"
-                width={441}
-                height={450}
-                className="w-full max-w-md h-auto"
-              />
             </div>
           </div>
 
@@ -219,7 +221,7 @@ export default function Home() {
             alt=""
             width={188}
             height={152}
-            className="absolute top-0 left-0 h-50 w-auto hidden lg:block"
+            className="absolute top-0 left-0 h-50 w-auto hidden xl:block"
           />
         </section>
 
