@@ -19,3 +19,5 @@
 - Follow existing patterns in the codebase
 - Prefer functional components and hooks in React
 
+## Check if you have browser access
+In that case, it may be expected you to navigate to https://localhost:3000

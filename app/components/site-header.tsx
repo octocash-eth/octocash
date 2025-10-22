@@ -30,7 +30,7 @@ export function SiteHeader() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <header className="w-full px-4 py-3 md:py-4">
+    <header className="w-full px-4 sm:px-6 lg:px-8 py-3 md:py-4">
       <div className="mx-auto flex w-full max-w-7xl items-center justify-between">
         <div className="flex items-center gap-4">
           <Link to="/" className="flex items-center gap-2" aria-label={SITE_NAME}>
