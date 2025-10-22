@@ -39,7 +39,7 @@ export function useCCTPClaim() {
       decimals: 6,
     };
 
-    const [mintTx, logs] = await executeCCTPMint(attestations, tokenOut, sendCalls, true);
+    const [mintTx, logs] = await executeCCTPMint(attestations, tokenOut, sendCalls);
 
     return { mintTx, logs } as const;
   };

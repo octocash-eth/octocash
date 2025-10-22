@@ -206,7 +206,6 @@ export const executeCCTPMint = async (
   attestations: Attestation[],
   tokenOut: TokenAmount,
   sendCalls: SendCallsFn,
-  sequential: boolean = false,
 ): Promise<[string, { address: Address; data: Hex; topics: Hex[] }[][]]> => {
   if (attestations.length === 0) {
     throw new Error("No attestations");
@@ -219,13 +218,7 @@ export const executeCCTPMint = async (
     return ["", []];
   }
 
-  const [mintTx, mintLogs] = await sendCalls(
-    "mint",
-    chainId,
-    walletAddress,
-    calls,
-    sequential ? "non-atomic-steps" : "atomic-multicall",
-  );
+  const [mintTx, mintLogs] = await sendCalls("mint", chainId, walletAddress, calls, "atomic-multicall");
   return [mintTx, mintLogs];
 };
 
