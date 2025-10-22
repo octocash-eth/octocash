@@ -32,8 +32,10 @@ export function FeatureCard({
         />
       </div>
       <CardHeader>
-        <CardTitle className="font-grotesc font-bold text-purple-500 text-4xl">{title}</CardTitle>
-        <CardDescription className="text-violet-500 text-3xl">{description}</CardDescription>
+        <CardTitle className="font-grotesc font-bold text-purple-500 text-3xl md:text-4xl leading-none">
+          {title}
+        </CardTitle>
+        <CardDescription className="text-violet-500 text-2xl md:text-3xl leading-none">{description}</CardDescription>
       </CardHeader>
     </Card>
   );
