@@ -15,7 +15,7 @@ type NavItem = {
 const HOME_NAV: NavItem[] = [
   { to: "#how-it-works", label: "How it works" },
   { to: "#features", label: "Features" },
-  { to: "#donate", label: "Donate" },
+  { to: "#join", label: "Join" },
 ] as const;
 
 const APP_NAV: NavItem[] = [
