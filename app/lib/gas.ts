@@ -9,12 +9,40 @@ export async function getNativeBalance(chain: Chain, address: Address, transport
     throw new Error(`No transport configured for chain ${chain.id}`);
   }
   const client = createPublicClient({ chain, transport: effectiveTransport });
-  return await client.getBalance({ address });
+
+  // Retry logic with exponential backoff for rate limiting
+  const maxRetries = 3;
+  const baseDelay = 1000; // 1 second
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await client.getBalance({ address });
+    } catch (error) {
+      // Check if it's a rate limiting error (429)
+      const is429 =
+        error instanceof Error &&
+        (error.message.includes("429") ||
+          error.message.includes("Too many request") ||
+          error.message.includes("rate limit"));
+
+      // If it's not a rate limit error or we've exhausted retries, throw
+      if (!is429 || attempt === maxRetries) {
+        throw error;
+      }
+
+      // Wait with exponential backoff before retrying
+      const delay = baseDelay * 2 ** attempt;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+
+  // This should never be reached, but TypeScript needs it
+  throw new Error("Failed to get balance after retries");
 }
 
 export async function ensureSufficientGas(
   tokensIn: TokenAmount[],
-  tokenOut: TokenAmount,
+  tokenOut: Omit<TokenAmount, "amount">,
   transports?: Record<number, Transport>,
 ): Promise<void> {
   // Check per (chainId, walletAddress) pair among sources, plus destination pair

@@ -98,6 +98,224 @@ describe("gas", () => {
 
       expect(balance).toBe(largeBalance);
     });
+
+    describe("rate limiting and retries", () => {
+      test("should retry on 429 error and succeed", async () => {
+        vi.useFakeTimers();
+        let callCount = 0;
+        const mockGetBalance = vi.fn().mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) {
+            return Promise.reject(new Error("HTTP request failed. 429: Too Many Requests"));
+          }
+          return Promise.resolve(parseUnits("1.5", 18));
+        });
+
+        mockCreatePublicClient.mockReturnValue({
+          getBalance: mockGetBalance,
+        } as Partial<PublicClient> as PublicClient);
+
+        const mockTransport = {} as Transport;
+        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
+
+        const balancePromise = getNativeBalance(mainnet, address, mockTransport);
+
+        // Fast-forward through the retry delay
+        await vi.runAllTimersAsync();
+
+        const balance = await balancePromise;
+
+        expect(balance).toBe(parseUnits("1.5", 18));
+        expect(mockGetBalance).toHaveBeenCalledTimes(2);
+
+        vi.useRealTimers();
+      });
+
+      test('should retry on error with "Too many request" in message', async () => {
+        vi.useFakeTimers();
+        let callCount = 0;
+        const mockGetBalance = vi.fn().mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) {
+            return Promise.reject(new Error("Too many request"));
+          }
+          return Promise.resolve(parseUnits("2", 18));
+        });
+
+        mockCreatePublicClient.mockReturnValue({
+          getBalance: mockGetBalance,
+        } as Partial<PublicClient> as PublicClient);
+
+        const mockTransport = {} as Transport;
+        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
+
+        const balancePromise = getNativeBalance(mainnet, address, mockTransport);
+        await vi.runAllTimersAsync();
+        const balance = await balancePromise;
+
+        expect(balance).toBe(parseUnits("2", 18));
+        expect(mockGetBalance).toHaveBeenCalledTimes(2);
+
+        vi.useRealTimers();
+      });
+
+      test('should retry on error with "rate limit" in message', async () => {
+        vi.useFakeTimers();
+        let callCount = 0;
+        const mockGetBalance = vi.fn().mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) {
+            return Promise.reject(new Error("rate limit exceeded"));
+          }
+          return Promise.resolve(parseUnits("3", 18));
+        });
+
+        mockCreatePublicClient.mockReturnValue({
+          getBalance: mockGetBalance,
+        } as Partial<PublicClient> as PublicClient);
+
+        const mockTransport = {} as Transport;
+        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
+
+        const balancePromise = getNativeBalance(mainnet, address, mockTransport);
+        await vi.runAllTimersAsync();
+        const balance = await balancePromise;
+
+        expect(balance).toBe(parseUnits("3", 18));
+        expect(mockGetBalance).toHaveBeenCalledTimes(2);
+
+        vi.useRealTimers();
+      });
+
+      test("should apply exponential backoff on multiple retries", async () => {
+        vi.useFakeTimers();
+        const startTime = Date.now();
+        let callCount = 0;
+        const delays: number[] = [];
+
+        const mockGetBalance = vi.fn().mockImplementation(() => {
+          callCount++;
+          delays.push(Date.now() - startTime);
+
+          if (callCount <= 2) {
+            return Promise.reject(new Error("429: Too Many Requests"));
+          }
+          return Promise.resolve(parseUnits("1", 18));
+        });
+
+        mockCreatePublicClient.mockReturnValue({
+          getBalance: mockGetBalance,
+        } as Partial<PublicClient> as PublicClient);
+
+        const mockTransport = {} as Transport;
+        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
+
+        const balancePromise = getNativeBalance(mainnet, address, mockTransport);
+        await vi.runAllTimersAsync();
+        const balance = await balancePromise;
+
+        expect(balance).toBe(parseUnits("1", 18));
+        expect(mockGetBalance).toHaveBeenCalledTimes(3);
+
+        // Verify exponential backoff delays
+        // First call at t=0
+        // Second call after 1000ms delay
+        // Third call after 2000ms delay
+        expect(delays[0]).toBe(0);
+        expect(delays[1]).toBeGreaterThanOrEqual(1000);
+        expect(delays[2]).toBeGreaterThanOrEqual(3000); // 1000 + 2000
+
+        vi.useRealTimers();
+      });
+
+      test("should throw after max retries exceeded", async () => {
+        vi.useFakeTimers();
+        const mockGetBalance = vi.fn().mockRejectedValue(new Error("429: Too Many Requests"));
+
+        mockCreatePublicClient.mockReturnValue({
+          getBalance: mockGetBalance,
+        } as Partial<PublicClient> as PublicClient);
+
+        const mockTransport = {} as Transport;
+        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
+
+        const balancePromise = getNativeBalance(mainnet, address, mockTransport);
+        // Add a catch handler to prevent unhandled rejection warnings
+        balancePromise.catch(() => {});
+
+        await vi.runAllTimersAsync();
+
+        await expect(balancePromise).rejects.toThrow("429: Too Many Requests");
+        // Should try: initial + 3 retries = 4 total attempts
+        expect(mockGetBalance).toHaveBeenCalledTimes(4);
+
+        vi.useRealTimers();
+      });
+
+      test("should not retry on non-rate-limit errors", async () => {
+        const mockGetBalance = vi.fn().mockRejectedValue(new Error("Network connection failed"));
+
+        mockCreatePublicClient.mockReturnValue({
+          getBalance: mockGetBalance,
+        } as Partial<PublicClient> as PublicClient);
+
+        const mockTransport = {} as Transport;
+        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
+
+        await expect(getNativeBalance(mainnet, address, mockTransport)).rejects.toThrow("Network connection failed");
+        // Should only try once
+        expect(mockGetBalance).toHaveBeenCalledTimes(1);
+      });
+
+      test("should not retry on non-Error exceptions", async () => {
+        const mockGetBalance = vi.fn().mockRejectedValue("String error");
+
+        mockCreatePublicClient.mockReturnValue({
+          getBalance: mockGetBalance,
+        } as Partial<PublicClient> as PublicClient);
+
+        const mockTransport = {} as Transport;
+        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
+
+        await expect(getNativeBalance(mainnet, address, mockTransport)).rejects.toBe("String error");
+        // Should only try once
+        expect(mockGetBalance).toHaveBeenCalledTimes(1);
+      });
+
+      test("should handle mixed rate limit and success scenarios", async () => {
+        vi.useFakeTimers();
+        let callCount = 0;
+        const mockGetBalance = vi.fn().mockImplementation(() => {
+          callCount++;
+          // First attempt: rate limit
+          if (callCount === 1) {
+            return Promise.reject(new Error("429"));
+          }
+          // Second attempt: different rate limit message
+          if (callCount === 2) {
+            return Promise.reject(new Error("rate limit exceeded"));
+          }
+          // Third attempt: success
+          return Promise.resolve(parseUnits("5.5", 18));
+        });
+
+        mockCreatePublicClient.mockReturnValue({
+          getBalance: mockGetBalance,
+        } as Partial<PublicClient> as PublicClient);
+
+        const mockTransport = {} as Transport;
+        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
+
+        const balancePromise = getNativeBalance(mainnet, address, mockTransport);
+        await vi.runAllTimersAsync();
+        const balance = await balancePromise;
+
+        expect(balance).toBe(parseUnits("5.5", 18));
+        expect(mockGetBalance).toHaveBeenCalledTimes(3);
+
+        vi.useRealTimers();
+      });
+    });
   });
 
   describe("ensureSufficientGas", () => {
