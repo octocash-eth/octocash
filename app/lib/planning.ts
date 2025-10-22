@@ -1,7 +1,8 @@
 import { type Address, getAddress, isAddressEqual } from "viem";
-import { chains } from "~/data/supported-chains";
+import { chains, transports } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
 import { getBridgeFee } from "./cctp";
+import { ensureSufficientGas } from "./gas";
 import { getSwapQuote } from "./odos";
 import type { DestinationToken, TokenAmount, TransactionStep } from "./types";
 
@@ -677,6 +678,7 @@ export async function planConsolidation(
 ): Promise<TransactionStep[]> {
   // Validate inputs
   validateInputs(sourceTokens, destinationToken, log);
+  await ensureSufficientGas(sourceTokens, destinationToken, transports);
 
   // Build consolidation pipeline
   let { steps, tokens } = await processChainWalletSwaps(sourceTokens, destinationToken, log);
