@@ -1,4 +1,13 @@
-import { type Address, type Call, type Chain, createPublicClient, encodeFunctionData, type Hex, parseAbi } from "viem";
+import {
+  type Address,
+  type Call,
+  type Chain,
+  createPublicClient,
+  encodeFunctionData,
+  type Hex,
+  pad,
+  parseAbi,
+} from "viem";
 import { chainIdToDomain, messageTransmitter, tokenAddresses, tokenMessenger } from "~/data/cctp-contracts";
 import { chains, transports } from "~/data/supported-chains";
 import type { SendCallsFn } from "~/lib/send-calls";
@@ -22,13 +31,18 @@ const getApproveAndBurnUsdcCalls = async (
   sourceChainId: number,
   amount: bigint,
   destinationChainId: number,
-  destinationAddress: string,
+  destinationAddress: Address,
 ) => {
   const finalityThreshold = 1000;
   const maxFee = amount - 1n;
 
-  // For EVM destinations, pad the hex address
-  const mintRecipient = `0x${destinationAddress.replace(/^0x/, "").padStart(64, "0")}`;
+  // Get multicall3 address from the source chain configuration
+  const sourceChain = chains[sourceChainId as keyof typeof chains] as Chain;
+  const multicall3Address = sourceChain.contracts?.multicall3?.address;
+
+  if (!multicall3Address) {
+    throw new Error(`Multicall3 address not found for chain ${sourceChainId}`);
+  }
 
   const calls = [
     {
@@ -49,9 +63,9 @@ const getApproveAndBurnUsdcCalls = async (
         args: [
           amount,
           chainIdToDomain[destinationChainId],
-          mintRecipient as Hex,
+          pad(destinationAddress),
           tokenAddresses[sourceChainId as keyof typeof tokenAddresses] as `0x${string}`,
-          mintRecipient as Hex,
+          pad(multicall3Address),
           maxFee,
           finalityThreshold,
         ],
