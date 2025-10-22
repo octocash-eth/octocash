@@ -1,6 +1,6 @@
 export const HERO_CONTENT = {
   title: "Consolidate Your Tokens",
-  subtitle: "Your tokens are scattered across chains. Octo brings them back together",
+  subtitle: "Your tokens are scattered across chains like treasures at sea. Octo gathers them all in one place.",
   cta: "Get Started",
   ctaLink: "/dashboard",
 };
@@ -8,34 +8,35 @@ export const HERO_CONTENT = {
 export const HOW_IT_WORKS_CONTENT = {
   title: "How it works",
   paragraphs: [
-    "Octo is a friendly octopus with many arms. He dives into Ethereum chains grabbing your tokens wherever they hide.",
-    "With a few clicks, he brings them home into one wallet, one token, one chain.",
+    "I'm Octo, and I love treasure hunting. I'll show you your tokens across chains, let you choose what to consolidate, and then I'll dive in to gather them.",
+    "With a few clicks, I'll bring your treasures home, consolidated into one wallet, one token, one chain.",
   ],
 };
 
 export const FEATURES_CONTENT = {
-  title: "Key Features",
-  subtitle: "Discover how Octo makes your token consolidation simple, safe, and seamless.",
+  title: "What Makes Octo Special",
+  subtitle: "We know managing tokens across chains is frustrating. That's why Octo exists.",
   cards: [
     {
-      title: "Multi-Chain Arms",
-      description: "Collect tokens from 8 major chains in one move.",
+      title: "Seven Seas, One View",
+      description: "See all your tokens across 7 chains. No more wallet hopping.",
       imageSrc: "/decorations/feature-card-1.svg",
       imageAlt: "Multi-chain illustration",
       imageWidth: 484,
       imageHeight: 333,
     },
     {
-      title: "Smooth & Simple",
-      description: "No more hopping across bridges and swaps—Octo does the messy stuff for you.",
+      title: "Choose Your Journey",
+      description: "Select which tokens to consolidate and where to send them. You're always in control.",
       imageSrc: "/decorations/feature-card-2.svg",
       imageAlt: "Simple process illustration",
       imageWidth: 484,
       imageHeight: 333,
     },
     {
-      title: "Safe Tentacles",
-      description: "Built on trusted protocols, so your tokens are in good hands (or arms).",
+      title: "Treasures Secured",
+      description:
+        "Built on trusted protocols. Your treasures arrive in a matter of seconds, exactly where you want them.",
       imageSrc: "/decorations/feature-card-3.svg",
       imageAlt: "Security illustration",
       imageWidth: 484,
@@ -43,26 +44,27 @@ export const FEATURES_CONTENT = {
     },
   ],
   trustedTech: {
-    title: "Only Trusted Technologies",
+    title: "Octo's Secret Ingredients",
     description: (
       <>
-        Octo.cash uses <strong>Circle's CCTPv2</strong> and <strong>Odos</strong> behind the scenes.
+        Behind the magic: <strong>Circle's CCTPv2</strong> handles the bridges, <strong>Odos</strong> powers the swaps.
+        Both proven protocols that keep your assets safe.
       </>
     ),
   },
 };
 
 export const SUPPORT_CONTENT = {
-  title: "Support Octo's Mission",
-  description: "Octo.cash is open-source, built as a public good. Help our octopus keep swimming and improving.",
+  title: "Join Octo's Journey",
+  description:
+    "We're on a mission to make multi-chain crypto as simple as a single wallet. Join our community and watch Octo grow with us.",
   cta: "Follow us on Twitter",
   ctaLink: "https://x.com/octocash_eth",
 };
 
 export const FAQ_CONTENT = {
   title: "FAQs",
-  subtitle:
-    "From supported chains to safety, here are the answers to the most common doubts—simple, transparent, and straight from the deep.",
+  subtitle: "Questions from the surface to the deep, answered simply, transparently, straight from Octo's heart.",
 };
 
 export const FAQ_ITEMS = [
@@ -79,12 +81,12 @@ export const FAQ_ITEMS = [
   {
     question: "Are there fees when consolidating?",
     answer:
-      "You'll pay standard gas fees for the transactions on each chain, plus any bridge or swap fees from the underlying protocols we use (Circle CCTP and Odos). Octo itself doesn't charge any additional fees.",
+      "Yes. On top of gas fees, you'll pay: 0.04% for stablecoin swaps, 0.16% for volatile asset swaps, and 0.01% for USDC bridges (0.14% on Linea). These fees go to the protocols (Odos and CCTP), with a small portion supporting Octo. All costs are shown upfront.",
   },
   {
     question: "Is it safe?",
     answer:
-      "Absolutely! Octo is built on trusted, battle-tested protocols like Circle's CCTP for bridging and Odos for swaps. We're also open-source, so our code is transparent and auditable by anyone.",
+      "Yes! Octo doesn't hold your funds. All interactions happen directly between your wallet and battle-tested protocols like Circle's CCTP and Odos. We coordinate the consolidation; the protocols handle your assets.",
   },
   {
     question: "Can I choose where my tokens end up?",
@@ -94,5 +96,5 @@ export const FAQ_ITEMS = [
 ];
 
 export const FOOTER_CONTENT = {
-  copyright: "© 2025 Blossom Labs. Soon-to-be-licensed under AGPL-3.0. Open source contributions welcome.",
+  copyright: "© 2025 Blossom Labs. Built with love for the people like us, navigating multi-chain complexity.",
 };
