@@ -6,8 +6,10 @@ import { ERROR_CODES } from "~/lib/types";
 
 // Mock AddressAvatar component that uses wagmi hooks
 vi.mock("~/components/address-avatar", () => ({
-  default: ({ size }: { addressOrEns: string; size: number }) => (
-    <img src="mock-avatar.png" alt="" width={size} height={size} data-testid="address-avatar" />
+  default: ({ className }: { addressOrEns: string; className?: string }) => (
+    <div className={className} data-testid="address-avatar">
+      <img src="mock-avatar.png" alt="" />
+    </div>
   ),
 }));
 

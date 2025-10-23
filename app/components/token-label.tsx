@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { TokenIcon } from "./token-icon";
 
 interface TokenLabelProps {
   tokenAddress: string;
@@ -7,21 +7,11 @@ interface TokenLabelProps {
 }
 
 export function TokenLabel({ tokenAddress, chainId, symbol }: TokenLabelProps) {
-  const [error, setError] = useState(false);
-
-  // Reset error whenever the tokenAddress or chainId changes:
-  // biome-ignore lint/correctness/useExhaustiveDependencies: We intentionally reset on prop changes
-  useEffect(() => {
-    setError(false);
-  }, [tokenAddress, chainId]);
-
-  const src = !error
-    ? `https://assets.octo.cash/token/${chainId}/${tokenAddress}`
-    : "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+  const iconUrl = `https://assets.octo.cash/token/${chainId}/${tokenAddress}`;
 
   return (
     <div className="flex items-center gap-2">
-      <img src={src} alt={symbol} className="w-4 h-4 rounded-full" onError={() => setError(true)} loading="lazy" />
+      <TokenIcon token={symbol} iconUrl={iconUrl} className="size-4" />
       <span>{symbol}</span>
     </div>
   );

@@ -84,11 +84,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
   return (
     <div className="space-y-4">
       {error && <div className="p-4 text-red-700 rounded-md bg-red-50">{error}</div>}
-      {isLoading ? (
-        <div className="flex items-center justify-center h-40">
-          <div className="w-8 h-8 border-b-2 rounded-full animate-spin border-primary"></div>
-        </div>
-      ) : walletData.length > 0 ? (
+      {walletData.length > 0 || isLoading ? (
         <>
           <DataTable
             columns={columns}
@@ -98,7 +94,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
             onRefresh={() => {
               void loadTokenBalances("refresh");
             }}
-            isRefreshing={isRefreshing}
+            isRefreshing={isRefreshing || isLoading}
           />
           <div className="flex justify-center mt-6">
             <ConsolidateTokensModal

@@ -6,7 +6,6 @@ import type {
   VisibilityState,
 } from "@tanstack/react-table";
 import {
-  flexRender,
   getCoreRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
@@ -17,13 +16,18 @@ import { Coins, Link, RotateCcw, Wallet } from "lucide-react";
 import * as React from "react";
 import { formatAddress } from "~/lib/utils";
 import AddressAvatar from "../address-avatar";
+import { ChainIcon } from "../chain-icon";
+import { TokenIcon } from "../token-icon";
 import { Button } from "../ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
-import { emptyPixel, uniq } from "./utils";
+import { DataGrid, DataGridContainer } from "../ui/data-grid";
+import { DataGridPagination } from "../ui/data-grid-pagination";
+import { DataGridTable } from "../ui/data-grid-table";
+import { ScrollArea, ScrollBar } from "../ui/scroll-area";
+import { uniq } from "./utils";
 import type { WalletTableFilterConfig } from "./wallet-table-filters";
 import { WalletTableFilters } from "./wallet-table-filters";
 
-interface DataTableProps<TData, TValue> {
+interface DataTableProps<TData extends object, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
   connectedAddresses?: readonly string[];
@@ -35,23 +39,16 @@ interface DataTableProps<TData, TValue> {
 function RenderedAddressCell({ address }: { address: string }) {
   return (
     <div className="flex items-center gap-2">
-      <AddressAvatar addressOrEns={address} size={16} />
+      <AddressAvatar addressOrEns={address} className="size-4" />
       {formatAddress(address)}
     </div>
   );
 }
 
-function RenderedTokenCell({ token: { token, iconUrl } }: { token: { token: string; iconUrl?: string | null } }) {
+function RenderedTokenCell({ token: { token, iconUrl } }: { token: { token: string; iconUrl?: string } }) {
   return (
     <div className="flex items-center gap-2">
-      <img
-        src={iconUrl ?? emptyPixel}
-        onError={(e) => {
-          e.currentTarget.src = emptyPixel;
-        }}
-        alt={token}
-        className="w-4 h-4"
-      />
+      <TokenIcon token={token} iconUrl={iconUrl} className="size-4" />
       {token}
     </div>
   );
@@ -60,17 +57,13 @@ function RenderedTokenCell({ token: { token, iconUrl } }: { token: { token: stri
 function RenderedChainCell({ chain }: { chain: string }) {
   return (
     <div className="flex items-center gap-2">
-      <img
-        src={`/chain-icons/${chain.toLowerCase().replace(/\s+/g, "-")}.svg`}
-        alt={chain}
-        className="w-4 h-4 rounded-full"
-      />
+      <ChainIcon chain={chain} className="size-4" />
       {chain}
     </div>
   );
 }
 
-export function DataTable<TData, TValue>({
+export function DataTable<TData extends object, TValue>({
   columns,
   data,
   onRowSelectionChange,
@@ -167,59 +160,36 @@ export function DataTable<TData, TValue>({
           </Button>
         ) : null}
       </div>
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => {
-                  return (
-                    <TableHead key={header.id}>
-                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                    </TableHead>
-                  );
-                })}
-              </TableRow>
-            ))}
-          </TableHeader>
-          <TableBody>
-            {table.getRowModel().rows?.length ? (
-              table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id} data-state={row.getIsSelected() && "selected"}>
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell colSpan={columns.length} className="h-24 text-center">
-                  No results.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
-      <div className="flex items-center justify-end space-x-2 py-4">
-        <div className="flex-1 text-sm text-muted-foreground">
-          {table.getFilteredSelectedRowModel().rows.length} of {table.getFilteredRowModel().rows.length} row(s)
-          selected.
+
+      <DataGrid<TData>
+        table={table}
+        recordCount={data.length}
+        isLoading={isRefreshing}
+        loadingMode="skeleton"
+        emptyMessage="No tokens found"
+        tableLayout={{
+          headerSticky: true,
+          headerBackground: false,
+          stripped: false,
+          cellBorder: false,
+          rowBorder: false,
+          width: "fixed",
+        }}
+      >
+        <DataGridContainer>
+          <ScrollArea className="max-h-[calc(100vh-400px)]">
+            <div className="min-w-6xl">
+              <DataGridTable<TData> />
+            </div>
+            <ScrollBar orientation="vertical" />
+            <ScrollBar orientation="horizontal" />
+          </ScrollArea>
+        </DataGridContainer>
+
+        <div className="flex items-center justify-between px-2 py-4">
+          <DataGridPagination sizes={[10, 25, 50, 100]} />
         </div>
-        <div className="space-x-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
-          >
-            Previous
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
-            Next
-          </Button>
-        </div>
-      </div>
+      </DataGrid>
     </div>
   );
 }

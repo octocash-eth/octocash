@@ -3,17 +3,16 @@ import { useMemo } from "react";
 import { isAddress } from "viem";
 import { normalize } from "viem/ens";
 import { useEnsAddress, useEnsAvatar, useEnsName } from "wagmi";
-import { cn } from "../lib/utils";
-
-const transparentPixel = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+import { cn } from "~/lib/utils";
+import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 
 function AddressAvatar({
   addressOrEns,
-  size,
+  className,
   title,
 }: {
   addressOrEns: string;
-  size: number;
+  className?: string;
   title?: string | undefined;
 }) {
   const isEnsName = addressOrEns.endsWith(".eth");
@@ -46,13 +45,18 @@ function AddressAvatar({
   });
   const address = ensAddress ?? addressOrEns;
   const src = useMemo(() => {
-    if (isLoading) return transparentPixel;
+    if (isLoading) return undefined;
     if (ensAvatar) return ensAvatar;
     if (!isLoading && isAddress(address)) return makeBlockie(address);
-    return transparentPixel;
+    return undefined;
   }, [ensAvatar, address, isLoading]);
 
-  return <img src={src} alt="" width={size} height={size} className={cn("rounded bg-gray-600")} title={title} />;
+  return (
+    <Avatar title={title} className={cn("rounded-sm", className)}>
+      <AvatarImage src={src} alt="" />
+      <AvatarFallback className="bg-gray-600" />
+    </Avatar>
+  );
 }
 
 export default AddressAvatar;

@@ -1,3 +1,4 @@
+import { ChainIcon } from "~/components/chain-icon";
 import { supportedChains } from "~/data/supported-chains";
 
 export function SupportedChains() {
@@ -9,8 +10,9 @@ export function SupportedChains() {
           <div
             key={chain.id}
             className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-blue-100 flex items-center justify-center"
+            title={chain.name}
           >
-            <img src={chain.icon} alt={chain.name} title={chain.name} className="w-7 h-7 md:w-8 md:h-8 rounded-full" />
+            <ChainIcon chain={chain.name} className="size-7 md:size-8" />
           </div>
         ))}
       </div>

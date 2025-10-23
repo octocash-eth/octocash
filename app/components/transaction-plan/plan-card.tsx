@@ -3,6 +3,8 @@ import { formatUnits } from "viem";
 import { chains } from "~/data/supported-chains";
 import type { StepResult, TransactionStep } from "~/lib/types";
 import AddressAvatar from "../address-avatar";
+import { ChainIcon } from "../chain-icon";
+import { TokenIcon } from "../token-icon";
 
 interface PlanCardProps {
   step: TransactionStep;
@@ -28,12 +30,6 @@ function getExplorerUrl(chainId: number, txHash: string): string {
   return `${chain.blockExplorers.default.url}/tx/${txHash}`;
 }
 
-function getChainIconUrl(chainId: number): string {
-  const chainName = chains[chainId as keyof typeof chains]?.name || `Chain ${chainId}`;
-  const chainSlug = chainName.toLowerCase().replace(/\s+/g, "-");
-  return `/chain-icons/${chainSlug}.svg`;
-}
-
 function getTokenIconUrl(chainId: number, tokenAddress: string): string {
   return `https://assets.octo.cash/token/${chainId}/${tokenAddress}`;
 }
@@ -56,25 +52,26 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
     outputAmount = formatAmount(step.outputToken.amount, step.outputToken.decimals || 18);
   }
 
-  const chainIcon = (chainId: number) => (
-    <img
-      src={getChainIconUrl(chainId)}
-      alt=""
-      className="w-4 h-4 rounded-full inline-block align-middle v-align-[-0.125em]"
-    />
-  );
+  const chainIcon = (chainId: number) => {
+    const chainName = chains[chainId as keyof typeof chains]?.name || `Chain ${chainId}`;
+    return <ChainIcon chain={chainName} className="size-4 inline-block align-middle v-align-[-0.125em]" />;
+  };
 
   const tokenIcon = (chainId: number, tokenAddress: string, symbol: string) => (
-    <img
-      src={getTokenIconUrl(chainId, tokenAddress)}
-      alt={symbol}
-      className="w-4 h-4 rounded-full inline-block align-middle v-align-[-0.125em]"
+    <TokenIcon
+      token={symbol}
+      iconUrl={getTokenIconUrl(chainId, tokenAddress)}
+      className="size-4 inline-block align-middle v-align-[-0.125em]"
     />
   );
 
   const addressAvatar = (address: string) => (
     <span className="inline-flex items-center gap-1">
-      <AddressAvatar addressOrEns={address} size={16} title={`Wallet: ${truncateAddress(address)}`} />{" "}
+      <AddressAvatar
+        addressOrEns={address}
+        className="size-3 sm:size-4"
+        title={`Wallet: ${truncateAddress(address)}`}
+      />{" "}
       {truncateAddress(address)}
     </span>
   );

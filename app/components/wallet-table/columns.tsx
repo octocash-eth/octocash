@@ -1,13 +1,17 @@
 import type { ColumnDef } from "@tanstack/react-table";
-import { ArrowUpDown, ExternalLink, MoreHorizontal } from "lucide-react";
+import { ExternalLink, MoreHorizontal } from "lucide-react";
 import { type Address, zeroAddress } from "viem";
 import { useEnsName } from "wagmi";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
+import { DataGridColumnHeader } from "~/components/ui/data-grid-column-header";
+import { Skeleton } from "~/components/ui/skeleton";
 
 import { supportedChains } from "~/data/supported-chains";
-import { formatAddress } from "~/lib/utils";
+import { cn, formatAddress } from "~/lib/utils";
 import AddressAvatar from "../address-avatar";
+import { ChainIcon } from "../chain-icon";
+import { TokenIcon } from "../token-icon";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,6 +49,7 @@ function getExplorerUrl(chainName: string, tokenAddress: string | undefined, add
 export const columns: ColumnDef<WalletData>[] = [
   {
     id: "select",
+    size: 20,
     header: ({ table }) => (
       <Checkbox
         checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")}
@@ -61,19 +66,14 @@ export const columns: ColumnDef<WalletData>[] = [
     ),
     enableSorting: false,
     enableHiding: false,
+    meta: {
+      skeleton: <Skeleton className="h-4 w-4 rounded" />,
+    },
   },
   {
     accessorKey: "token",
-    header: ({ column }) => (
-      <Button
-        variant="ghost"
-        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-        className="text-left"
-      >
-        Token
-        <ArrowUpDown className="ml-2 h-4 w-4" />
-      </Button>
-    ),
+    size: 200,
+    header: ({ column }) => <DataGridColumnHeader column={column} title="Token" />,
     cell: ({ row }) => {
       const tokenName = row.getValue("token") as string;
       const tokenAddress = row.original.tokenAddress;
@@ -91,8 +91,10 @@ export const columns: ColumnDef<WalletData>[] = [
 
       return (
         <div className="text-left flex items-center gap-1">
-          <img src={row.original.iconUrl} alt={tokenName} className="w-6 h-6 rounded-full" />
-          <span>{fullTokenName}</span>
+          <TokenIcon token={row.original.token} iconUrl={row.original.iconUrl} className="size-4 md:size-5" />
+          <span title={fullTokenName} className="truncate text-nowrap">
+            {fullTokenName}
+          </span>
           <span className="text-muted-foreground">{tokenName}</span>
           <a
             href={explorerUrl}
@@ -111,26 +113,28 @@ export const columns: ColumnDef<WalletData>[] = [
       if (values.length === 0) return true;
       return values.includes(row.getValue(id));
     },
+    meta: {
+      skeleton: (
+        <div className="flex items-center gap-1">
+          <Skeleton className="h-6 w-6 rounded-full" />
+          <Skeleton className="h-4 w-20" />
+          <Skeleton className="h-4 w-12" />
+        </div>
+      ),
+    },
   },
   {
     accessorKey: "chain",
-    header: ({ column }) => (
-      <Button
-        variant="ghost"
-        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-        className="text-left"
-      >
-        Chain
-        <ArrowUpDown className="ml-2 h-4 w-4" />
-      </Button>
-    ),
+    size: 100,
+    header: ({ column }) => <DataGridColumnHeader column={column} title="Chain" />,
     cell: ({ row }) => {
       const chainName = row.getValue("chain") as string;
-      const chainIcon = `/chain-icons/${chainName.toLowerCase().replace(/\s+/g, "-")}.svg`;
       return (
         <div className="text-left flex items-center gap-2">
-          <img src={chainIcon} alt={chainName} className="w-6 h-6 rounded-full" />
-          <span>{chainName}</span>
+          <ChainIcon chain={chainName} className="size-4 md:size-5" />
+          <span title={chainName} className="truncate text-nowrap">
+            {chainName}
+          </span>
         </div>
       );
     },
@@ -139,26 +143,26 @@ export const columns: ColumnDef<WalletData>[] = [
       if (values.length === 0) return true;
       return values.includes(row.getValue(id));
     },
+    meta: {
+      skeleton: (
+        <div className="flex items-center gap-2">
+          <Skeleton className="h-6 w-6 rounded-full" />
+          <Skeleton className="h-4 w-24" />
+        </div>
+      ),
+    },
   },
   {
     accessorKey: "wallet",
-    header: ({ column }) => (
-      <Button
-        variant="ghost"
-        onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-        className="text-left"
-      >
-        Wallet
-        <ArrowUpDown className="ml-2 h-4 w-4" />
-      </Button>
-    ),
+    size: 150,
+    header: ({ column }) => <DataGridColumnHeader column={column} title="Wallet" />,
     cell: ({ row }) => {
       const walletAddress = row.getValue("wallet") as string;
       const chainName = row.getValue("chain") as string;
       const explorerUrl = getExplorerUrl(chainName, undefined, walletAddress);
       return (
         <div className="font-medium text-left flex items-center gap-2">
-          <AddressAvatar addressOrEns={row.getValue("wallet") as string} size={20} />
+          <AddressAvatar addressOrEns={row.getValue("wallet") as string} className="size-4 md:size-5" />
           <AddressDisplay address={row.getValue("wallet")} />
           <a
             href={explorerUrl}
@@ -177,19 +181,21 @@ export const columns: ColumnDef<WalletData>[] = [
       if (values.length === 0) return true;
       return values.includes(row.getValue(id));
     },
+    meta: {
+      skeleton: (
+        <div className="flex items-center gap-2">
+          <Skeleton className="size-5 rounded-full" />
+          <Skeleton className="h-4 w-32" />
+        </div>
+      ),
+    },
   },
   {
     accessorKey: "amount",
+    size: 70,
     header: ({ column }) => (
-      <div className="text-right">
-        <Button
-          variant="ghost"
-          onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          className="text-right"
-        >
-          Amount
-          <ArrowUpDown className="ml-2 h-4 w-4" />
-        </Button>
+      <div className="flex justify-end -me-7">
+        <DataGridColumnHeader column={column} title="Amount" className="-ms-0! me-0!" />
       </div>
     ),
     cell: ({ row }) => {
@@ -217,19 +223,16 @@ export const columns: ColumnDef<WalletData>[] = [
 
       return <div className="text-right font-medium">{formatAmount(amount)}</div>;
     },
+    meta: {
+      skeleton: <Skeleton className="h-4 w-20 ml-auto" />,
+    },
   },
   {
     accessorKey: "amountInUsd",
+    size: 100,
     header: ({ column }) => (
-      <div className="text-right">
-        <Button
-          variant="ghost"
-          onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}
-          className="text-right"
-        >
-          Amount in USD
-          <ArrowUpDown className="ml-2 h-4 w-4" />
-        </Button>
+      <div className="flex justify-end -me-7">
+        <DataGridColumnHeader column={column} title="In USD" className="-ms-0! me-0!" />
       </div>
     ),
     cell: ({ row }) => {
@@ -247,9 +250,13 @@ export const columns: ColumnDef<WalletData>[] = [
 
       return <div className="text-right font-medium">{formatted}</div>;
     },
+    meta: {
+      skeleton: <Skeleton className="h-4 w-16 ml-auto" />,
+    },
   },
   {
     id: "actions",
+    size: 70,
     cell: ({ row }) => {
       const wallet = row.original;
       const addressToCopy = wallet.wallet;
@@ -286,11 +293,18 @@ export const columns: ColumnDef<WalletData>[] = [
         </div>
       );
     },
+    meta: {
+      skeleton: <Skeleton className="h-8 w-8 rounded ml-auto" />,
+    },
   },
 ];
 
-function AddressDisplay({ address }: { address: Address }) {
+function AddressDisplay({ address, className }: { address: Address; className?: string }) {
   const { data: ensName } = useEnsName({ address, chainId: 1 });
   const shortAddress = formatAddress(address);
-  return <span>{ensName || shortAddress}</span>;
+  return (
+    <span className={cn("truncate text-nowrap", className)} title={ensName || shortAddress}>
+      {ensName || shortAddress}
+    </span>
+  );
 }

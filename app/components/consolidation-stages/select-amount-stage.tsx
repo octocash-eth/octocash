@@ -1,5 +1,7 @@
 import * as React from "react";
 import AddressAvatar from "~/components/address-avatar";
+import { ChainIcon } from "~/components/chain-icon";
+import { TokenIcon } from "~/components/token-icon";
 import { Button } from "~/components/ui/button";
 import { InputDecimal } from "~/components/ui/input-decimal";
 import { Slider } from "~/components/ui/slider";
@@ -63,22 +65,18 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
               {/* Token Header */}
               <div className="flex justify-between items-start">
                 <div className="flex items-center gap-2">
-                  {token.iconUrl && <img src={token.iconUrl} alt={token.token} className="w-8 h-8 rounded-full" />}
+                  <TokenIcon token={token.token} iconUrl={token.iconUrl} className="size-8" />
                   <div className="flex flex-col">
                     <div className="flex items-center gap-1.5">
                       <span className="font-medium">{token.token}</span>
                       <span className="text-xs text-muted-foreground flex items-center gap-1">
                         on
-                        <img
-                          src={`/chain-icons/${token.chain.toLowerCase().replace(/\s+/g, "-")}.svg`}
-                          alt={token.chain}
-                          className="w-3 h-3 rounded-full"
-                        />
+                        <ChainIcon chain={token.chain} className="size-3" />
                         {token.chain}
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <AddressAvatar addressOrEns={token.wallet} size={14} />
+                      <AddressAvatar addressOrEns={token.wallet} className="size-3" />
                       <span>{formatAddress(token.wallet)}</span>
                     </div>
                   </div>

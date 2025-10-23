@@ -3,6 +3,7 @@ import { isAddress } from "viem";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { supportedChains } from "~/data/supported-chains";
 import AddressAvatar from "../address-avatar";
+import { ChainIcon } from "../chain-icon";
 import { Combobox } from "../combobox";
 import { TokenSelector } from "../token-selector";
 
@@ -46,7 +47,7 @@ export function SelectDestinationStage({
         <Combobox
           labelFunction={(address: string) => (
             <div className="flex items-center gap-2">
-              <AddressAvatar addressOrEns={address} size={16} />
+              <AddressAvatar addressOrEns={address} className="size-4" />
               {address}
             </div>
           )}
@@ -71,11 +72,7 @@ export function SelectDestinationStage({
             {availableChains.map((chain) => (
               <SelectItem key={chain.chainId} value={chain.chainId.toString()}>
                 <div className="flex items-center gap-2">
-                  <img
-                    src={`/chain-icons/${chain.name.toLowerCase().replace(/\s+/g, "-")}.svg`}
-                    alt={`${chain.name} icon`}
-                    className="w-4 h-4 rounded-full"
-                  />
+                  <ChainIcon chain={chain.name} className="size-4" />
                   {chain.name}
                 </div>
               </SelectItem>

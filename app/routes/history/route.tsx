@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { formatUnits, zeroAddress } from "viem";
 import { useToken } from "wagmi";
 import AddressAvatar from "~/components/address-avatar";
+import { ChainIcon } from "~/components/chain-icon";
 import { SiteHeader } from "~/components/site-header";
 import { TokenLabel } from "~/components/token-label";
 import { TransactionPlanViewer } from "~/components/transaction-plan";
@@ -282,7 +283,7 @@ function TokenCard({ token }: { token: TokenAmount }) {
   }
 
   const chain = chains[token.chainId as keyof typeof chains];
-  const chainIconUrl = chain?.name ? `/chain-icons/${chain.name.toLowerCase().replace(/\s+/g, "-")}.svg` : "";
+  const chainName = chain?.name || `Chain ${token.chainId}`;
 
   return (
     <div className="bg-background rounded-lg border border-border p-3 space-y-2">
@@ -297,11 +298,11 @@ function TokenCard({ token }: { token: TokenAmount }) {
       {/* Chain & Wallet Info */}
       <div className="flex items-center justify-between text-xs">
         <div className="flex items-center gap-1.5 text-muted-foreground">
-          {chainIconUrl && <img src={chainIconUrl} alt={chain?.name || ""} className="w-4 h-4 rounded-full" />}
-          <span>{chain?.name || `Chain ${token.chainId}`}</span>
+          <ChainIcon chain={chainName} className="size-4" />
+          <span>{chainName}</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <AddressAvatar addressOrEns={token.walletAddress} size={14} />
+          <AddressAvatar addressOrEns={token.walletAddress} className="size-3" />
           <span className="text-muted-foreground">{truncateAddress(token.walletAddress)}</span>
         </div>
       </div>
