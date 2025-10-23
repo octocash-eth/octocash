@@ -36,6 +36,15 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
   };
 
   const handleInputChange = (tokenId: string, value: string) => {
+    // Allow empty string during typing
+    if (value === "") {
+      setAmounts((prev) => ({
+        ...prev,
+        [tokenId]: "",
+      }));
+      return;
+    }
+
     // Validate that the input is a valid number and within range
     const token = tokens.find((t) => t.id === tokenId);
     if (!token) return;
@@ -43,10 +52,11 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
     const maxAmount = Number.parseFloat(token.amount);
     const numValue = Number.parseFloat(value);
 
-    if (value === "" || Number.isNaN(numValue)) {
+    if (Number.isNaN(numValue)) {
+      // Invalid number, keep current value or set to empty
       setAmounts((prev) => ({
         ...prev,
-        [tokenId]: "0",
+        [tokenId]: "",
       }));
       return;
     }
@@ -59,6 +69,17 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
     }));
   };
 
+  const handleInputBlur = (tokenId: string) => {
+    // Convert empty string to "0" when user leaves the input
+    const currentValue = amounts[tokenId];
+    if (currentValue === "" || currentValue === undefined) {
+      setAmounts((prev) => ({
+        ...prev,
+        [tokenId]: "0",
+      }));
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="text-sm text-muted-foreground mb-4">
@@ -68,7 +89,8 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
       <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
         {tokens.map((token) => {
           const maxAmount = Number.parseFloat(token.amount);
-          const currentAmount = Number.parseFloat(amounts[token.id] || "0");
+          const amountValue = amounts[token.id] ?? "0";
+          const currentAmount = Number.parseFloat(amountValue) || 0;
           const currentUsdValue = maxAmount > 0 ? (currentAmount / maxAmount) * token.amountInUsd : 0;
 
           return (
@@ -130,8 +152,9 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
                   min="0"
                   max={maxAmount}
                   step="any"
-                  value={currentAmount}
+                  value={amountValue}
                   onChange={(e) => handleInputChange(token.id, e.target.value)}
+                  onBlur={() => handleInputBlur(token.id)}
                   className="w-28 h-8 text-sm"
                   placeholder="0.00"
                 />
