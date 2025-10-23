@@ -1,26 +1,33 @@
 import * as React from "react";
-import { useId } from "react";
 import { getAddress, isAddress, parseUnits } from "viem";
-import { useAccount, useWalletClient } from "wagmi";
+import { useAccount } from "wagmi";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
 } from "~/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
+import {
+  Stepper,
+  StepperContent,
+  StepperIndicator,
+  StepperItem,
+  StepperNav,
+  StepperPanel,
+  StepperTitle,
+  StepperTrigger,
+} from "~/components/ui/stepper";
 import type { WalletData } from "~/components/wallet-table/columns";
 import { supportedChains } from "~/data/supported-chains";
 import { USDC } from "~/data/token-contracts";
 import type { ConsolidationState, DestinationToken, SourceToken } from "~/lib/types";
-import AddressAvatar from "./address-avatar";
-import { Combobox } from "./combobox";
-import { formatTokenValue, parseTokenValue, TokenSelector } from "./token-selector";
-import { TransactionPlanExecutor } from "./transaction-plan";
+import { ConfirmPlanStage } from "./consolidation-stages/confirm-plan-stage";
+import { SelectAmountStage } from "./consolidation-stages/select-amount-stage";
+import { SelectDestinationStage } from "./consolidation-stages/select-destination-stage";
+import { formatTokenValue, parseTokenValue } from "./token-selector";
 
 interface ConsolidateTokensModalProps {
   walletData: WalletData[];
@@ -37,57 +44,53 @@ export function ConsolidateTokensModal({
 }: ConsolidateTokensModalProps) {
   const [destinationWallet, setDestinationWallet] = React.useState("");
   const [destinationChain, setDestinationChain] = React.useState("");
-  const [estimatedAmount, setEstimatedAmount] = React.useState(0);
   const [destinationTokenAddr, setDestinationTokenAddr] = React.useState("");
   const [open, setOpen] = React.useState(false);
-  const [showPlan, setShowPlan] = React.useState(false);
+  const [currentStage, setCurrentStage] = React.useState(1);
   const [planId, setPlanId] = React.useState("");
-  const _destinationChainId = useId();
+  const [tokenAmounts, setTokenAmounts] = React.useState<Record<string, string>>({});
 
   const consolidatedTokens = React.useMemo(() => {
     return Object.entries(rowSelection)
       .filter(([rowId, isSelected]) => isSelected && walletData[parseInt(rowId, 10)])
       .map(([rowId, _isSelected]) => {
         const token = walletData[parseInt(rowId, 10)];
-        return { ...token, amountToConsolidate: token.amount };
+        const amount = tokenAmounts[token.id] || token.amount;
+        return { ...token, amountToConsolidate: amount };
       });
-  }, [rowSelection, walletData]);
+  }, [rowSelection, walletData, tokenAmounts]);
 
-  const { data: walletClient } = useWalletClient();
   const { addresses } = useAccount();
-
-  // Available chains for destination
-  const availableChains = supportedChains.map((chain) => ({
-    name: chain.name,
-    chainId: chain.id,
-  }));
-
-  const destinationChainId = Number(
-    availableChains.find((chain) => chain.chainId === Number(destinationChain))?.chainId,
-  );
 
   const addressOptions = React.useMemo(
     () => (addresses ?? []).map((address) => ({ value: address, label: address })),
     [addresses],
   );
 
+  const destinationChainId = Number(destinationChain);
+
   // Derive sourceTokens from consolidatedTokens and other state
   const sourceTokens = React.useMemo<SourceToken[]>(() => {
-    if (!showPlan) return [];
+    if (currentStage !== 3) return [];
 
-    return consolidatedTokens.map((token) => ({
-      amount: parseUnits(token.amountToConsolidate, token.decimals),
-      chainId: Number(availableChains.find((chain) => chain.name === token.chain)?.chainId),
-      token: token.tokenAddress,
-      walletAddress: token.wallet,
-      symbol: token.token,
-      decimals: token.decimals,
-    }));
-  }, [showPlan, consolidatedTokens, availableChains]);
+    return consolidatedTokens
+      .filter((token) => Number.parseFloat(token.amountToConsolidate) > 0)
+      .map((token) => {
+        const chainInfo = supportedChains.find((chain) => chain.name === token.chain);
+        return {
+          amount: parseUnits(token.amountToConsolidate, token.decimals),
+          chainId: chainInfo?.id || 0,
+          token: token.tokenAddress,
+          walletAddress: token.wallet,
+          symbol: token.token,
+          decimals: token.decimals,
+        };
+      });
+  }, [currentStage, consolidatedTokens]);
 
   // Derive destinationToken from form state
   const destinationToken = React.useMemo<DestinationToken | null>(() => {
-    if (!showPlan || !isAddress(destinationWallet) || !addresses) return null;
+    if (currentStage !== 3 || !isAddress(destinationWallet) || !addresses) return null;
 
     const sendTo = getAddress(destinationWallet);
     const intermediateWallet = addresses.includes(sendTo) ? sendTo : addresses[0];
@@ -102,54 +105,90 @@ export function ConsolidateTokensModal({
       symbol: tokenInfo.symbol,
       decimals: tokenInfo.decimals,
     };
-  }, [showPlan, destinationWallet, destinationTokenAddr, addresses]);
+  }, [currentStage, destinationWallet, destinationTokenAddr, addresses]);
 
-  // Calculate estimated USDC amount (with a 0.5% fee)
-  React.useEffect(() => {
-    const fee = 0.005; // 0.5%
-    const estimatedWithFee = totalValueToConsolidate * (1 - fee);
-    setEstimatedAmount(estimatedWithFee);
-  }, [totalValueToConsolidate]);
+  // Calculate actual total value based on selected amounts
+  const actualTotalToConsolidate = React.useMemo(() => {
+    return consolidatedTokens.reduce((total, token) => {
+      const amountToConsolidate = Number.parseFloat(token.amountToConsolidate);
+      const fullAmount = Number.parseFloat(token.amount);
+      const ratio = fullAmount > 0 ? amountToConsolidate / fullAmount : 0;
+      return total + token.amountInUsd * ratio;
+    }, 0);
+  }, [consolidatedTokens]);
 
   React.useEffect(() => {
     if (destinationChainId) {
       const usdcAddress = USDC[destinationChainId as keyof typeof USDC];
-      setDestinationTokenAddr(formatTokenValue(destinationChainId, usdcAddress, 6, "USDC"));
+      if (usdcAddress) {
+        setDestinationTokenAddr(formatTokenValue(destinationChainId, usdcAddress, 6, "USDC"));
+      }
     }
   }, [destinationChainId]);
 
-  // Reset showPlan when modal is closed
+  // Reset stage when modal is closed
   React.useEffect(() => {
     if (!open) {
-      setShowPlan(false);
+      setCurrentStage(1);
     }
   }, [open]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  // Track previous stage to detect stage transitions
+  const prevStageRef = React.useRef(currentStage);
 
-    if (!walletClient || !addresses) {
-      console.error("Wallet not connected");
-      return;
+  // Generate new planId when transitioning to stage 3 from any other stage
+  // This ensures the plan is regenerated whenever the user navigates to stage 3
+  React.useEffect(() => {
+    const prevStage = prevStageRef.current;
+    prevStageRef.current = currentStage;
+
+    if (currentStage === 3 && prevStage !== 3) {
+      const newPlanId = `consolidation-${Date.now()}`;
+      setPlanId(newPlanId);
     }
+  }, [currentStage]);
 
-    if (!isAddress(destinationWallet)) {
-      console.error("Invalid destination wallet address");
-      return;
+  // Validation function for navigation
+  const canNavigateToStage = React.useCallback(
+    (stageNumber: number) => {
+      // Can always navigate backwards
+      if (stageNumber < currentStage) return true;
+
+      // Can navigate to current stage
+      if (stageNumber === currentStage) return true;
+
+      // To navigate forward, all intermediate stages must be valid
+      // Check stage 1 requirements (for stages 2 and 3)
+      if (stageNumber >= 2) {
+        const hasValidAmounts = consolidatedTokens.some((token) => Number.parseFloat(token.amountToConsolidate) > 0);
+        if (!hasValidAmounts) return false;
+      }
+
+      // Check stage 2 requirements (for stage 3)
+      if (stageNumber >= 3) {
+        const hasValidDestination =
+          isAddress(destinationWallet) && destinationChain !== "" && destinationTokenAddr !== "";
+        if (!hasValidDestination) return false;
+      }
+
+      return true;
+    },
+    [currentStage, consolidatedTokens, destinationWallet, destinationChain, destinationTokenAddr],
+  );
+
+  const handleNext = React.useCallback(() => {
+    if (currentStage === 3) return;
+
+    if (canNavigateToStage(currentStage + 1)) {
+      setCurrentStage((prev) => prev + 1);
     }
+  }, [currentStage, canNavigateToStage]);
 
-    const tokenInfo = parseTokenValue(destinationTokenAddr);
-
-    if (!tokenInfo) {
-      console.error("Invalid destination token selected");
-      return;
+  const handleBack = React.useCallback(() => {
+    if (currentStage > 1) {
+      setCurrentStage((prev) => prev - 1);
     }
-
-    // Generate a unique plan ID upfront
-    const newPlanId = `consolidation-${Date.now()}`;
-    setPlanId(newPlanId);
-    setShowPlan(true);
-  };
+  }, [currentStage]);
 
   const handleComplete = React.useCallback((completedState: ConsolidationState) => {
     console.log("[Modal] handleComplete called with status:", completedState.status);
@@ -157,19 +196,8 @@ export function ConsolidateTokensModal({
     if (completedState.status === "completed") {
       setTimeout(() => {
         setOpen(false);
-        setShowPlan(false);
       }, 2000); // Give user time to see success
     }
-  }, []);
-
-  const handleBack = React.useCallback(() => {
-    setShowPlan(false);
-  }, []);
-
-  // Put in suspicious components
-  React.useEffect(() => {
-    console.log("MOUNT", "ConsolidateTokensModal");
-    return () => console.log("UNMOUNT", "ConsolidateTokensModal");
   }, []);
 
   return (
@@ -200,8 +228,8 @@ export function ConsolidateTokensModal({
       <DialogContent className="sm:max-w-5xl">
         <DialogHeader className="pb-4">
           <DialogTitle className="text-xl">
-            {showPlan ? "Review Consolidation Plan" : "Consolidate"}{" "}
-            {totalValueToConsolidate.toLocaleString("en-US", {
+            Consolidate{" "}
+            {actualTotalToConsolidate.toLocaleString("en-US", {
               style: "currency",
               currency: "USD",
               minimumFractionDigits: 0,
@@ -209,137 +237,83 @@ export function ConsolidateTokensModal({
             })}
           </DialogTitle>
           <DialogDescription>
-            {showPlan
-              ? "Review the transaction steps before confirming"
-              : `Convert ${selectedRows} selected token${selectedRows !== 1 ? "s" : ""} to USDC and send to a destination wallet.`}
+            {currentStage === 1 && `Adjust amounts for ${selectedRows} selected token${selectedRows !== 1 ? "s" : ""}.`}
+            {currentStage === 2 && "Select the destination wallet, chain, and token."}
+            {currentStage === 3 && "Review and execute the consolidation plan."}
           </DialogDescription>
         </DialogHeader>
 
-        {!showPlan && (
-          <form onSubmit={handleSubmit} className="space-y-5">
-            {/* Token summary */}
-            <div className="space-y-2 mb-2 bg-muted/50 p-3 rounded-md">
-              <h4 className="text-sm font-medium mb-2">Tokens to consolidate:</h4>
-              <div className="max-h-32 overflow-y-auto space-y-2">
-                {Object.entries(rowSelection)
-                  .filter(([rowId, isSelected]) => isSelected && walletData[parseInt(rowId, 10)])
-                  .map(([rowId, _isSelected]) => {
-                    const token = walletData[parseInt(rowId, 10)];
+        <Stepper value={currentStage} onValueChange={setCurrentStage} className="space-y-6">
+          <StepperNav className="gap-3.5">
+            {[
+              { id: "select-amount", title: "Select Amount" },
+              { id: "select-destination", title: "Select Destination" },
+              { id: "confirm-plan", title: "Confirm Plan" },
+            ].map((stage, index) => {
+              const stageNumber = index + 1;
+              return (
+                <StepperItem
+                  key={stage.id}
+                  step={stageNumber}
+                  className="relative flex-1 items-start"
+                  disabled={!canNavigateToStage(stageNumber)}
+                >
+                  <StepperTrigger className="flex flex-col items-start justify-center gap-3.5 grow">
+                    <StepperIndicator className="bg-border rounded-full h-1 w-full data-[state=active]:bg-primary data-[state=completed]:bg-primary" />
+                    <div className="flex flex-col items-start gap-1">
+                      <StepperTitle className="text-start font-semibold group-data-[state=inactive]/step:text-muted-foreground">
+                        {stage.title}
+                      </StepperTitle>
+                    </div>
+                  </StepperTrigger>
+                </StepperItem>
+              );
+            })}
+          </StepperNav>
 
-                    return (
-                      <div key={rowId} className="flex justify-between text-xs">
-                        <span>
-                          {Number(token.amount).toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 6,
-                          })}{" "}
-                          {token.token} ({token.chain})
-                        </span>
-                        <span className="font-medium">
-                          {token.amountInUsd.toLocaleString("en-US", {
-                            style: "currency",
-                            currency: "USD",
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </span>
-                      </div>
-                    );
-                  })}
+          <StepperPanel className="text-sm">
+            <StepperContent value={1}>
+              <SelectAmountStage tokens={consolidatedTokens} onAmountsChange={setTokenAmounts} />
+              <div className="pt-4 flex gap-2">
+                <Button onClick={handleNext} disabled={!canNavigateToStage(2)} className="w-full">
+                  Next
+                </Button>
               </div>
-            </div>
+            </StepperContent>
 
-            <div className="space-y-2">
-              <label htmlFor="destination-wallet" className="text-sm font-medium">
-                Destination Wallet
-              </label>
-              <Combobox
-                labelFunction={(address: string) => (
-                  <div className="flex items-center gap-2">
-                    <AddressAvatar addressOrEns={address} size={16} />
-                    {address}
-                  </div>
-                )}
-                placeholder="0x..."
-                searchPlaceholder="Select or paste an address"
-                options={addressOptions}
-                value={destinationWallet}
-                onValueChange={setDestinationWallet}
-                isValidOption={(value) => [isAddress(value), `"${value}" is not an Ethereum address`]}
+            <StepperContent value={2}>
+              <SelectDestinationStage
+                destinationWallet={destinationWallet}
+                setDestinationWallet={setDestinationWallet}
+                destinationChain={destinationChain}
+                setDestinationChain={setDestinationChain}
+                destinationTokenAddr={destinationTokenAddr}
+                setDestinationTokenAddr={setDestinationTokenAddr}
+                addressOptions={addressOptions}
               />
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor={_destinationChainId} className="text-sm font-medium">
-                Destination Chain
-              </label>
-              <Select value={destinationChain} onValueChange={setDestinationChain} required>
-                <SelectTrigger id={_destinationChainId} className="w-full">
-                  <SelectValue placeholder="Select chain" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableChains.map((chain) => (
-                    <SelectItem key={chain.chainId} value={chain.chainId.toString()}>
-                      <div className="flex items-center gap-2">
-                        <img
-                          src={`/chain-icons/${chain.name.toLowerCase().replace(/\s+/g, "-")}.svg`}
-                          alt={`${chain.name} icon`}
-                          className="w-4 h-4 rounded-full"
-                        />
-                        {chain.name}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <label htmlFor="destination-token" className="text-sm font-medium">
-                Destination Token
-              </label>
-              <TokenSelector
-                chainId={destinationChainId}
-                value={destinationTokenAddr}
-                onChange={setDestinationTokenAddr}
-                disabled={!destinationChainId}
-              />
-            </div>
-
-            <div className="space-y-2 pt-3 border-t">
-              <div className="flex justify-between mt-3">
-                <span className="text-sm font-medium">Estimated USDC</span>
-                <span className="text-sm font-semibold text-green-600">
-                  {estimatedAmount.toLocaleString("en-US", {
-                    style: "currency",
-                    currency: "USD",
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
-                </span>
+              <div className="pt-4 flex gap-2">
+                <Button onClick={handleBack} variant="outline" className="flex-1">
+                  Back
+                </Button>
+                <Button onClick={handleNext} disabled={!canNavigateToStage(3)} className="flex-1">
+                  Next
+                </Button>
               </div>
-              <div className="text-xs text-muted-foreground">Includes a 0.5% conversion fee</div>
-            </div>
+            </StepperContent>
 
-            <DialogFooter className="pt-4 flex flex-col gap-2">
-              <Button type="submit" className="w-full py-5 text-base">
-                Generate Plan
-              </Button>
-            </DialogFooter>
-          </form>
-        )}
-
-        {showPlan && planId && destinationToken && (
-          <TransactionPlanExecutor
-            key={planId}
-            planId={planId}
-            sourceTokens={sourceTokens}
-            destinationToken={destinationToken}
-            onComplete={handleComplete}
-            onBack={handleBack}
-            showActions={true}
-          />
-        )}
+            <StepperContent value={3}>
+              {planId && destinationToken && (
+                <ConfirmPlanStage
+                  planId={planId}
+                  sourceTokens={sourceTokens}
+                  destinationToken={destinationToken}
+                  onComplete={handleComplete}
+                  onBack={handleBack}
+                />
+              )}
+            </StepperContent>
+          </StepperPanel>
+        </Stepper>
       </DialogContent>
     </Dialog>
   );
