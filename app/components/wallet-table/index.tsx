@@ -26,7 +26,6 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
   const [isRefreshing, setIsRefreshing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
-  const [consolidateAmounts, setConsolidateAmounts] = React.useState<Record<string, string>>({});
 
   // Calculate the total value to consolidate
   const totalValueToConsolidate = React.useMemo(() => {
@@ -35,53 +34,12 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     Object.entries(rowSelection).forEach(([rowId, isSelected]) => {
       if (isSelected && walletData[parseInt(rowId, 10)]) {
         const row = walletData[parseInt(rowId, 10)];
-        const amount = consolidateAmounts[rowId] !== undefined ? consolidateAmounts[rowId] : row.amount;
-        // Calculate the USD value based on the proportion of tokens being consolidated
-        const proportion = Number(amount) / Number(row.amount);
-        total += row.amountInUsd * proportion;
+        total += row.amountInUsd;
       }
     });
 
     return total;
-  }, [walletData, rowSelection, consolidateAmounts]);
-
-  // Listen for amount to consolidate changes
-  React.useEffect(() => {
-    const handleAmountChange = (event: Event) => {
-      const customEvent = event as CustomEvent<{ rowId: string; value: string }>;
-      const { rowId, value } = customEvent.detail;
-
-      setConsolidateAmounts((prev) => ({
-        ...prev,
-        [rowId]: String(value),
-      }));
-    };
-
-    document.addEventListener("amountToConsolidateChange", handleAmountChange as EventListener);
-
-    return () => {
-      document.removeEventListener("amountToConsolidateChange", handleAmountChange as EventListener);
-    };
-  }, []);
-
-  // Initialize consolidate amounts when rows are selected
-  React.useEffect(() => {
-    setConsolidateAmounts((previous) => {
-      let hasChanges = false;
-      const next: Record<string, string> = { ...previous };
-
-      Object.entries(rowSelection).forEach(([rowId, isSelected]) => {
-        if (isSelected && walletData[parseInt(rowId, 10)]) {
-          if (next[rowId] === undefined) {
-            next[rowId] = walletData[parseInt(rowId, 10)].amount;
-            hasChanges = true;
-          }
-        }
-      });
-
-      return hasChanges ? next : previous;
-    });
-  }, [rowSelection, walletData]);
+  }, [walletData, rowSelection]);
 
   const loadTokenBalances = React.useCallback(
     async (mode: "initial" | "refresh" = "initial") => {
@@ -161,7 +119,6 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
               walletData={walletData}
               rowSelection={rowSelection}
               selectedRows={Object.keys(rowSelection).length}
-              consolidateAmounts={consolidateAmounts}
               totalValueToConsolidate={totalValueToConsolidate}
             />
           </div>

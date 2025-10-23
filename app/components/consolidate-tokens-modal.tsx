@@ -26,7 +26,6 @@ interface ConsolidateTokensModalProps {
   walletData: WalletData[];
   rowSelection?: Record<string, boolean>;
   selectedRows?: number;
-  consolidateAmounts?: Record<string, string>;
   totalValueToConsolidate?: number;
 }
 
@@ -34,7 +33,6 @@ export function ConsolidateTokensModal({
   walletData,
   rowSelection = {},
   selectedRows = 0,
-  consolidateAmounts = {},
   totalValueToConsolidate = 0,
 }: ConsolidateTokensModalProps) {
   const [destinationWallet, setDestinationWallet] = React.useState("");
@@ -51,10 +49,9 @@ export function ConsolidateTokensModal({
       .filter(([rowId, isSelected]) => isSelected && walletData[parseInt(rowId, 10)])
       .map(([rowId, _isSelected]) => {
         const token = walletData[parseInt(rowId, 10)];
-        const amountToConsolidate = consolidateAmounts[rowId] || token.amount;
-        return { ...token, amountToConsolidate };
+        return { ...token, amountToConsolidate: token.amount };
       });
-  }, [rowSelection, walletData, consolidateAmounts]);
+  }, [rowSelection, walletData]);
 
   const { data: walletClient } = useWalletClient();
   const { addresses } = useAccount();
@@ -228,29 +225,18 @@ export function ConsolidateTokensModal({
                   .filter(([rowId, isSelected]) => isSelected && walletData[parseInt(rowId, 10)])
                   .map(([rowId, _isSelected]) => {
                     const token = walletData[parseInt(rowId, 10)];
-                    const amountToConsolidate = consolidateAmounts[rowId] || token.amount;
-                    const proportion = Number(amountToConsolidate) / Number(token.amount);
-                    const valueToConsolidate = token.amountInUsd * proportion;
-                    const percentageConsolidateed = Math.round(proportion * 100);
 
                     return (
                       <div key={rowId} className="flex justify-between text-xs">
-                        <div className="flex flex-col">
-                          <span>
-                            {Number(amountToConsolidate).toLocaleString(undefined, {
-                              minimumFractionDigits: 2,
-                              maximumFractionDigits: 6,
-                            })}{" "}
-                            {token.token} ({token.chain})
-                          </span>
-                          {percentageConsolidateed < 100 && (
-                            <span className="text-xs text-muted-foreground">
-                              {percentageConsolidateed}% of total balance
-                            </span>
-                          )}
-                        </div>
+                        <span>
+                          {Number(token.amount).toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 6,
+                          })}{" "}
+                          {token.token} ({token.chain})
+                        </span>
                         <span className="font-medium">
-                          {valueToConsolidate.toLocaleString("en-US", {
+                          {token.amountInUsd.toLocaleString("en-US", {
                             style: "currency",
                             currency: "USD",
                             minimumFractionDigits: 2,

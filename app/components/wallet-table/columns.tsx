@@ -1,11 +1,9 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { ArrowUpDown, ExternalLink, MoreHorizontal } from "lucide-react";
-import * as React from "react";
 import { type Address, zeroAddress } from "viem";
 import { useEnsName } from "wagmi";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
-import { Input } from "~/components/ui/input";
 
 import { supportedChains } from "~/data/supported-chains";
 import { formatAddress } from "~/lib/utils";
@@ -32,17 +30,6 @@ export type WalletData = {
   iconUrl?: string;
   decimals: number;
 };
-
-// Format the amount for display in the input
-function formatAmountForInput(value: number): string {
-  if (value >= 1000) {
-    return value.toFixed(2);
-  } else if (value >= 1) {
-    return value.toFixed(4);
-  } else {
-    return value.toFixed(6);
-  }
-}
 
 function getExplorerUrl(chainName: string, tokenAddress: string | undefined, address: string): string {
   const chain = supportedChains.find((chain) => chain.name === chainName);
@@ -207,8 +194,6 @@ export const columns: ColumnDef<WalletData>[] = [
     ),
     cell: ({ row }) => {
       const amount = parseFloat(row.getValue("amount"));
-      const isSelected = row.getIsSelected();
-      const inputRef = React.useRef<HTMLInputElement>(null);
 
       // Format with appropriate decimal places based on the value
       const formatAmount = (value: number) => {
@@ -230,89 +215,7 @@ export const columns: ColumnDef<WalletData>[] = [
         }
       };
 
-      // Set initial value when selected
-      React.useEffect(() => {
-        if (isSelected && inputRef.current) {
-          inputRef.current.value = formatAmountForInput(amount);
-        }
-      }, [isSelected, amount]);
-
-      // Handle click on the cell to select the row if not already selected
-      const handleCellClick = () => {
-        if (!isSelected) {
-          row.toggleSelected(true);
-        }
-      };
-
-      // Handle keyboard events for accessibility
-      const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          handleCellClick();
-        }
-      };
-
-      // Handle input change and validate range
-      const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const newValue = parseFloat(e.target.value);
-        let validatedValue = newValue;
-
-        // Validate the range
-        if (Number.isNaN(newValue) || newValue < 0) {
-          validatedValue = 0;
-          if (inputRef.current) {
-            inputRef.current.value = "0";
-          }
-        } else if (newValue > amount) {
-          validatedValue = amount;
-          if (inputRef.current) {
-            inputRef.current.value = formatAmountForInput(amount);
-          }
-        }
-
-        // Create a custom event to notify about the change
-        const event = new CustomEvent("amountToConsolidateChange", {
-          detail: {
-            rowId: row.id,
-            value: validatedValue,
-          },
-        });
-        document.dispatchEvent(event);
-      };
-
-      return (
-        <button
-          type="button"
-          className="text-right font-medium flex items-center justify-end gap-2 cursor-pointer bg-transparent border-none p-0 w-full"
-          onClick={handleCellClick}
-          onKeyDown={handleKeyDown}
-          aria-label={isSelected ? "Modify amount to consolidate" : "Select row to set amount to consolidate"}
-        >
-          {isSelected ? (
-            <>
-              <Input
-                ref={inputRef}
-                type="number"
-                defaultValue={formatAmountForInput(amount)}
-                onChange={handleInputChange}
-                className="w-20 h-8 text-right"
-                min="0"
-                max={amount.toString()}
-                step="0.000001"
-                // Stop propagation to prevent the cell click handler from firing
-                onClick={(e) => e.stopPropagation()}
-              />
-              <span className="text-muted-foreground">/</span>
-            </>
-          ) : (
-            <>
-              <span className="text-muted-foreground w-20 text-right">0</span>
-              <span className="text-muted-foreground">/</span>
-            </>
-          )}
-          <span>{formatAmount(amount)}</span>
-        </button>
-      );
+      return <div className="text-right font-medium">{formatAmount(amount)}</div>;
     },
   },
   {
