@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Button } from "~/components/ui/button";
-import { Input } from "~/components/ui/input";
+import { InputDecimal } from "~/components/ui/input-decimal";
+import { Slider } from "~/components/ui/slider";
 import type { WalletData } from "~/components/wallet-table/columns";
 
 interface TokenWithAmount extends WalletData {
@@ -36,48 +37,10 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
   };
 
   const handleInputChange = (tokenId: string, value: string) => {
-    // Allow empty string during typing
-    if (value === "") {
-      setAmounts((prev) => ({
-        ...prev,
-        [tokenId]: "",
-      }));
-      return;
-    }
-
-    // Validate that the input is a valid number and within range
-    const token = tokens.find((t) => t.id === tokenId);
-    if (!token) return;
-
-    const maxAmount = Number.parseFloat(token.amount);
-    const numValue = Number.parseFloat(value);
-
-    if (Number.isNaN(numValue)) {
-      // Invalid number, keep current value or set to empty
-      setAmounts((prev) => ({
-        ...prev,
-        [tokenId]: "",
-      }));
-      return;
-    }
-
-    // Clamp to valid range
-    const clampedValue = Math.min(Math.max(0, numValue), maxAmount);
     setAmounts((prev) => ({
       ...prev,
-      [tokenId]: clampedValue.toString(),
+      [tokenId]: value,
     }));
-  };
-
-  const handleInputBlur = (tokenId: string) => {
-    // Convert empty string to "0" when user leaves the input
-    const currentValue = amounts[tokenId];
-    if (currentValue === "" || currentValue === undefined) {
-      setAmounts((prev) => ({
-        ...prev,
-        [tokenId]: "0",
-      }));
-    }
   };
 
   return (
@@ -137,24 +100,21 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
               {/* Slider and Input Controls */}
               <div className="flex items-center gap-3">
                 {/* Slider */}
-                <input
-                  type="range"
-                  min="0"
+                <Slider
+                  min={0}
                   max={maxAmount}
-                  step={maxAmount / 1000}
-                  value={currentAmount}
-                  onChange={(e) => handleSliderChange(token.id, e.target.value)}
-                  className="flex-1 h-1.5 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                  step={1 / 10 ** Math.min(token.decimals, 6)}
+                  value={[currentAmount]}
+                  onValueChange={(values) => handleSliderChange(token.id, values[0].toString())}
+                  className="flex-1"
                 />
                 {/* Amount Input */}
-                <Input
-                  type="number"
+                <InputDecimal
                   min="0"
                   max={maxAmount}
-                  step="any"
+                  decimals={token.decimals}
                   value={amountValue}
-                  onChange={(e) => handleInputChange(token.id, e.target.value)}
-                  onBlur={() => handleInputBlur(token.id)}
+                  onValueChange={(value) => handleInputChange(token.id, value)}
                   className="w-28 h-8 text-sm"
                   placeholder="0.00"
                 />
