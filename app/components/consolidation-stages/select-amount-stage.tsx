@@ -1,8 +1,10 @@
 import * as React from "react";
+import AddressAvatar from "~/components/address-avatar";
 import { Button } from "~/components/ui/button";
 import { InputDecimal } from "~/components/ui/input-decimal";
 import { Slider } from "~/components/ui/slider";
 import type { WalletData } from "~/components/wallet-table/columns";
+import { formatAddress } from "~/lib/utils";
 
 interface TokenWithAmount extends WalletData {
   amountToConsolidate: string;
@@ -63,17 +65,22 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
                 <div className="flex items-center gap-2">
                   {token.iconUrl && <img src={token.iconUrl} alt={token.token} className="w-8 h-8 rounded-full" />}
                   <div className="flex flex-col">
-                    <span className="font-medium">
-                      {token.token} ({token.chain})
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      Available:{" "}
-                      {Number(token.amount).toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 6,
-                      })}{" "}
-                      {token.token}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium">{token.token}</span>
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        on
+                        <img
+                          src={`/chain-icons/${token.chain.toLowerCase().replace(/\s+/g, "-")}.svg`}
+                          alt={token.chain}
+                          className="w-3 h-3 rounded-full"
+                        />
+                        {token.chain}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <AddressAvatar addressOrEns={token.wallet} size={14} />
+                      <span>{formatAddress(token.wallet)}</span>
+                    </div>
                   </div>
                 </div>
                 <div className="text-right">
