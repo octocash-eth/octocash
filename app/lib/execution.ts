@@ -508,20 +508,20 @@ async function calculateStepOutput(
       }
     case "bridge": {
       // Bridge outputs sum of all inputs (minus bridge fees, handled elsewhere)
-
       const totalAmount = updatedInputs.reduce((sum, t) => sum + t.amount, 0n);
       return {
         ...step.outputToken,
         amount: totalAmount,
       };
     }
-    case "claim":
-      // Claim outputs what it claims (1:1, amount from dependency)
-
+    case "claim": {
+      // Claim outputs what it claims (sum of all bridged amounts)
+      const totalClaimAmount = updatedInputs.reduce((sum, t) => sum + t.amount, 0n);
       return {
         ...step.outputToken,
-        amount: updatedInputs[0].amount,
+        amount: totalClaimAmount,
       };
+    }
     case "transfer":
       // Transfer outputs what it inputs (1:1)
       return {
