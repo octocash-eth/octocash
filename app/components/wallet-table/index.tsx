@@ -27,20 +27,6 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
   const [error, setError] = React.useState<string | null>(null);
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
 
-  // Calculate the total value to consolidate
-  const totalValueToConsolidate = React.useMemo(() => {
-    let total = 0;
-
-    Object.entries(rowSelection).forEach(([rowId, isSelected]) => {
-      if (isSelected && walletData[parseInt(rowId, 10)]) {
-        const row = walletData[parseInt(rowId, 10)];
-        total += row.amountInUsd;
-      }
-    });
-
-    return total;
-  }, [walletData, rowSelection]);
-
   const loadTokenBalances = React.useCallback(
     async (mode: "initial" | "refresh" = "initial") => {
       if (connectedAddresses.length === 0) {
@@ -119,7 +105,6 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
               walletData={walletData}
               rowSelection={rowSelection}
               selectedRows={Object.keys(rowSelection).length}
-              totalValueToConsolidate={totalValueToConsolidate}
             />
           </div>
         </>

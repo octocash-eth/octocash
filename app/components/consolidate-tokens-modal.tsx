@@ -33,14 +33,12 @@ interface ConsolidateTokensModalProps {
   walletData: WalletData[];
   rowSelection?: Record<string, boolean>;
   selectedRows?: number;
-  totalValueToConsolidate?: number;
 }
 
 export function ConsolidateTokensModal({
   walletData,
   rowSelection = {},
   selectedRows = 0,
-  totalValueToConsolidate = 0,
 }: ConsolidateTokensModalProps) {
   const [destinationWallet, setDestinationWallet] = React.useState("");
   const [destinationChain, setDestinationChain] = React.useState("");
@@ -208,21 +206,7 @@ export function ConsolidateTokensModal({
           className={`text-lg font-semibold py-6 px-8 transition-all duration-200 ${selectedRows > 0 ? "min-w-[240px]" : ""}`}
           disabled={selectedRows === 0}
         >
-          {selectedRows === 0 ? (
-            "Consolidate Tokens"
-          ) : (
-            <>
-              Consolidate{" "}
-              <span className="font-bold text-white">
-                {totalValueToConsolidate.toLocaleString("en-US", {
-                  style: "currency",
-                  currency: "USD",
-                  minimumFractionDigits: 0,
-                  maximumFractionDigits: 0,
-                })}
-              </span>
-            </>
-          )}
+          {selectedRows === 0 ? "Consolidate Tokens" : <>Consolidate tokens</>}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-5xl">
