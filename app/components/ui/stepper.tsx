@@ -1,5 +1,3 @@
-"use client";
-
 import * as React from "react";
 import { createContext, useContext } from "react";
 import { cn } from "~/lib/utils";
@@ -19,7 +17,7 @@ interface StepperContextValue {
   setActiveStep: (step: number) => void;
   stepsCount: number;
   orientation: StepperOrientation;
-  registerTrigger: (node: HTMLButtonElement | null) => void;
+  registerTrigger: (node: HTMLButtonElement) => () => void;
   triggerNodes: HTMLButtonElement[];
   focusNext: (currentIdx: number) => void;
   focusPrev: (currentIdx: number) => void;
@@ -32,7 +30,6 @@ interface StepItemContextValue {
   step: number;
   state: StepState;
   isDisabled: boolean;
-  isLoading: boolean;
 }
 
 const StepperContext = createContext<StepperContextValue | undefined>(undefined);
@@ -72,16 +69,18 @@ function Stepper({
   const [triggerNodes, setTriggerNodes] = React.useState<HTMLButtonElement[]>([]);
 
   // Register/unregister triggers
-  const registerTrigger = React.useCallback((node: HTMLButtonElement | null) => {
+  const registerTrigger = React.useCallback((node: HTMLButtonElement) => {
     setTriggerNodes((prev) => {
-      if (node && !prev.includes(node)) {
+      if (!prev.includes(node)) {
         return [...prev, node];
-      } else if (!node) {
-        return prev.filter((n) => n !== node);
-      } else {
-        return prev;
       }
+      return prev;
     });
+
+    // Return cleanup function that removes this specific node
+    return () => {
+      setTriggerNodes((prev) => prev.filter((n) => n !== node));
+    };
   }, []);
 
   const handleSetActiveStep = React.useCallback(
@@ -182,12 +181,17 @@ function StepperItem({
 }: StepperItemProps) {
   const { activeStep } = useStepper();
 
-  const state: StepState = completed || step < activeStep ? "completed" : activeStep === step ? "active" : "inactive";
-
-  const isLoading = loading && step === activeStep;
+  const state: StepState =
+    loading && step === activeStep
+      ? "loading"
+      : completed || step < activeStep
+        ? "completed"
+        : activeStep === step
+          ? "active"
+          : "inactive";
 
   return (
-    <StepItemContext.Provider value={{ step, state, isDisabled: disabled, isLoading }}>
+    <StepItemContext.Provider value={{ step, state, isDisabled: disabled }}>
       <div
         data-slot="stepper-item"
         className={cn(
@@ -195,7 +199,7 @@ function StepperItem({
           className,
         )}
         data-state={state}
-        {...(isLoading ? { "data-loading": true } : {})}
+        {...(state === "loading" ? { "data-loading": true } : {})}
         {...props}
       >
         {children}
@@ -203,13 +207,12 @@ function StepperItem({
     </StepItemContext.Provider>
   );
 }
+StepperItem.displayName = "StepperItem";
 
-interface StepperTriggerProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  asChild?: boolean;
-}
+interface StepperTriggerProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {}
 
-function StepperTrigger({ asChild = false, className, children, tabIndex, ...props }: StepperTriggerProps) {
-  const { state, isLoading } = useStepItem();
+function StepperTrigger({ className, children, tabIndex, ...props }: StepperTriggerProps) {
+  const { state } = useStepItem();
   const stepperCtx = useStepper();
   const { setActiveStep, activeStep, registerTrigger, triggerNodes, focusNext, focusPrev, focusFirst, focusLast } =
     stepperCtx;
@@ -222,7 +225,8 @@ function StepperTrigger({ asChild = false, className, children, tabIndex, ...pro
   const btnRef = React.useRef<HTMLButtonElement>(null);
   React.useEffect(() => {
     if (btnRef.current) {
-      registerTrigger(btnRef.current);
+      const cleanup = registerTrigger(btnRef.current);
+      return cleanup;
     }
   }, [registerTrigger]);
 
@@ -260,14 +264,6 @@ function StepperTrigger({ asChild = false, className, children, tabIndex, ...pro
     }
   };
 
-  if (asChild) {
-    return (
-      <span data-slot="stepper-trigger" data-state={state} className={className}>
-        {children}
-      </span>
-    );
-  }
-
   return (
     <button
       ref={btnRef}
@@ -278,7 +274,7 @@ function StepperTrigger({ asChild = false, className, children, tabIndex, ...pro
       tabIndex={typeof tabIndex === "number" ? tabIndex : isSelected ? 0 : -1}
       data-slot="stepper-trigger"
       data-state={state}
-      data-loading={isLoading}
+      data-loading={state === "loading"}
       className={cn(
         "cursor-pointer focus-visible:border-ring focus-visible:ring-ring/50 inline-flex items-center gap-3 rounded-full outline-none focus-visible:z-10 focus-visible:ring-[3px] disabled:pointer-events-none disabled:opacity-60",
         className,
@@ -294,7 +290,7 @@ function StepperTrigger({ asChild = false, className, children, tabIndex, ...pro
 }
 
 function StepperIndicator({ children, className }: React.ComponentProps<"div">) {
-  const { state, isLoading } = useStepItem();
+  const { state } = useStepItem();
   const { indicators } = useStepper();
 
   return (
@@ -307,16 +303,14 @@ function StepperIndicator({ children, className }: React.ComponentProps<"div">) 
       )}
     >
       <div className="absolute">
-        {indicators &&
-        ((isLoading && indicators.loading) ||
-          (state === "completed" && indicators.completed) ||
-          (state === "active" && indicators.active) ||
-          (state === "inactive" && indicators.inactive))
-          ? (isLoading && indicators.loading) ||
-            (state === "completed" && indicators.completed) ||
-            (state === "active" && indicators.active) ||
-            (state === "inactive" && indicators.inactive)
-          : children}
+        {(() => {
+          if (!indicators) return children;
+          if (state === "loading" && indicators.loading) return indicators.loading;
+          if (state === "completed" && indicators.completed) return indicators.completed;
+          if (state === "active" && indicators.active) return indicators.active;
+          if (state === "inactive" && indicators.inactive) return indicators.inactive;
+          return children;
+        })()}
       </div>
     </div>
   );
