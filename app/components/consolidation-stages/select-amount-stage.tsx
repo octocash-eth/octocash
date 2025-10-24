@@ -2,9 +2,12 @@ import * as React from "react";
 import AddressAvatar from "~/components/address-avatar";
 import { ChainIcon } from "~/components/chain-icon";
 import { TokenIcon } from "~/components/token-icon";
-import { Button } from "~/components/ui/button";
-import { InputDecimal } from "~/components/ui/input-decimal";
-import { Slider } from "~/components/ui/slider";
+import {
+  TokenAmountSelectorInput,
+  TokenAmountSelectorMaxButton,
+  TokenAmountSelectorRoot,
+  TokenAmountSelectorSlider,
+} from "~/components/ui/token-amount-selector";
 import type { WalletData } from "~/components/wallet-table/columns";
 import { formatAddress } from "~/lib/utils";
 
@@ -39,14 +42,7 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
     onAmountsChangeRef.current(amounts);
   }, [amounts]);
 
-  const handleSliderChange = (tokenId: string, value: string) => {
-    setAmounts((prev) => ({
-      ...prev,
-      [tokenId]: value,
-    }));
-  };
-
-  const handleInputChange = (tokenId: string, value: string) => {
+  const handleAmountChange = (tokenId: string, value: string) => {
     setAmounts((prev) => ({
       ...prev,
       [tokenId]: value,
@@ -61,10 +57,12 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
 
       <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
         {tokens.map((token) => {
-          const maxAmount = Number.parseFloat(token.amount);
+          const maxAmount = token.amount;
           const amountValue = amounts[token.id] ?? "0";
-          const currentAmount = Number.parseFloat(amountValue) || 0;
-          const currentUsdValue = maxAmount > 0 ? (currentAmount / maxAmount) * token.amountInUsd : 0;
+          const currentUsdValue =
+            Number.parseFloat(maxAmount) > 0
+              ? ((Number.parseFloat(amountValue) || 0) / Number.parseFloat(maxAmount)) * token.amountInUsd
+              : 0;
 
           return (
             <div key={token.id} className="border rounded-lg p-4 space-y-3">
@@ -109,37 +107,18 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
               </div>
 
               {/* Slider and Input Controls */}
-              <div className="flex items-center gap-3">
-                {/* Slider */}
-                <Slider
-                  min={0}
-                  max={maxAmount}
-                  step={1 / 10 ** Math.min(token.decimals, 6)}
-                  value={[currentAmount]}
-                  onValueChange={(values) => handleSliderChange(token.id, values[0].toString())}
-                  className="flex-1"
-                />
-                {/* Amount Input */}
-                <InputDecimal
-                  min="0"
-                  max={maxAmount}
-                  decimals={token.decimals}
-                  value={amountValue}
-                  onValueChange={(value) => handleInputChange(token.id, value)}
-                  className="w-28 h-8 text-sm"
-                  placeholder="0.00"
-                />
-                {/* Max Button */}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleSliderChange(token.id, token.amount)}
-                  className="h-8 px-3 text-xs shrink-0"
-                >
-                  Max
-                </Button>
-              </div>
+              <TokenAmountSelectorRoot
+                value={amountValue}
+                onValueChange={(value) => handleAmountChange(token.id, value)}
+                min="0"
+                max={maxAmount}
+                decimals={token.decimals}
+                className="flex items-center gap-3"
+              >
+                <TokenAmountSelectorSlider className="flex-1" />
+                <TokenAmountSelectorInput className="w-28 h-8 text-sm" placeholder="0.00" />
+                <TokenAmountSelectorMaxButton variant="outline" size="sm" className="h-8 px-3 text-xs shrink-0" />
+              </TokenAmountSelectorRoot>
             </div>
           );
         })}

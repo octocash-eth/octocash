@@ -1,19 +1,34 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, test, vi } from "vitest";
-import { InputDecimal } from "./input-decimal";
+import { beforeAll, describe, expect, test, vi } from "vitest";
+import {
+  TokenAmountSelectorInput,
+  TokenAmountSelectorMaxButton,
+  TokenAmountSelectorRoot,
+  TokenAmountSelectorSlider,
+} from "./token-amount-selector";
+
+// Mock ResizeObserver for Radix UI Slider
+beforeAll(() => {
+  global.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+});
 
 /**
  * Controlled wrapper component for testing
  */
-function ControlledInputDecimal(
-  props: Omit<React.ComponentProps<typeof InputDecimal>, "value" | "onValueChange"> & {
+function ControlledTokenAmountSelector(
+  props: Omit<React.ComponentProps<typeof TokenAmountSelectorRoot>, "value" | "onValueChange" | "children"> & {
     initialValue?: string;
     onValueChange?: (value: string) => void;
+    children?: React.ReactNode;
   },
 ) {
-  const { initialValue = "", onValueChange, ...rest } = props;
+  const { initialValue = "", onValueChange, children, ...rest } = props;
   const [value, setValue] = useState(initialValue);
 
   const handleChange = (newValue: string) => {
@@ -21,16 +36,20 @@ function ControlledInputDecimal(
     onValueChange?.(newValue);
   };
 
-  return <InputDecimal value={value} onValueChange={handleChange} {...rest} />;
+  return (
+    <TokenAmountSelectorRoot value={value} onValueChange={handleChange} {...rest}>
+      {children ?? <TokenAmountSelectorInput />}
+    </TokenAmountSelectorRoot>
+  );
 }
 
-describe("InputDecimal Component", () => {
+describe("TokenAmountSelector Component", () => {
   describe("rounding behavior", () => {
     test("rounds down when digit at decimals+1 position is < 5", async () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "0.9945");
@@ -44,7 +63,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "0.9955");
@@ -58,7 +77,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "1.999");
@@ -71,7 +90,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "0.005");
@@ -84,7 +103,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "0.001");
@@ -97,7 +116,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "99.999");
@@ -112,7 +131,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "1.");
@@ -126,7 +145,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, ".5");
@@ -139,7 +158,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, ".5");
@@ -152,7 +171,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="123" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="123" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.clear(input);
@@ -164,7 +183,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="123" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="123" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.clear(input);
@@ -177,7 +196,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "-");
@@ -191,7 +210,9 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} min="0" max="100" decimals={2} />);
+      render(
+        <ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} min="0" max="100" decimals={2} />,
+      );
       const input = screen.getByRole("textbox");
 
       await user.type(input, "150");
@@ -204,7 +225,9 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} min="0" max="100" decimals={2} />);
+      render(
+        <ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} min="0" max="100" decimals={2} />,
+      );
       const input = screen.getByRole("textbox");
 
       await user.type(input, "-5");
@@ -217,7 +240,9 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} min="0" max="100" decimals={2} />);
+      render(
+        <ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} min="0" max="100" decimals={2} />,
+      );
       const input = screen.getByRole("textbox");
 
       await user.type(input, "50.5");
@@ -230,7 +255,9 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} min="0" max="100" decimals={2} />);
+      render(
+        <ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} min="0" max="100" decimals={2} />,
+      );
       const input = screen.getByRole("textbox");
 
       await user.type(input, "100");
@@ -245,7 +272,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={6} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={6} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "1.23456789");
@@ -259,7 +286,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={0} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={0} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "1.7");
@@ -273,7 +300,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={0} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={0} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "1.4");
@@ -286,7 +313,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={0} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={0} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "1.7");
@@ -303,7 +330,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "abc");
@@ -316,7 +343,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "1.2.3");
@@ -333,7 +360,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "007");
@@ -346,7 +373,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "0.5");
@@ -358,28 +385,44 @@ describe("InputDecimal Component", () => {
 
   describe("component props", () => {
     test("forwards className to input", () => {
-      render(<InputDecimal value="0" onValueChange={vi.fn()} className="custom-class" />);
+      render(
+        <TokenAmountSelectorRoot value="0" onValueChange={vi.fn()}>
+          <TokenAmountSelectorInput className="custom-class" />
+        </TokenAmountSelectorRoot>,
+      );
       const input = screen.getByRole("textbox");
 
       expect(input).toHaveClass("custom-class");
     });
 
     test("forwards placeholder to input", () => {
-      render(<InputDecimal value="" onValueChange={vi.fn()} placeholder="0.00" />);
+      render(
+        <TokenAmountSelectorRoot value="" onValueChange={vi.fn()}>
+          <TokenAmountSelectorInput placeholder="0.00" />
+        </TokenAmountSelectorRoot>,
+      );
       const input = screen.getByRole("textbox");
 
       expect(input).toHaveAttribute("placeholder", "0.00");
     });
 
     test("uses inputMode='decimal' for better mobile keyboard", () => {
-      render(<InputDecimal value="" onValueChange={vi.fn()} />);
+      render(
+        <TokenAmountSelectorRoot value="" onValueChange={vi.fn()}>
+          <TokenAmountSelectorInput />
+        </TokenAmountSelectorRoot>,
+      );
       const input = screen.getByRole("textbox");
 
       expect(input).toHaveAttribute("inputMode", "decimal");
     });
 
     test("uses type='text' not type='number'", () => {
-      render(<InputDecimal value="" onValueChange={vi.fn()} />);
+      render(
+        <TokenAmountSelectorRoot value="" onValueChange={vi.fn()}>
+          <TokenAmountSelectorInput />
+        </TokenAmountSelectorRoot>,
+      );
       const input = screen.getByRole("textbox");
 
       expect(input).toHaveAttribute("type", "text");
@@ -390,7 +433,11 @@ describe("InputDecimal Component", () => {
       const onBlur = vi.fn();
       const onValueChange = vi.fn();
 
-      render(<InputDecimal value="10" onValueChange={onValueChange} onBlur={onBlur} />);
+      render(
+        <TokenAmountSelectorRoot value="10" onValueChange={onValueChange}>
+          <TokenAmountSelectorInput onBlur={onBlur} />
+        </TokenAmountSelectorRoot>,
+      );
       const input = screen.getByRole("textbox");
 
       await user.click(input);
@@ -400,7 +447,11 @@ describe("InputDecimal Component", () => {
     });
 
     test("forwards disabled prop", () => {
-      render(<InputDecimal value="0" onValueChange={vi.fn()} disabled />);
+      render(
+        <TokenAmountSelectorRoot value="0" onValueChange={vi.fn()}>
+          <TokenAmountSelectorInput disabled />
+        </TokenAmountSelectorRoot>,
+      );
       const input = screen.getByRole("textbox");
 
       expect(input).toBeDisabled();
@@ -409,19 +460,31 @@ describe("InputDecimal Component", () => {
 
   describe("controlled component behavior", () => {
     test("displays the provided value prop", () => {
-      render(<InputDecimal value="42.5" onValueChange={vi.fn()} />);
+      render(
+        <TokenAmountSelectorRoot value="42.5" onValueChange={vi.fn()}>
+          <TokenAmountSelectorInput />
+        </TokenAmountSelectorRoot>,
+      );
       const input = screen.getByRole("textbox") as HTMLInputElement;
 
       expect(input.value).toBe("42.5");
     });
 
     test("updates when value prop changes", () => {
-      const { rerender } = render(<InputDecimal value="10" onValueChange={vi.fn()} />);
+      const { rerender } = render(
+        <TokenAmountSelectorRoot value="10" onValueChange={vi.fn()}>
+          <TokenAmountSelectorInput />
+        </TokenAmountSelectorRoot>,
+      );
       const input = screen.getByRole("textbox") as HTMLInputElement;
 
       expect(input.value).toBe("10");
 
-      rerender(<InputDecimal value="20" onValueChange={vi.fn()} />);
+      rerender(
+        <TokenAmountSelectorRoot value="20" onValueChange={vi.fn()}>
+          <TokenAmountSelectorInput />
+        </TokenAmountSelectorRoot>,
+      );
 
       expect(input.value).toBe("20");
     });
@@ -432,7 +495,9 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} min="0" max="100" decimals={2} />);
+      render(
+        <ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} min="0" max="100" decimals={2} />,
+      );
       const input = screen.getByRole("textbox");
 
       await user.type(input, "150.9955");
@@ -442,11 +507,60 @@ describe("InputDecimal Component", () => {
       expect(onValueChange).toHaveBeenLastCalledWith("100");
     });
 
+    test("clamps to exact max value with high precision", async () => {
+      const user = userEvent.setup();
+      const onValueChange = vi.fn();
+
+      // Simulate high-precision token amounts (18 decimals)
+      const maxAmount = "0.974325570775807518";
+      render(
+        <ControlledTokenAmountSelector
+          initialValue=""
+          onValueChange={onValueChange}
+          min="0"
+          max={maxAmount}
+          decimals={18}
+        />,
+      );
+      const input = screen.getByRole("textbox");
+
+      // Try to enter a value that exceeds max
+      await user.type(input, "0.974325570775807519");
+      await user.tab();
+
+      // Should clamp to exact max, not exceed it
+      expect(onValueChange).toHaveBeenLastCalledWith(maxAmount);
+    });
+
+    test("handles max value when it has many decimal places", async () => {
+      const user = userEvent.setup();
+      const onValueChange = vi.fn();
+
+      const maxAmount = "1.234567890123456789";
+      render(
+        <ControlledTokenAmountSelector
+          initialValue=""
+          onValueChange={onValueChange}
+          min="0"
+          max={maxAmount}
+          decimals={18}
+        />,
+      );
+      const input = screen.getByRole("textbox");
+
+      // Enter exactly the max value
+      await user.type(input, maxAmount);
+      await user.tab();
+
+      // Should preserve exact max value
+      expect(onValueChange).toHaveBeenLastCalledWith(maxAmount);
+    });
+
     test("handles negative numbers with rounding", async () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       await user.type(input, "-1.235");
@@ -459,7 +573,7 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} decimals={2} />);
+      render(<ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} decimals={2} />);
       const input = screen.getByRole("textbox");
 
       // First edit
@@ -478,7 +592,9 @@ describe("InputDecimal Component", () => {
       const user = userEvent.setup();
       const onValueChange = vi.fn();
 
-      render(<ControlledInputDecimal initialValue="" onValueChange={onValueChange} min="0" max="100" decimals={2} />);
+      render(
+        <ControlledTokenAmountSelector initialValue="" onValueChange={onValueChange} min="0" max="100" decimals={2} />,
+      );
       const input = screen.getByRole("textbox");
 
       await user.type(input, "50.5");
@@ -488,6 +604,105 @@ describe("InputDecimal Component", () => {
 
       // Should call with the same value (no modification needed)
       expect(onValueChange).toHaveBeenLastCalledWith("50.5");
+    });
+  });
+
+  describe("compound component integration", () => {
+    test("MaxButton sets value to max", async () => {
+      const user = userEvent.setup();
+      const onValueChange = vi.fn();
+
+      render(
+        <ControlledTokenAmountSelector initialValue="0" onValueChange={onValueChange} max="100" decimals={2}>
+          <TokenAmountSelectorInput />
+          <TokenAmountSelectorMaxButton />
+        </ControlledTokenAmountSelector>,
+      );
+
+      const maxButton = screen.getByRole("button", { name: /max/i });
+      await user.click(maxButton);
+
+      expect(onValueChange).toHaveBeenLastCalledWith("100");
+    });
+
+    test("MaxButton with custom children", async () => {
+      const user = userEvent.setup();
+      const onValueChange = vi.fn();
+
+      render(
+        <ControlledTokenAmountSelector initialValue="0" onValueChange={onValueChange} max="100">
+          <TokenAmountSelectorInput />
+          <TokenAmountSelectorMaxButton>Set Max</TokenAmountSelectorMaxButton>
+        </ControlledTokenAmountSelector>,
+      );
+
+      const maxButton = screen.getByRole("button", { name: /set max/i });
+      await user.click(maxButton);
+
+      expect(onValueChange).toHaveBeenLastCalledWith("100");
+    });
+
+    test("Slider updates value", async () => {
+      const onValueChange = vi.fn();
+
+      render(
+        <ControlledTokenAmountSelector initialValue="50" onValueChange={onValueChange} min="0" max="100" decimals={2}>
+          <TokenAmountSelectorSlider />
+        </ControlledTokenAmountSelector>,
+      );
+
+      // Slider should be rendered
+      const slider = screen.getByRole("slider");
+      expect(slider).toBeInTheDocument();
+    });
+
+    test("Slider clamps to exact max when at maximum", async () => {
+      const onValueChange = vi.fn();
+      const maxAmount = "0.974325570775807518";
+
+      render(
+        <ControlledTokenAmountSelector
+          initialValue={maxAmount}
+          onValueChange={onValueChange}
+          min="0"
+          max={maxAmount}
+          decimals={18}
+        >
+          <TokenAmountSelectorSlider />
+        </ControlledTokenAmountSelector>,
+      );
+
+      const slider = screen.getByRole("slider");
+      expect(slider).toBeInTheDocument();
+      expect(slider).toHaveAttribute("aria-valuemax", Number.parseFloat(maxAmount).toString());
+    });
+
+    test("all components work together", async () => {
+      const user = userEvent.setup();
+      const onValueChange = vi.fn();
+
+      render(
+        <ControlledTokenAmountSelector initialValue="0" onValueChange={onValueChange} min="0" max="100" decimals={2}>
+          <TokenAmountSelectorSlider />
+          <TokenAmountSelectorInput placeholder="0.00" />
+          <TokenAmountSelectorMaxButton />
+        </ControlledTokenAmountSelector>,
+      );
+
+      // Type in input
+      const input = screen.getByRole("textbox");
+      await user.type(input, "50.5");
+      await user.tab();
+      expect(onValueChange).toHaveBeenLastCalledWith("50.5");
+
+      // Click max button
+      const maxButton = screen.getByRole("button", { name: /max/i });
+      await user.click(maxButton);
+      expect(onValueChange).toHaveBeenLastCalledWith("100");
+
+      // Check slider is present
+      const slider = screen.getByRole("slider");
+      expect(slider).toBeInTheDocument();
     });
   });
 });
