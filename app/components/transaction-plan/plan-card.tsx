@@ -54,15 +54,11 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
 
   const chainIcon = (chainId: number) => {
     const chainName = chains[chainId as keyof typeof chains]?.name || `Chain ${chainId}`;
-    return <ChainIcon chain={chainName} className="size-4 inline-block align-middle v-align-[-0.125em]" />;
+    return <ChainIcon chain={chainName} className="size-4 inline-block" />;
   };
 
   const tokenIcon = (chainId: number, tokenAddress: string, symbol: string) => (
-    <TokenIcon
-      token={symbol}
-      iconUrl={getTokenIconUrl(chainId, tokenAddress)}
-      className="size-4 inline-block align-middle v-align-[-0.125em]"
-    />
+    <TokenIcon token={symbol} iconUrl={getTokenIconUrl(chainId, tokenAddress)} className="size-4 inline-block" />
   );
 
   const addressAvatar = (address: string) => (

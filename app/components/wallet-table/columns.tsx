@@ -195,7 +195,7 @@ export const columns: ColumnDef<WalletData>[] = [
     size: 70,
     header: ({ column }) => (
       <div className="flex justify-end -me-7">
-        <DataGridColumnHeader column={column} title="Amount" className="-ms-0! me-0!" />
+        <DataGridColumnHeader column={column} title="Amount" className="-ms-0 me-0" />
       </div>
     ),
     cell: ({ row }) => {
@@ -232,7 +232,7 @@ export const columns: ColumnDef<WalletData>[] = [
     size: 100,
     header: ({ column }) => (
       <div className="flex justify-end -me-7">
-        <DataGridColumnHeader column={column} title="In USD" className="-ms-0! me-0!" />
+        <DataGridColumnHeader column={column} title="In USD" className="-ms-0 me-0" />
       </div>
     ),
     cell: ({ row }) => {

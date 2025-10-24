@@ -255,7 +255,7 @@ export function ConsolidateTokensModal({
             })}
           </StepperNav>
 
-          <StepperPanel className="text-sm">
+          <StepperPanel step={currentStage} className="text-sm">
             <StepperContent value={1}>
               <SelectAmountStage tokens={consolidatedTokens} onAmountsChange={setTokenAmounts} />
               <div className="pt-4 flex gap-2">

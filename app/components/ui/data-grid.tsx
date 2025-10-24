@@ -60,7 +60,7 @@ export interface DataGridProps<TData extends object> {
     cellBorder?: boolean;
     rowBorder?: boolean;
     rowRounded?: boolean;
-    stripped?: boolean;
+    striped?: boolean;
     headerBackground?: boolean;
     headerBorder?: boolean;
     headerSticky?: boolean;
@@ -119,7 +119,7 @@ function DataGrid<TData extends object>({ children, table, ...props }: DataGridP
       cellBorder: false,
       rowBorder: true,
       rowRounded: false,
-      stripped: false,
+      striped: false,
       headerSticky: false,
       headerBackground: true,
       headerBorder: true,

@@ -1,24 +1,14 @@
-"use client";
-
-import { ScrollArea as ScrollAreaPrimitive } from "radix-ui";
+import * as ScrollAreaPrimitive from "@radix-ui/react-scroll-area";
 import type * as React from "react";
+
 import { cn } from "~/lib/utils";
 
-function ScrollArea({
-  className,
-  viewportClassName,
-  children,
-  viewportRef,
-  ...props
-}: React.ComponentProps<typeof ScrollAreaPrimitive.Root> & {
-  viewportRef?: React.Ref<HTMLDivElement>;
-  viewportClassName?: string;
-}) {
+function ScrollArea({ className, children, ...props }: React.ComponentProps<typeof ScrollAreaPrimitive.Root>) {
   return (
     <ScrollAreaPrimitive.Root data-slot="scroll-area" className={cn("relative overflow-hidden", className)} {...props}>
       <ScrollAreaPrimitive.Viewport
-        ref={viewportRef}
-        className={cn("h-full w-full rounded-[inherit]", viewportClassName)}
+        data-slot="scroll-area-viewport"
+        className="focus-visible:ring-ring/50 size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1"
       >
         {children}
       </ScrollAreaPrimitive.Viewport>
@@ -38,14 +28,17 @@ function ScrollBar({
       data-slot="scroll-area-scrollbar"
       orientation={orientation}
       className={cn(
-        "flex touch-none select-none transition-colors",
-        orientation === "vertical" && "h-full w-2 border-l border-l-transparent p-[1px]",
-        orientation === "horizontal" && "h-2 flex-col border-t border-t-transparent p-[1px]",
+        "flex touch-none p-px transition-colors select-none",
+        orientation === "vertical" && "h-full w-2.5 border-l border-l-transparent",
+        orientation === "horizontal" && "h-2.5 flex-col border-t border-t-transparent",
         className,
       )}
       {...props}
     >
-      <ScrollAreaPrimitive.ScrollAreaThumb className="relative flex-1 rounded-full bg-border" />
+      <ScrollAreaPrimitive.ScrollAreaThumb
+        data-slot="scroll-area-thumb"
+        className="bg-border relative flex-1 rounded-full"
+      />
     </ScrollAreaPrimitive.ScrollAreaScrollbar>
   );
 }

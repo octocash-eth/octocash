@@ -6,7 +6,7 @@ import { ERROR_CODES } from "~/lib/types";
 
 // Mock AddressAvatar component that uses wagmi hooks
 vi.mock("~/components/address-avatar", () => ({
-  default: ({ className }: { addressOrEns: string; className?: string }) => (
+  default: ({ className }: { className?: string }) => (
     <div className={className} data-testid="address-avatar">
       <img src="mock-avatar.png" alt="" />
     </div>

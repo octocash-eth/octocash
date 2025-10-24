@@ -37,7 +37,7 @@ function roundToDecimals(value: string, decimals: number): string {
  */
 function isValidPartialDecimal(value: string): boolean {
   if (value === "" || value === "-" || value === ".") return true;
-  if (value === "-." || value === "-.") return true;
+  if (value === "-.") return true;
 
   // Check for valid decimal format
   return /^-?\d*\.?\d*$/.test(value);

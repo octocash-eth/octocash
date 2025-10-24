@@ -108,7 +108,7 @@ export function DataTable<TData extends object, TValue>({
         emptyMessage: "No tokens available",
         items: tokens,
         getValue: (option) => (option as { token: string }).token,
-        renderOption: (option) => <RenderedTokenCell token={option as { token: string; iconUrl: string }} />,
+        renderOption: (option) => <RenderedTokenCell token={option as { token: string; iconUrl?: string }} />,
       },
       {
         id: "chain",
@@ -170,15 +170,15 @@ export function DataTable<TData extends object, TValue>({
         tableLayout={{
           headerSticky: true,
           headerBackground: false,
-          stripped: false,
+          striped: false,
           cellBorder: false,
           rowBorder: false,
           width: "fixed",
         }}
       >
         <DataGridContainer>
-          <ScrollArea className="max-h-[calc(100vh-400px)]">
-            <div className="min-w-6xl">
+          <ScrollArea className="max-h-[calc(100vh-300px)]">
+            <div className="min-w-5xl">
               <DataGridTable<TData> />
             </div>
             <ScrollBar orientation="vertical" />

@@ -11,10 +11,14 @@ function Slider({
   max = 100,
   ...props
 }: React.ComponentProps<typeof SliderPrimitive.Root>) {
-  const _values = React.useMemo(
-    () => (Array.isArray(value) ? value : Array.isArray(defaultValue) ? defaultValue : [min, max]),
-    [value, defaultValue, min, max],
-  );
+  const _values = React.useMemo(() => {
+    const vals = Array.isArray(value) ? value : Array.isArray(defaultValue) ? defaultValue : [min, max];
+    if (vals.length === 0) {
+      console.warn("Slider: value/defaultValue cannot be empty");
+      return [min, max];
+    }
+    return vals;
+  }, [value, defaultValue, min, max]);
 
   // Ensure Root receives a defaultValue that matches the number of thumbs
   const effectiveDefaultValue = value === undefined ? (defaultValue ?? [min, max]) : undefined;

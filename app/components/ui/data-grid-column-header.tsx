@@ -52,6 +52,8 @@ function DataGridColumnHeader<TData, TValue>({
     const currentOrder = [...table.getState().columnOrder]; // Get current column order
     const currentIndex = currentOrder.indexOf(column.id); // Get current index of the column
 
+    if (currentIndex === -1) return; // Column not in order, abort
+
     if (direction === "left" && currentIndex > 0) {
       // Move column left
       const newOrder = [...currentOrder];
@@ -72,6 +74,9 @@ function DataGridColumnHeader<TData, TValue>({
   const canMove = (direction: "left" | "right"): boolean => {
     const currentOrder = table.getState().columnOrder;
     const currentIndex = currentOrder.indexOf(column.id);
+
+    if (currentIndex === -1) return false; // Column not in order
+
     if (direction === "left") {
       return currentIndex > 0;
     } else {

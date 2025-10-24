@@ -13,10 +13,8 @@ interface Props extends PropsWithChildren {
 
 const queryClient = new QueryClient();
 
-const CustomAvatar: AvatarComponent = ({ address, size }: { address: string; size: number }) => {
-  const normalized = Math.max(1, Math.round(size / 4));
-  const className = `size-${normalized}`;
-  return <AddressAvatar addressOrEns={address} className={className} />;
+const CustomAvatar: AvatarComponent = ({ address }: { address: string }) => {
+  return <AddressAvatar addressOrEns={address} className="size-4" />;
 };
 
 export function WalletProvider(props: Props) {

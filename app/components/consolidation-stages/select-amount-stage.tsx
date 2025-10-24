@@ -29,9 +29,15 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
     );
   });
 
+  const onAmountsChangeRef = React.useRef(onAmountsChange);
+
   React.useEffect(() => {
-    onAmountsChange(amounts);
-  }, [amounts, onAmountsChange]);
+    onAmountsChangeRef.current = onAmountsChange;
+  }, [onAmountsChange]);
+
+  React.useEffect(() => {
+    onAmountsChangeRef.current(amounts);
+  }, [amounts]);
 
   const handleSliderChange = (tokenId: string, value: string) => {
     setAmounts((prev) => ({

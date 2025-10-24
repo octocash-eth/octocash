@@ -5,7 +5,7 @@ export function TokenIcon({ token, iconUrl, className }: { token: string; iconUr
     <Avatar className={className}>
       <AvatarImage src={iconUrl} alt={token} />
       <AvatarFallback className="text-[10px] bg-muted text-muted-foreground">
-        {token.slice(0, 1).toUpperCase()}
+        {token.charAt(0)?.toUpperCase() || "?"}
       </AvatarFallback>
     </Avatar>
   );
