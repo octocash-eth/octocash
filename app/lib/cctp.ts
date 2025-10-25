@@ -1,9 +1,10 @@
-import { type Address, type Call, type Chain, encodeFunctionData, erc20Abi, type Hex, pad, parseAbi } from "viem";
+import { type Address, type Call, type Chain, encodeFunctionData, type Hex, pad, parseAbi } from "viem";
 import { chainIdToDomain, messageTransmitter, tokenAddresses, tokenMessenger } from "~/data/cctp-contracts";
 import { chains } from "~/data/supported-chains";
 import { getPublicClient } from "~/lib/public-client";
 import type { SendCallsFn } from "~/lib/send-calls";
 import type { TokenAmount } from "~/lib/types";
+import { buildERC20ApprovalCalls } from "./tokens";
 
 export type Attestation = {
   message: `0x${string}`;
@@ -37,34 +38,24 @@ const getApproveAndBurnUsdcCalls = async (
     throw new Error(`Multicall3 address not found for chain ${sourceChainId}`);
   }
 
-  const publicClient = getPublicClient(sourceChainId);
-
   const tokenAddress = tokenAddresses[sourceChainId as keyof typeof tokenAddresses] as `0x${string}`;
   const spender = tokenMessenger[sourceChainId] as `0x${string}`;
 
-  // Check current allowance
-  const currentAllowance = await publicClient.readContract({
-    address: tokenAddress,
-    abi: erc20Abi,
-    functionName: "allowance",
-    args: [walletAddress, spender],
-  });
+  // Build approval call if needed
+  const approvalCalls = await buildERC20ApprovalCalls(
+    {
+      token: tokenAddress,
+      amount,
+      chainId: sourceChainId,
+      walletAddress,
+      symbol: "USDC",
+      decimals: 6,
+    },
+    spender,
+  );
 
-  const calls: Call[] = [];
-
-  // Only approve if current allowance is insufficient
-  if (currentAllowance < amount) {
-    calls.push({
-      to: tokenAddress,
-      data: encodeFunctionData({
-        abi: erc20Abi,
-        functionName: "approve",
-        args: [spender, amount],
-      }),
-    });
-  }
-
-  calls.push({
+  // Build the burn call
+  const burnCall: Call = {
     to: spender,
     data: encodeFunctionData({
       abi: parseAbi([
@@ -81,9 +72,9 @@ const getApproveAndBurnUsdcCalls = async (
         finalityThreshold,
       ],
     }),
-  });
+  };
 
-  return calls;
+  return [...approvalCalls, burnCall];
 };
 
 const retrieveAttestation = async (transactionHash: string, sourceChainId: number): Promise<Attestation[]> => {

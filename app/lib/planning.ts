@@ -1,9 +1,10 @@
-import { type Address, getAddress, isAddressEqual } from "viem";
+import { type Address, isAddressEqual } from "viem";
 import { chains, transports } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
 import { getBridgeFee } from "./cctp";
 import { ensureSufficientGas } from "./gas";
 import { getSwapQuote } from "./odos";
+import { groupTokensByChainAndWallet } from "./tokens";
 import type { DestinationToken, TokenAmount, TransactionStep } from "./types";
 
 const SUPPORTED_CHAINS = Object.keys(chains).map(Number);
@@ -85,61 +86,6 @@ function validateInputs(
   if (!SUPPORTED_CHAINS.includes(destinationToken.chainId)) {
     throw new Error(`UnsupportedRouteError: Destination chain ${destinationToken.chainId} is not supported`);
   }
-}
-
-/**
- * Groups source tokens by chain and wallet address for efficient processing
- *
- * @param sourceTokens - Array of tokens to group
- * @param consolidateAmounts - If true, consolidates duplicate token addresses by summing amounts
- * @returns Map with key "chainId-walletAddress" and value array of tokens
- *
- * @example
- * // Returns:
- * Map { "1-0xabc...": [token1, token2], "8453-0xabc...": [token3] }
- */
-function groupTokensByChainAndWallet(
-  sourceTokens: TokenAmount[],
-  consolidateAmounts = false,
-): Map<string, TokenAmount[]> {
-  const grouped = new Map<string, TokenAmount[]>();
-
-  for (const token of sourceTokens) {
-    const key = `${token.chainId}-${token.walletAddress}`;
-    if (!grouped.has(key)) {
-      grouped.set(key, []);
-    }
-    grouped.get(key)?.push(token);
-  }
-
-  // Consolidate duplicate token addresses if requested
-  if (consolidateAmounts) {
-    for (const [key, tokens] of grouped.entries()) {
-      const consolidatedMap = new Map<Address, TokenAmount>();
-
-      for (const token of tokens) {
-        const normalizedAddress = getAddress(token.token);
-        const existing = consolidatedMap.get(normalizedAddress);
-
-        if (existing) {
-          // Sum the amounts for duplicate tokens
-          consolidatedMap.set(normalizedAddress, {
-            ...existing,
-            amount: existing.amount + token.amount,
-          });
-        } else {
-          consolidatedMap.set(normalizedAddress, {
-            ...token,
-            token: normalizedAddress,
-          });
-        }
-      }
-
-      grouped.set(key, Array.from(consolidatedMap.values()));
-    }
-  }
-
-  return grouped;
 }
 
 /**
@@ -235,8 +181,7 @@ async function processChainWalletSwaps(
 
   log(
     "🔍 [DEBUG] Tokens grouped by chain and wallet:",
-    Array.from(tokensByChainAndWallet.entries()).map(([key, tokens]) => ({
-      key,
+    tokensByChainAndWallet.map((tokens) => ({
       tokenCount: tokens.length,
       tokens: tokens.map((t) => ({
         symbol: t.symbol,
@@ -247,7 +192,7 @@ async function processChainWalletSwaps(
     })),
   );
 
-  for (const tokens of tokensByChainAndWallet.values()) {
+  for (const tokens of tokensByChainAndWallet) {
     const { chainId, walletAddress } = tokens[0];
     const isDestChain = chainId === destinationToken.chainId;
 
@@ -326,7 +271,7 @@ async function createBridgeSteps(
   const usdcTokens = tokens.filter((t) => t.chainId !== destinationToken.chainId);
 
   // Group USDC tokens by chain and wallet
-  const usdcTokensByChainAndWallet = groupTokensByChainAndWallet(usdcTokens).values();
+  const usdcTokensByChainAndWallet = groupTokensByChainAndWallet(usdcTokens);
 
   for (const usdcTokens of usdcTokensByChainAndWallet) {
     const { chainId, walletAddress } = usdcTokens[0];
@@ -515,8 +460,7 @@ async function createFinalSwaps(
 
   log(
     "🔍 [DEBUG] Tokens grouped by wallet (consolidated):",
-    Array.from(tokensByChainAndWallet.entries()).map(([key, tokens]) => ({
-      key,
+    tokensByChainAndWallet.map((tokens) => ({
       tokenCount: tokens.length,
     })),
   );
@@ -612,8 +556,7 @@ async function createFinalSwaps(
 
   // Step 3: Final consolidation - sum up all destination tokens at destination wallet
   const allFinalTokens = [...swappedTokens, ...transferOutputs];
-  const grouped = groupTokensByChainAndWallet(allFinalTokens, true);
-  const finalTokens = Array.from(grouped.values()).flat();
+  const finalTokens = groupTokensByChainAndWallet(allFinalTokens, true).flat();
 
   log(
     "🔍 [DEBUG] Final tokens after consolidation:",
