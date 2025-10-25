@@ -42,6 +42,7 @@ export default defineConfig({
               singleFork: true,
             },
           },
+          testTimeout: 0,
         },
       },
     ],

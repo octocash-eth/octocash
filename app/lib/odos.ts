@@ -341,7 +341,6 @@ export async function getSwapQuote(
     return {
       ...outputToken,
       amount: applyFee(outputAmount),
-      walletAddress: firstWallet,
     };
   } catch (error) {
     throw new Error(`ExternalAPIError: ${error instanceof Error ? error.message : "Odos quote failed"}`);

@@ -35,7 +35,7 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
       const inputArray = Array.isArray(input) ? input : [input];
       const totalAmount = inputArray.reduce((sum, token) => sum + token.amount, 0n);
       return makeToken(outputToken.token, totalAmount / 2n, outputToken.chainId, {
-        walletAddress: inputArray[0].walletAddress,
+        walletAddress: outputToken.walletAddress,
         symbol: outputToken.symbol,
         decimals: outputToken.decimals
       });

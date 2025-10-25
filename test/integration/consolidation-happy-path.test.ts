@@ -43,7 +43,7 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
         token: outputToken.token,
         amount: totalAmount / 2n, // Mock 50% conversion for simplicity
         chainId: outputToken.chainId,
-        walletAddress: inputArray[0].walletAddress,
+        walletAddress: outputToken.walletAddress,
         symbol: "USDC",
         decimals: 6,
       };

@@ -44,7 +44,7 @@ describe("Scenario 8: Browser Recovery", () => {
         token: outputToken.token,
         amount: totalAmount / 2n, // Mock 50% conversion for simplicity
         chainId: outputToken.chainId,
-        walletAddress: inputArray[0].walletAddress,
+        walletAddress: outputToken.walletAddress,
         symbol: "USDC",
         decimals: 6,
       };

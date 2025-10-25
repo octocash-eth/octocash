@@ -995,4 +995,169 @@ describe("planConsolidation", () => {
     // Verify swap was called
     expect(getSwapQuote).toHaveBeenCalledTimes(1);
   });
+
+  test("swap from different wallet on same chain - should output to destination wallet", async () => {
+    const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: USDC_ADDRESS,
+        amount: 1000000n, // 1 USDC in wallet 2 on destination chain
+        chainId: 1, // Same as destination chain
+        walletAddress: WALLET_2, // Different wallet
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1, // Ethereum
+      walletAddress: WALLET, // Destination wallet
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: WBTC_ADDRESS,
+      amount: 5000000n, // 0.05 WBTC
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    });
+
+    const result = await planConsolidation(sourceTokens, destinationToken);
+
+    // Should have exactly one swap step
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("swap");
+
+    // Verify swap input is from wallet 2
+    expect(result[0].inputTokens[0].walletAddress).toBe(WALLET_2);
+    expect(result[0].inputTokens[0].token).toBe(USDC_ADDRESS);
+
+    // CRITICAL: Verify swap output goes to DESTINATION wallet (WALLET), not source wallet (WALLET_2)
+    expect(result[0].outputToken.walletAddress).toBe(WALLET);
+    expect(result[0].outputToken.token).toBe(WBTC_ADDRESS);
+  });
+
+  test("swap after bridge/claim - should output to destination wallet", async () => {
+    const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: USDC_OPTIMISM, // USDC on Optimism
+        amount: 1000000n,
+        chainId: 10, // Optimism
+        walletAddress: WALLET_2, // From wallet 2
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1, // Ethereum
+      walletAddress: WALLET, // Destination wallet (different from source)
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+    // Mock final swap USDC -> WBTC on Ethereum
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: WBTC_ADDRESS,
+      amount: 8000n,
+      chainId: 1,
+      walletAddress: WALLET, // Quote returns destination wallet (simulating getSwapQuote behavior)
+      symbol: "WBTC",
+      decimals: 8,
+    });
+
+    const result = await planConsolidation(sourceTokens, destinationToken);
+
+    // Find the final swap step (after claim)
+    const claimStep = result.find((s: TransactionStep) => s.type === "claim");
+    const swapSteps = result.filter((s: TransactionStep) => s.type === "swap");
+
+    expect(claimStep).toBeDefined();
+    expect(swapSteps.length).toBeGreaterThan(0);
+
+    // Find swap that depends on claim
+    const finalSwap = swapSteps.find((s: TransactionStep) => s.dependsOn.includes(claimStep?.id || ""));
+    expect(finalSwap).toBeDefined();
+
+    // CRITICAL: Verify final swap output goes to DESTINATION wallet
+    expect(finalSwap?.outputToken.walletAddress).toBe(WALLET);
+    expect(finalSwap?.outputToken.token).toBe(WBTC_ADDRESS);
+  });
+
+  test("swap before bridge - should output to SOURCE wallet (not destination wallet)", async () => {
+    const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+    const POLYGON_USDC = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: ETH_ADDRESS, // Non-USDC token on Polygon
+        amount: 1000000000000000000n, // 1 POL
+        chainId: 137, // Polygon (non-destination chain)
+        walletAddress: WALLET_2, // From wallet 2
+        symbol: "POL",
+        decimals: 18,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1, // Ethereum (different chain)
+      walletAddress: WALLET, // Destination wallet (different from source)
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    // Mock swap POL -> USDC on Polygon (before bridging)
+    vi.mocked(getSwapQuote).mockResolvedValueOnce({
+      token: POLYGON_USDC,
+      amount: 3000000000n, // 3000 USDC
+      chainId: 137,
+      walletAddress: WALLET_2, // Quote returns source wallet
+      symbol: "USDC",
+      decimals: 6,
+    });
+
+    // Mock final swap USDC -> WBTC on Ethereum (after bridging)
+    vi.mocked(getSwapQuote).mockResolvedValueOnce({
+      token: WBTC_ADDRESS,
+      amount: 8000n,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    });
+
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+    const result = await planConsolidation(sourceTokens, destinationToken);
+
+    // Find the swap step BEFORE bridge (swap POL to USDC on Polygon)
+    const swapBeforeBridge = result.find((s: TransactionStep) => s.type === "swap" && s.chainId === 137);
+    const bridgeStep = result.find((s: TransactionStep) => s.type === "bridge");
+
+    expect(swapBeforeBridge).toBeDefined();
+    expect(bridgeStep).toBeDefined();
+
+    // CRITICAL: Verify swap before bridge outputs to SOURCE wallet (WALLET_2), NOT destination wallet (WALLET)
+    // This is essential because the bridge step needs to take tokens from WALLET_2 on Polygon
+    expect(swapBeforeBridge?.outputToken.walletAddress).toBe(WALLET_2);
+    expect(swapBeforeBridge?.outputToken.token).toBe(POLYGON_USDC);
+
+    // Bridge should take from source wallet
+    expect(bridgeStep?.inputTokens[0].walletAddress).toBe(WALLET_2);
+    expect(bridgeStep?.chainId).toBe(137); // Bridge happens on source chain
+
+    // Bridge output should go to destination wallet
+    expect(bridgeStep?.outputToken.walletAddress).toBe(WALLET);
+  });
 });

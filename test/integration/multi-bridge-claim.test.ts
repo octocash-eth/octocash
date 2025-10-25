@@ -47,7 +47,7 @@ describe("Scenario: Multi-Bridge Claim Amount Aggregation", () => {
         token: outputToken.token,
         amount: totalAmount, // 1:1 for simplicity
         chainId: outputToken.chainId,
-        walletAddress: inputArray[0].walletAddress,
+        walletAddress: outputToken.walletAddress,
         symbol: "USDC",
         decimals: 6,
       };
