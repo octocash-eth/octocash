@@ -3,6 +3,7 @@ import {
   type Call,
   decodeFunctionData,
   encodeFunctionData,
+  erc20Abi,
   type Hex,
   type Log,
   parseAbi,
@@ -10,6 +11,7 @@ import {
   zeroAddress,
 } from "viem";
 import { OCTOCASH_REFERRAL_INFO } from "~/data/odos";
+import { getPublicClient } from "~/lib/public-client";
 import type { SendCallsFn } from "~/lib/send-calls";
 import type { TokenAmount } from "~/lib/types";
 
@@ -64,9 +66,17 @@ async function fetchJson<T>(url: string, body: unknown): Promise<T> {
  * @param router - The Odos router address.
  * @returns The approve calls.
  */
-function buildApproveCalls(inputs: TokenAmount[], router: Address): Call[] {
+async function buildApproveCalls(inputs: TokenAmount[], router: Address): Promise<Call[]> {
   const calls: Call[] = [];
   const seen = new Set<string>();
+  const chainId = inputs[0]?.chainId;
+
+  if (!chainId) {
+    return calls;
+  }
+
+  const publicClient = getPublicClient(chainId);
+
   for (const t of inputs) {
     const key = `${t.chainId}:${t.walletAddress}:${t.token}`;
     if (seen.has(key)) continue;
@@ -75,13 +85,26 @@ function buildApproveCalls(inputs: TokenAmount[], router: Address): Call[] {
     if (t.token === zeroAddress) continue;
     // Skip tokens that don't need to be approved
     if (t.amount === 0n) continue;
-    calls.push({
-      to: t.token,
-      data: encodeFunctionData({
-        abi: parseAbi(["function approve(address spender, uint256 amount) returns (bool)"]),
-        args: [router, t.amount],
-      }),
+
+    // Check current allowance
+    const currentAllowance = await publicClient.readContract({
+      address: t.token,
+      abi: erc20Abi,
+      functionName: "allowance",
+      args: [t.walletAddress, router],
     });
+
+    // Only approve if current allowance is insufficient
+    if (currentAllowance < t.amount) {
+      calls.push({
+        to: t.token,
+        data: encodeFunctionData({
+          abi: erc20Abi,
+          functionName: "approve",
+          args: [router, t.amount],
+        }),
+      });
+    }
   }
   return calls;
 }
@@ -228,7 +251,7 @@ export async function buildOdosCalls(tokensToSwap: TokenAmount[], tokenOut: Toke
   const assembled = await fetchJson<OdosAssembleResponse>(ODOS_ASSEMBLE_URL, assembleBody);
   const { to, data, value } = assembled.transaction;
   const swapWithRerralInfo = addReferralInfo(to, data, BigInt(value));
-  return [...buildApproveCalls(tokensToSwap, to), swapWithRerralInfo];
+  return [...(await buildApproveCalls(tokensToSwap, to)), swapWithRerralInfo];
 }
 
 /**

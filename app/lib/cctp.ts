@@ -1,15 +1,7 @@
-import {
-  type Address,
-  type Call,
-  type Chain,
-  createPublicClient,
-  encodeFunctionData,
-  type Hex,
-  pad,
-  parseAbi,
-} from "viem";
+import { type Address, type Call, type Chain, encodeFunctionData, erc20Abi, type Hex, pad, parseAbi } from "viem";
 import { chainIdToDomain, messageTransmitter, tokenAddresses, tokenMessenger } from "~/data/cctp-contracts";
-import { chains, transports } from "~/data/supported-chains";
+import { chains } from "~/data/supported-chains";
+import { getPublicClient } from "~/lib/public-client";
 import type { SendCallsFn } from "~/lib/send-calls";
 import type { TokenAmount } from "~/lib/types";
 
@@ -32,6 +24,7 @@ const getApproveAndBurnUsdcCalls = async (
   amount: bigint,
   destinationChainId: number,
   destinationAddress: Address,
+  walletAddress: Address,
 ) => {
   const finalityThreshold = 1000;
   const maxFee = amount - 1n;
@@ -44,34 +37,51 @@ const getApproveAndBurnUsdcCalls = async (
     throw new Error(`Multicall3 address not found for chain ${sourceChainId}`);
   }
 
-  const calls = [
-    {
-      to: tokenAddresses[sourceChainId as keyof typeof tokenAddresses] as `0x${string}`,
+  const publicClient = getPublicClient(sourceChainId);
+
+  const tokenAddress = tokenAddresses[sourceChainId as keyof typeof tokenAddresses] as `0x${string}`;
+  const spender = tokenMessenger[sourceChainId] as `0x${string}`;
+
+  // Check current allowance
+  const currentAllowance = await publicClient.readContract({
+    address: tokenAddress,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: [walletAddress, spender],
+  });
+
+  const calls: Call[] = [];
+
+  // Only approve if current allowance is insufficient
+  if (currentAllowance < amount) {
+    calls.push({
+      to: tokenAddress,
       data: encodeFunctionData({
-        abi: parseAbi(["function approve(address spender, uint256 amount) returns (bool)"]),
+        abi: erc20Abi,
         functionName: "approve",
-        args: [tokenMessenger[sourceChainId] as `0x${string}`, amount],
+        args: [spender, amount],
       }),
-    },
-    {
-      to: tokenMessenger[sourceChainId] as `0x${string}`,
-      data: encodeFunctionData({
-        abi: parseAbi([
-          "function depositForBurn(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 hookData, uint256 maxFee, uint32 finalityThreshold)",
-        ]),
-        functionName: "depositForBurn",
-        args: [
-          amount,
-          chainIdToDomain[destinationChainId],
-          pad(destinationAddress),
-          tokenAddresses[sourceChainId as keyof typeof tokenAddresses] as `0x${string}`,
-          pad(multicall3Address),
-          maxFee,
-          finalityThreshold,
-        ],
-      }),
-    },
-  ];
+    });
+  }
+
+  calls.push({
+    to: spender,
+    data: encodeFunctionData({
+      abi: parseAbi([
+        "function depositForBurn(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 hookData, uint256 maxFee, uint32 finalityThreshold)",
+      ]),
+      functionName: "depositForBurn",
+      args: [
+        amount,
+        chainIdToDomain[destinationChainId],
+        pad(destinationAddress),
+        tokenAddress,
+        pad(multicall3Address),
+        maxFee,
+        finalityThreshold,
+      ],
+    }),
+  });
 
   return calls;
 };
@@ -117,14 +127,7 @@ export const getMintUsdcCalls = async (destinationChainId: number, attestations:
     ]),
   };
 
-  const transport = transports?.[destinationChainId as keyof typeof transports];
-  if (!transport) {
-    throw new Error(`Chain ${destinationChainId} not supported or no transport configured`);
-  }
-  const publicClient = createPublicClient({
-    chain: chains[destinationChainId as keyof typeof chains] as Chain,
-    transport,
-  });
+  const publicClient = getPublicClient(destinationChainId);
 
   const usedNonces = await publicClient.multicall({
     contracts: attestations.map((a) => ({
@@ -174,7 +177,7 @@ export const executeCCTPBurn = async (
     "burn",
     sourceChainId,
     from,
-    await getApproveAndBurnUsdcCalls(sourceChainId, amount, destinationChainId, destinationAddress),
+    await getApproveAndBurnUsdcCalls(sourceChainId, amount, destinationChainId, destinationAddress, from),
     "atomic-steps",
   );
 

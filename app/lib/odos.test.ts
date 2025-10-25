@@ -1,4 +1,4 @@
-import type { Address, Hex, Log } from "viem";
+import type { Address, Hex, Log, PublicClient } from "viem";
 import {
   encodeAbiParameters,
   encodeEventTopics,
@@ -15,6 +15,13 @@ import type { TokenAmount } from "./types";
 
 type SendCallsReturn = [Hex, Log[][]];
 type SendCallsFn = Mock<(...args: unknown[]) => Promise<SendCallsReturn>>;
+
+// Mock the public-client module
+vi.mock("./public-client", () => ({
+  getPublicClient: vi.fn(() => ({
+    readContract: vi.fn().mockResolvedValue(0n), // Default: no allowance
+  })),
+}));
 
 // Helper ABI for encoding swap function calls in tests
 const odosRouterV3Abi = parseAbi([
@@ -76,7 +83,15 @@ describe("odos", () => {
   };
 
   describe("buildOdosCalls", () => {
-    beforeEach(() => {
+    let mockPublicClient: { readContract: Mock };
+
+    beforeEach(async () => {
+      const { getPublicClient } = await import("./public-client");
+      mockPublicClient = {
+        readContract: vi.fn().mockResolvedValue(0n), // Default: no allowance
+      };
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient as Partial<PublicClient> as PublicClient);
+
       vi.stubGlobal(
         "fetch",
         vi.fn(async (url: string) => {
@@ -114,7 +129,7 @@ describe("odos", () => {
 
     afterEach(() => {
       vi.unstubAllGlobals();
-      vi.resetAllMocks();
+      vi.clearAllMocks();
     });
 
     test("returns the correct approve calls and swap call", async () => {
@@ -184,6 +199,42 @@ describe("odos", () => {
       await expect(buildOdosCalls([mockTokenUSDC], mockTokenUSDT)).rejects.toThrow(
         "Request failed (500): Internal Server Error",
       );
+    });
+
+    test("skips approval when sufficient allowance already exists", async () => {
+      // Mock sufficient allowance for USDC, insufficient for USDT
+      mockPublicClient.readContract
+        .mockResolvedValueOnce(mockTokenUSDC.amount) // USDC has sufficient allowance
+        .mockResolvedValueOnce(0n); // USDT has no allowance
+
+      const calls = await buildOdosCalls([mockTokenUSDC, mockTokenUSDT], mockTokenUSDC);
+
+      // Should only have one approval (for USDT) and the swap call
+      expect(calls).toHaveLength(2);
+      expect(calls[0].to).toBe(mockTokenUSDT.token); // Only USDT approval
+      expect(calls[1]).toEqual({
+        to: "0x0000000000000000000000000000000000000001",
+        data: expect.any(String),
+        value: 2n,
+      });
+
+      // Verify allowance was checked for both tokens
+      expect(mockPublicClient.readContract).toHaveBeenCalledTimes(2);
+    });
+
+    test("skips all approvals when all tokens have sufficient allowance", async () => {
+      // Mock sufficient allowance for all tokens
+      mockPublicClient.readContract.mockResolvedValue(mockTokenUSDC.amount * 2n);
+
+      const calls = await buildOdosCalls([mockTokenUSDC, mockTokenUSDT], mockTokenUSDC);
+
+      // Should only have the swap call, no approvals
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual({
+        to: "0x0000000000000000000000000000000000000001",
+        data: expect.any(String),
+        value: 2n,
+      });
     });
   });
 
@@ -329,7 +380,15 @@ describe("odos", () => {
   });
 
   describe("executeOdosSwapOrTransfer", () => {
-    beforeEach(() => {
+    let mockPublicClient: { readContract: Mock };
+
+    beforeEach(async () => {
+      const { getPublicClient } = await import("./public-client");
+      mockPublicClient = {
+        readContract: vi.fn().mockResolvedValue(0n), // Default: no allowance
+      };
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient as Partial<PublicClient> as PublicClient);
+
       vi.stubGlobal(
         "fetch",
         vi.fn(async (url: string) => {
@@ -367,7 +426,7 @@ describe("odos", () => {
 
     afterEach(() => {
       vi.unstubAllGlobals();
-      vi.resetAllMocks();
+      vi.clearAllMocks();
     });
 
     test("executes swap and returns amount from Swap event", async () => {

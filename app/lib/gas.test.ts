@@ -1,16 +1,13 @@
-import { type Address, type Chain, type PublicClient, parseUnits, type Transport } from "viem";
+import { type Address, type PublicClient, parseUnits, type Transport } from "viem";
 import { mainnet, optimism, polygon } from "viem/chains";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { TokenAmount } from "./types";
 
-// Mock the viem module
-vi.mock("viem", async () => {
-  const actual = await vi.importActual("viem");
-  return {
-    ...actual,
-    createPublicClient: vi.fn(),
-  };
-});
+// Mock the public-client module
+vi.mock("./public-client", () => ({
+  getPublicClient: vi.fn(),
+  retryOnRateLimit: vi.fn((fn) => fn()),
+}));
 
 // Mock the data modules
 vi.mock("~/data/gas-thresholds", () => ({
@@ -26,11 +23,11 @@ vi.mock("~/data/supported-chains", () => ({
   transports: {},
 }));
 
-import { createPublicClient } from "viem";
 import { getGasThresholdForChain } from "~/data/gas-thresholds";
 import { ensureSufficientGas, getNativeBalance } from "./gas";
+import { getPublicClient } from "./public-client";
 
-const mockCreatePublicClient = vi.mocked(createPublicClient);
+const mockGetPublicClient = vi.mocked(getPublicClient);
 const mockGetGasThresholdForChain = vi.mocked(getGasThresholdForChain);
 
 describe("gas", () => {
@@ -41,7 +38,7 @@ describe("gas", () => {
   describe("getNativeBalance", () => {
     test("should return the native balance using provided transport", async () => {
       const mockGetBalance = vi.fn().mockResolvedValue(parseUnits("1.5", 18));
-      mockCreatePublicClient.mockReturnValue({
+      mockGetPublicClient.mockReturnValue({
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
@@ -51,16 +48,13 @@ describe("gas", () => {
       const balance = await getNativeBalance(mainnet, address, mockTransport);
 
       expect(balance).toBe(parseUnits("1.5", 18));
-      expect(mockCreatePublicClient).toHaveBeenCalledWith({
-        chain: mainnet,
-        transport: mockTransport,
-      });
+      expect(mockGetPublicClient).toHaveBeenCalledWith(mainnet.id, mockTransport);
       expect(mockGetBalance).toHaveBeenCalledWith({ address });
     });
 
     test("should return zero balance when address has no funds", async () => {
       const mockGetBalance = vi.fn().mockResolvedValue(0n);
-      mockCreatePublicClient.mockReturnValue({
+      mockGetPublicClient.mockReturnValue({
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
@@ -72,22 +66,10 @@ describe("gas", () => {
       expect(balance).toBe(0n);
     });
 
-    test("should throw an error when no transport is provided and chain not in config", async () => {
-      const chain: Chain = {
-        id: 999999,
-        name: "Unknown Chain",
-        nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-        rpcUrls: { default: { http: ["http://localhost"] } },
-      };
-      const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
-
-      await expect(getNativeBalance(chain, address)).rejects.toThrow("No transport configured for chain 999999");
-    });
-
     test("should handle large balance values", async () => {
       const largeBalance = parseUnits("1000000", 18);
       const mockGetBalance = vi.fn().mockResolvedValue(largeBalance);
-      mockCreatePublicClient.mockReturnValue({
+      mockGetPublicClient.mockReturnValue({
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
@@ -98,224 +80,6 @@ describe("gas", () => {
 
       expect(balance).toBe(largeBalance);
     });
-
-    describe("rate limiting and retries", () => {
-      test("should retry on 429 error and succeed", async () => {
-        vi.useFakeTimers();
-        let callCount = 0;
-        const mockGetBalance = vi.fn().mockImplementation(() => {
-          callCount++;
-          if (callCount === 1) {
-            return Promise.reject(new Error("HTTP request failed. 429: Too Many Requests"));
-          }
-          return Promise.resolve(parseUnits("1.5", 18));
-        });
-
-        mockCreatePublicClient.mockReturnValue({
-          getBalance: mockGetBalance,
-        } as Partial<PublicClient> as PublicClient);
-
-        const mockTransport = {} as Transport;
-        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
-
-        const balancePromise = getNativeBalance(mainnet, address, mockTransport);
-
-        // Fast-forward through the retry delay
-        await vi.runAllTimersAsync();
-
-        const balance = await balancePromise;
-
-        expect(balance).toBe(parseUnits("1.5", 18));
-        expect(mockGetBalance).toHaveBeenCalledTimes(2);
-
-        vi.useRealTimers();
-      });
-
-      test('should retry on error with "Too many request" in message', async () => {
-        vi.useFakeTimers();
-        let callCount = 0;
-        const mockGetBalance = vi.fn().mockImplementation(() => {
-          callCount++;
-          if (callCount === 1) {
-            return Promise.reject(new Error("Too many request"));
-          }
-          return Promise.resolve(parseUnits("2", 18));
-        });
-
-        mockCreatePublicClient.mockReturnValue({
-          getBalance: mockGetBalance,
-        } as Partial<PublicClient> as PublicClient);
-
-        const mockTransport = {} as Transport;
-        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
-
-        const balancePromise = getNativeBalance(mainnet, address, mockTransport);
-        await vi.runAllTimersAsync();
-        const balance = await balancePromise;
-
-        expect(balance).toBe(parseUnits("2", 18));
-        expect(mockGetBalance).toHaveBeenCalledTimes(2);
-
-        vi.useRealTimers();
-      });
-
-      test('should retry on error with "rate limit" in message', async () => {
-        vi.useFakeTimers();
-        let callCount = 0;
-        const mockGetBalance = vi.fn().mockImplementation(() => {
-          callCount++;
-          if (callCount === 1) {
-            return Promise.reject(new Error("rate limit exceeded"));
-          }
-          return Promise.resolve(parseUnits("3", 18));
-        });
-
-        mockCreatePublicClient.mockReturnValue({
-          getBalance: mockGetBalance,
-        } as Partial<PublicClient> as PublicClient);
-
-        const mockTransport = {} as Transport;
-        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
-
-        const balancePromise = getNativeBalance(mainnet, address, mockTransport);
-        await vi.runAllTimersAsync();
-        const balance = await balancePromise;
-
-        expect(balance).toBe(parseUnits("3", 18));
-        expect(mockGetBalance).toHaveBeenCalledTimes(2);
-
-        vi.useRealTimers();
-      });
-
-      test("should apply exponential backoff on multiple retries", async () => {
-        vi.useFakeTimers();
-        const startTime = Date.now();
-        let callCount = 0;
-        const delays: number[] = [];
-
-        const mockGetBalance = vi.fn().mockImplementation(() => {
-          callCount++;
-          delays.push(Date.now() - startTime);
-
-          if (callCount <= 2) {
-            return Promise.reject(new Error("429: Too Many Requests"));
-          }
-          return Promise.resolve(parseUnits("1", 18));
-        });
-
-        mockCreatePublicClient.mockReturnValue({
-          getBalance: mockGetBalance,
-        } as Partial<PublicClient> as PublicClient);
-
-        const mockTransport = {} as Transport;
-        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
-
-        const balancePromise = getNativeBalance(mainnet, address, mockTransport);
-        await vi.runAllTimersAsync();
-        const balance = await balancePromise;
-
-        expect(balance).toBe(parseUnits("1", 18));
-        expect(mockGetBalance).toHaveBeenCalledTimes(3);
-
-        // Verify exponential backoff delays
-        // First call at t=0
-        // Second call after 1000ms delay
-        // Third call after 2000ms delay
-        expect(delays[0]).toBe(0);
-        expect(delays[1]).toBeGreaterThanOrEqual(1000);
-        expect(delays[2]).toBeGreaterThanOrEqual(3000); // 1000 + 2000
-
-        vi.useRealTimers();
-      });
-
-      test("should throw after max retries exceeded", async () => {
-        vi.useFakeTimers();
-        const mockGetBalance = vi.fn().mockRejectedValue(new Error("429: Too Many Requests"));
-
-        mockCreatePublicClient.mockReturnValue({
-          getBalance: mockGetBalance,
-        } as Partial<PublicClient> as PublicClient);
-
-        const mockTransport = {} as Transport;
-        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
-
-        const balancePromise = getNativeBalance(mainnet, address, mockTransport);
-        // Add a catch handler to prevent unhandled rejection warnings
-        balancePromise.catch(() => {});
-
-        await vi.runAllTimersAsync();
-
-        await expect(balancePromise).rejects.toThrow("429: Too Many Requests");
-        // Should try: initial + 3 retries = 4 total attempts
-        expect(mockGetBalance).toHaveBeenCalledTimes(4);
-
-        vi.useRealTimers();
-      });
-
-      test("should not retry on non-rate-limit errors", async () => {
-        const mockGetBalance = vi.fn().mockRejectedValue(new Error("Network connection failed"));
-
-        mockCreatePublicClient.mockReturnValue({
-          getBalance: mockGetBalance,
-        } as Partial<PublicClient> as PublicClient);
-
-        const mockTransport = {} as Transport;
-        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
-
-        await expect(getNativeBalance(mainnet, address, mockTransport)).rejects.toThrow("Network connection failed");
-        // Should only try once
-        expect(mockGetBalance).toHaveBeenCalledTimes(1);
-      });
-
-      test("should not retry on non-Error exceptions", async () => {
-        const mockGetBalance = vi.fn().mockRejectedValue("String error");
-
-        mockCreatePublicClient.mockReturnValue({
-          getBalance: mockGetBalance,
-        } as Partial<PublicClient> as PublicClient);
-
-        const mockTransport = {} as Transport;
-        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
-
-        await expect(getNativeBalance(mainnet, address, mockTransport)).rejects.toBe("String error");
-        // Should only try once
-        expect(mockGetBalance).toHaveBeenCalledTimes(1);
-      });
-
-      test("should handle mixed rate limit and success scenarios", async () => {
-        vi.useFakeTimers();
-        let callCount = 0;
-        const mockGetBalance = vi.fn().mockImplementation(() => {
-          callCount++;
-          // First attempt: rate limit
-          if (callCount === 1) {
-            return Promise.reject(new Error("429"));
-          }
-          // Second attempt: different rate limit message
-          if (callCount === 2) {
-            return Promise.reject(new Error("rate limit exceeded"));
-          }
-          // Third attempt: success
-          return Promise.resolve(parseUnits("5.5", 18));
-        });
-
-        mockCreatePublicClient.mockReturnValue({
-          getBalance: mockGetBalance,
-        } as Partial<PublicClient> as PublicClient);
-
-        const mockTransport = {} as Transport;
-        const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
-
-        const balancePromise = getNativeBalance(mainnet, address, mockTransport);
-        await vi.runAllTimersAsync();
-        const balance = await balancePromise;
-
-        expect(balance).toBe(parseUnits("5.5", 18));
-        expect(mockGetBalance).toHaveBeenCalledTimes(3);
-
-        vi.useRealTimers();
-      });
-    });
   });
 
   describe("ensureSufficientGas", () => {
@@ -323,7 +87,7 @@ describe("gas", () => {
       mockGetGasThresholdForChain.mockReturnValue("0.001");
 
       const mockGetBalance = vi.fn().mockResolvedValue(parseUnits("1", 18));
-      mockCreatePublicClient.mockReturnValue({
+      mockGetPublicClient.mockReturnValue({
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
@@ -359,7 +123,7 @@ describe("gas", () => {
       mockGetGasThresholdForChain.mockReturnValue("0.002");
 
       const mockGetBalance = vi.fn().mockResolvedValue(parseUnits("0.001", 18));
-      mockCreatePublicClient.mockReturnValue({
+      mockGetPublicClient.mockReturnValue({
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
@@ -404,7 +168,7 @@ describe("gas", () => {
         return Promise.resolve(parseUnits("0.001", 18)); // destination doesn't
       });
 
-      mockCreatePublicClient.mockReturnValue({
+      mockGetPublicClient.mockReturnValue({
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
@@ -442,7 +206,7 @@ describe("gas", () => {
       mockGetGasThresholdForChain.mockReturnValue("0.001");
 
       const mockGetBalance = vi.fn().mockResolvedValue(parseUnits("1", 18));
-      mockCreatePublicClient.mockReturnValue({
+      mockGetPublicClient.mockReturnValue({
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
@@ -491,7 +255,7 @@ describe("gas", () => {
       mockGetGasThresholdForChain.mockReturnValue("0.001");
 
       const mockGetBalance = vi.fn().mockResolvedValue(parseUnits("1", 18));
-      mockCreatePublicClient.mockReturnValue({
+      mockGetPublicClient.mockReturnValue({
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
@@ -531,7 +295,7 @@ describe("gas", () => {
       mockGetGasThresholdForChain.mockReturnValue("0.002");
 
       const mockGetBalance = vi.fn().mockResolvedValue(parseUnits("0.001", 18));
-      mockCreatePublicClient.mockReturnValue({
+      mockGetPublicClient.mockReturnValue({
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
@@ -586,7 +350,7 @@ describe("gas", () => {
       mockGetGasThresholdForChain.mockReturnValue("0.002");
 
       const mockGetBalance = vi.fn().mockResolvedValue(parseUnits("0.00123", 18));
-      mockCreatePublicClient.mockReturnValue({
+      mockGetPublicClient.mockReturnValue({
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
@@ -628,7 +392,7 @@ describe("gas", () => {
       mockGetGasThresholdForChain.mockReturnValue("0.001");
 
       const mockGetBalance = vi.fn().mockResolvedValue(parseUnits("1", 18));
-      mockCreatePublicClient.mockReturnValue({
+      mockGetPublicClient.mockReturnValue({
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 

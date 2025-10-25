@@ -3,6 +3,14 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { Attestation } from "./cctp";
 import type { TokenAmount } from "./types";
 
+// Mock the public-client module
+vi.mock("./public-client", () => ({
+  getPublicClient: vi.fn(() => ({
+    multicall: vi.fn(),
+    readContract: vi.fn().mockResolvedValue(0n), // Default: no allowance
+  })),
+}));
+
 // Mock external dependencies BEFORE imports
 vi.mock("viem", async () => {
   const actual = await vi.importActual<typeof import("viem")>("viem");
@@ -12,9 +20,6 @@ vi.mock("viem", async () => {
       // Return a simple mock based on function name
       return `0x${config.functionName}_encoded` as Hex;
     }),
-    createPublicClient: vi.fn(() => ({
-      multicall: vi.fn(),
-    })),
   };
 });
 
@@ -91,8 +96,8 @@ vi.mock("~/data/supported-chains", () => ({
   },
 }));
 
-import { createPublicClient } from "viem";
 import { executeCCTPBurn, executeCCTPMint, getBridgeFee, getMintUsdcCalls, retrieveAttestations } from "./cctp";
+import { getPublicClient } from "./public-client";
 
 describe("cctp", () => {
   const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
@@ -119,7 +124,7 @@ describe("cctp", () => {
   });
 
   describe("executeCCTPBurn", () => {
-    test("executes burn successfully with approve and depositForBurn calls", async () => {
+    test("executes burn successfully with approve and depositForBurn calls when no allowance", async () => {
       const tokenIn: TokenAmount = {
         token: USDC_ADDRESS,
         amount: 1000000n, // 1 USDC
@@ -137,6 +142,12 @@ describe("cctp", () => {
         symbol: "USDC",
         decimals: 6,
       };
+
+      const mockPublicClient = {
+        readContract: vi.fn().mockResolvedValue(0n), // No allowance
+        multicall: vi.fn(),
+      };
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient as unknown as PublicClient);
 
       const mockSendCalls = vi.fn().mockResolvedValue(["0xburnhash", []]);
 
@@ -205,6 +216,88 @@ describe("cctp", () => {
       await executeCCTPBurn(tokenIn, tokenOut, mockSendCalls);
 
       expect(mockSendCalls).toHaveBeenCalledWith("burn", 10, WALLET, expect.any(Array), "atomic-steps");
+    });
+
+    test("skips approval when sufficient allowance already exists", async () => {
+      const tokenIn: TokenAmount = {
+        token: USDC_ADDRESS,
+        amount: 1000000n,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      const tokenOut: TokenAmount = {
+        token: USDC_ADDRESS,
+        amount: 0n,
+        chainId: 137,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      const mockPublicClient = {
+        readContract: vi.fn().mockResolvedValue(tokenIn.amount), // Sufficient allowance
+        multicall: vi.fn(),
+      };
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient as unknown as PublicClient);
+
+      const mockSendCalls = vi.fn().mockResolvedValue(["0xburnhash", []]);
+
+      const [txHash, chainId] = await executeCCTPBurn(tokenIn, tokenOut, mockSendCalls);
+
+      expect(txHash).toBe("0xburnhash");
+      expect(chainId).toBe(1);
+
+      // Verify the calls structure - should only have depositForBurn, no approve
+      const calls = mockSendCalls.mock.calls[0][3];
+      expect(calls).toHaveLength(1); // Only depositForBurn
+      expect(calls[0].to).toBe("0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d"); // Token Messenger
+
+      // Verify allowance was checked
+      expect(mockPublicClient.readContract).toHaveBeenCalledWith({
+        address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        abi: expect.any(Array),
+        functionName: "allowance",
+        args: [WALLET, "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d"],
+      });
+    });
+
+    test("includes approval when allowance is insufficient", async () => {
+      const tokenIn: TokenAmount = {
+        token: USDC_ADDRESS,
+        amount: 1000000n,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      const tokenOut: TokenAmount = {
+        token: USDC_ADDRESS,
+        amount: 0n,
+        chainId: 137,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      const mockPublicClient = {
+        readContract: vi.fn().mockResolvedValue(500000n), // Insufficient allowance
+        multicall: vi.fn(),
+      };
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient as unknown as PublicClient);
+
+      const mockSendCalls = vi.fn().mockResolvedValue(["0xburnhash", []]);
+
+      await executeCCTPBurn(tokenIn, tokenOut, mockSendCalls);
+
+      // Verify the calls structure - should have both approve and depositForBurn
+      const calls = mockSendCalls.mock.calls[0][3];
+      expect(calls).toHaveLength(2); // approve + depositForBurn
+      expect(calls[0].to).toBe("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"); // USDC token
+      expect(calls[1].to).toBe("0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d"); // Token Messenger
     });
   });
 
@@ -415,7 +508,7 @@ describe("cctp", () => {
         multicall: vi.fn().mockResolvedValue([{ result: 0n }, { result: 0n }]),
       } as unknown as PublicClient;
 
-      vi.mocked(createPublicClient).mockReturnValue(mockPublicClient);
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient);
 
       const calls = await getMintUsdcCalls(1, mockAttestations);
 
@@ -456,7 +549,7 @@ describe("cctp", () => {
         ]),
       } as unknown as PublicClient;
 
-      vi.mocked(createPublicClient).mockReturnValue(mockPublicClient);
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient);
 
       const calls = await getMintUsdcCalls(1, mockAttestations);
 
@@ -482,7 +575,7 @@ describe("cctp", () => {
         multicall: vi.fn().mockResolvedValue([{ result: 1n }]),
       } as unknown as PublicClient;
 
-      vi.mocked(createPublicClient).mockReturnValue(mockPublicClient);
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient);
 
       const calls = await getMintUsdcCalls(1, mockAttestations);
 
@@ -503,9 +596,12 @@ describe("cctp", () => {
         },
       ];
 
-      await expect(getMintUsdcCalls(999, mockAttestations)).rejects.toThrow(
-        "Chain 999 not supported or no transport configured",
-      );
+      // Mock getPublicClient to throw for unsupported chain
+      vi.mocked(getPublicClient).mockImplementationOnce(() => {
+        throw new Error("Chain 999 not supported");
+      });
+
+      await expect(getMintUsdcCalls(999, mockAttestations)).rejects.toThrow("Chain 999 not supported");
     });
   });
 
@@ -537,7 +633,7 @@ describe("cctp", () => {
         multicall: vi.fn().mockResolvedValue([{ result: 0n }]),
       } as unknown as PublicClient;
 
-      vi.mocked(createPublicClient).mockReturnValue(mockPublicClient);
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient);
 
       const mockSendCalls = vi.fn().mockResolvedValue([
         "0xminthash",
@@ -603,7 +699,7 @@ describe("cctp", () => {
         multicall: vi.fn().mockResolvedValue([{ result: 1n }]), // Nonce already used
       } as unknown as PublicClient;
 
-      vi.mocked(createPublicClient).mockReturnValue(mockPublicClient);
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient);
 
       const mockSendCalls = vi.fn();
 
@@ -665,7 +761,7 @@ describe("cctp", () => {
         ]),
       } as unknown as PublicClient;
 
-      vi.mocked(createPublicClient).mockReturnValue(mockPublicClient);
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient);
 
       const mockSendCalls = vi.fn().mockResolvedValue(["0xminthash", [[]]]);
 
@@ -699,6 +795,12 @@ describe("cctp", () => {
         symbol: "USDC",
         decimals: 6,
       };
+
+      const mockPublicClient = {
+        readContract: vi.fn().mockResolvedValue(0n), // No allowance
+        multicall: vi.fn(),
+      };
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient as unknown as PublicClient);
 
       const mockSendCalls = vi.fn().mockResolvedValue(["0xhash", []]);
 
