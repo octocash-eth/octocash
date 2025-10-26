@@ -1,17 +1,20 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { ExternalLink, MoreHorizontal } from "lucide-react";
 import { type Address, zeroAddress } from "viem";
-import { useEnsName } from "wagmi";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DataGridColumnHeader } from "~/components/ui/data-grid-column-header";
 import { Skeleton } from "~/components/ui/skeleton";
 
 import { supportedChains } from "~/data/supported-chains";
-import { cn, formatAddress } from "~/lib/utils";
-import AddressAvatar from "../address-avatar";
 import { ChainIcon } from "../chain-icon";
 import { TokenIcon } from "../token-icon";
+import {
+  AddressDisplayAvatar,
+  AddressDisplayLink,
+  AddressDisplayRoot,
+  AddressDisplayText,
+} from "../ui/address-display";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -159,20 +162,16 @@ export const columns: ColumnDef<WalletData>[] = [
     cell: ({ row }) => {
       const walletAddress = row.getValue("wallet") as string;
       const chainName = row.getValue("chain") as string;
-      const explorerUrl = getExplorerUrl(chainName, undefined, walletAddress);
+      const chain = supportedChains.find((chain) => chain.name === chainName);
+      const chainId = chain?.id;
+
       return (
-        <div className="font-medium text-left flex items-center gap-2">
-          <AddressAvatar addressOrEns={row.getValue("wallet") as string} className="size-4 md:size-5" />
-          <AddressDisplay address={row.getValue("wallet")} />
-          <a
-            href={explorerUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-500 hover:text-blue-700 inline-flex items-center"
-            title={`View on block explorer`}
-          >
-            <ExternalLink className="h-3 w-3 ml-1" />
-          </a>
+        <div className="font-medium text-left">
+          <AddressDisplayRoot address={walletAddress} chainId={chainId}>
+            <AddressDisplayAvatar className="size-4 md:size-5" />
+            <AddressDisplayText />
+            <AddressDisplayLink />
+          </AddressDisplayRoot>
         </div>
       );
     },
@@ -298,13 +297,3 @@ export const columns: ColumnDef<WalletData>[] = [
     },
   },
 ];
-
-function AddressDisplay({ address, className }: { address: Address; className?: string }) {
-  const { data: ensName } = useEnsName({ address, chainId: 1 });
-  const shortAddress = formatAddress(address);
-  return (
-    <span className={cn("truncate text-nowrap", className)} title={ensName || shortAddress}>
-      {ensName || shortAddress}
-    </span>
-  );
-}

@@ -2,9 +2,9 @@ import { Check, Circle, ExternalLink, Loader2, X } from "lucide-react";
 import { formatUnits } from "viem";
 import { chains } from "~/data/supported-chains";
 import type { StepResult, TransactionStep } from "~/lib/types";
-import AddressAvatar from "../address-avatar";
 import { ChainIcon } from "../chain-icon";
 import { TokenIcon } from "../token-icon";
+import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "../ui/address-display";
 
 interface PlanCardProps {
   step: TransactionStep;
@@ -61,15 +61,11 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
     <TokenIcon token={symbol} iconUrl={getTokenIconUrl(chainId, tokenAddress)} className="size-4 inline-block" />
   );
 
-  const addressAvatar = (address: string) => (
-    <span className="inline-flex items-center gap-1">
-      <AddressAvatar
-        addressOrEns={address}
-        className="size-3 sm:size-4"
-        title={`Wallet: ${truncateAddress(address)}`}
-      />{" "}
-      {truncateAddress(address)}
-    </span>
+  const addressDisplay = (address: string) => (
+    <AddressDisplayRoot address={address} className="inline-flex gap-1">
+      <AddressDisplayAvatar className="size-3 sm:size-4" title={`Wallet: ${address}`} />
+      <AddressDisplayText />
+    </AddressDisplayRoot>
   );
 
   // Group token icon + amount + symbol together with popover
@@ -123,10 +119,10 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
             {inputWallets.map((wallet) => (
               <span key={wallet}>
                 {inputWallets.indexOf(wallet) > 0 && ","}
-                {addressAvatar(wallet)}
+                {addressDisplay(wallet)}
               </span>
             ))}
-            {!inputWallets.includes(outputToken.walletAddress) && <> → {addressAvatar(outputToken.walletAddress)}</>})
+            {!inputWallets.includes(outputToken.walletAddress) && <> → {addressDisplay(outputToken.walletAddress)}</>})
           </span>
         </>
       );
@@ -144,9 +140,9 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
           <span className="text-gray-500">from</span> {chainBadge(step.chainId, chainName)}{" "}
           <span className="text-gray-500">to</span> {chainBadge(destChainId, destChain)}{" "}
           <span className="text-gray-400 text-xs inline-flex items-center gap-1">
-            ({addressAvatar(inputToken.walletAddress)}
+            ({addressDisplay(inputToken.walletAddress)}
             {inputToken.walletAddress !== step.outputToken.walletAddress && (
-              <> → {addressAvatar(step.outputToken.walletAddress)}</>
+              <> → {addressDisplay(step.outputToken.walletAddress)}</>
             )}
             )
           </span>
@@ -176,14 +172,14 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
           )}{" "}
           <span className="text-gray-500">on</span> {chainBadge(step.chainId, chainName)}{" "}
           <span className="text-gray-400 text-xs inline-flex items-center gap-1">
-            ({addressAvatar(outputToken.walletAddress)})
+            ({addressDisplay(outputToken.walletAddress)})
           </span>
         </>
       );
     }
     case "transfer": {
+      const inputToken = step.inputTokens[0];
       const outputToken = step.outputToken;
-      const inputWallets = [...new Set(step.inputTokens.map((t) => t.walletAddress))];
       return (
         <>
           <span className="text-gray-600">{isPast ? "Transferred" : isExecuting ? "Transferring" : "Transfer"}</span>{" "}
@@ -199,14 +195,7 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
           })}{" "}
           <span className="text-gray-500">on</span> {chainBadge(step.chainId, chainName)}{" "}
           <span className="text-gray-400 text-xs inline-flex items-center gap-1">
-            by{" "}
-            {inputWallets.map((wallet) => (
-              <span key={wallet}>
-                {inputWallets.indexOf(wallet) > 0 && ","}
-                {addressAvatar(wallet)}
-              </span>
-            ))}
-            {!inputWallets.includes(outputToken.walletAddress) && <> to {addressAvatar(outputToken.walletAddress)}</>}
+            ({addressDisplay(inputToken.walletAddress)} → {addressDisplay(outputToken.walletAddress)})
           </span>
         </>
       );

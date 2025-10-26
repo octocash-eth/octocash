@@ -14,10 +14,9 @@ import {
 } from "@tanstack/react-table";
 import { Coins, Link, RotateCcw, Wallet } from "lucide-react";
 import * as React from "react";
-import { formatAddress } from "~/lib/utils";
-import AddressAvatar from "../address-avatar";
 import { ChainIcon } from "../chain-icon";
 import { TokenIcon } from "../token-icon";
+import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "../ui/address-display";
 import { Button } from "../ui/button";
 import { DataGrid, DataGridContainer } from "../ui/data-grid";
 import { DataGridPagination } from "../ui/data-grid-pagination";
@@ -38,10 +37,10 @@ interface DataTableProps<TData extends object, TValue> {
 
 function RenderedAddressCell({ address }: { address: string }) {
   return (
-    <div className="flex items-center gap-2">
-      <AddressAvatar addressOrEns={address} className="size-4" />
-      {formatAddress(address)}
-    </div>
+    <AddressDisplayRoot address={address}>
+      <AddressDisplayAvatar className="size-4" />
+      <AddressDisplayText />
+    </AddressDisplayRoot>
   );
 }
 

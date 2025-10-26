@@ -3,11 +3,11 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { formatUnits, zeroAddress } from "viem";
 import { useToken } from "wagmi";
-import AddressAvatar from "~/components/address-avatar";
 import { ChainIcon } from "~/components/chain-icon";
 import { SiteHeader } from "~/components/site-header";
 import { TokenLabel } from "~/components/token-label";
 import { TransactionPlanViewer } from "~/components/transaction-plan";
+import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/ui/address-display";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
@@ -25,10 +25,6 @@ import ManualClaimDialog from "./manual-claim-dialog";
 
 export function meta() {
   return [{ title: `History — ${SITE_NAME}` }, { name: "description", content: SITE_DESCRIPTION }];
-}
-
-function truncateAddress(addr: string, visible: number = 4) {
-  return `${addr.slice(0, 2 + visible)}…${addr.slice(-visible)}`;
 }
 
 export default function History() {
@@ -301,9 +297,11 @@ function TokenCard({ token }: { token: TokenAmount }) {
           <ChainIcon chain={chainName} className="size-4" />
           <span>{chainName}</span>
         </div>
-        <div className="flex items-center gap-1.5">
-          <AddressAvatar addressOrEns={token.walletAddress} className="size-3" />
-          <span className="text-muted-foreground">{truncateAddress(token.walletAddress)}</span>
+        <div className="text-muted-foreground">
+          <AddressDisplayRoot address={token.walletAddress} className="gap-1.5">
+            <AddressDisplayAvatar className="size-3" />
+            <AddressDisplayText />
+          </AddressDisplayRoot>
         </div>
       </div>
     </div>

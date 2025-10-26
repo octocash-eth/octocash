@@ -2,10 +2,10 @@ import { useId } from "react";
 import { isAddress } from "viem";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { supportedChains } from "~/data/supported-chains";
-import AddressAvatar from "../address-avatar";
 import { ChainIcon } from "../chain-icon";
 import { Combobox } from "../combobox";
 import { TokenSelector } from "../token-selector";
+import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "../ui/address-display";
 
 interface SelectDestinationStageProps {
   destinationWallet: string;
@@ -46,10 +46,10 @@ export function SelectDestinationStage({
         </label>
         <Combobox
           labelFunction={(address: string) => (
-            <div className="flex items-center gap-2">
-              <AddressAvatar addressOrEns={address} className="size-4" />
-              {address}
-            </div>
+            <AddressDisplayRoot address={address}>
+              <AddressDisplayAvatar className="size-4" />
+              <AddressDisplayText />
+            </AddressDisplayRoot>
           )}
           placeholder="0x..."
           searchPlaceholder="Select or paste an address"

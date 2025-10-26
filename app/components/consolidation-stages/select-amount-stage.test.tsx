@@ -22,6 +22,19 @@ vi.mock("~/components/address-avatar", () => ({
   ),
 }));
 
+// Mock AddressDisplay components to avoid WagmiProvider requirement
+vi.mock("~/components/ui/address-display", () => ({
+  AddressDisplayRoot: ({ children, address }: { children: React.ReactNode; address: string }) => (
+    <div data-testid="address-display-root" data-address={address}>
+      {children}
+    </div>
+  ),
+  AddressDisplayAvatar: ({ className }: { className?: string }) => (
+    <div className={className} data-testid="address-display-avatar" />
+  ),
+  AddressDisplayText: () => <span data-testid="address-display-text">0x1234...7890</span>,
+}));
+
 // Mock ChainIcon to simplify rendering
 vi.mock("~/components/chain-icon", () => ({
   ChainIcon: ({ chain, className }: { chain: string; className: string }) => (

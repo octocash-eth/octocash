@@ -13,6 +13,21 @@ vi.mock("~/components/address-avatar", () => ({
   ),
 }));
 
+// Mock AddressDisplay components that use wagmi hooks
+vi.mock("~/components/ui/address-display", () => ({
+  AddressDisplayRoot: ({ children, address }: { children: React.ReactNode; address: string }) => (
+    <div data-testid="address-display-root" data-address={address}>
+      {children}
+    </div>
+  ),
+  AddressDisplayAvatar: ({ className }: { className?: string }) => (
+    <div className={className} data-testid="address-display-avatar">
+      <img src="mock-avatar.png" alt="" />
+    </div>
+  ),
+  AddressDisplayText: () => <span data-testid="address-display-text">0x1234...7890</span>,
+}));
+
 import { PlanCard } from "./plan-card";
 
 describe("PlanCard", () => {

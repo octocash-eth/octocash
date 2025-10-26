@@ -1,7 +1,7 @@
 import * as React from "react";
-import AddressAvatar from "~/components/address-avatar";
 import { ChainIcon } from "~/components/chain-icon";
 import { TokenIcon } from "~/components/token-icon";
+import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/ui/address-display";
 import {
   TokenAmountSelectorInput,
   TokenAmountSelectorMaxButton,
@@ -9,7 +9,6 @@ import {
   TokenAmountSelectorSlider,
 } from "~/components/ui/token-amount-selector";
 import type { WalletData } from "~/components/wallet-table/columns";
-import { formatAddress } from "~/lib/utils";
 
 interface TokenWithAmount extends WalletData {
   amountToConsolidate: string;
@@ -79,9 +78,11 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
                         {token.chain}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <AddressAvatar addressOrEns={token.wallet} className="size-3" />
-                      <span>{formatAddress(token.wallet)}</span>
+                    <div className="text-xs text-muted-foreground">
+                      <AddressDisplayRoot address={token.wallet} className="gap-1.5">
+                        <AddressDisplayAvatar className="size-3" />
+                        <AddressDisplayText />
+                      </AddressDisplayRoot>
                     </div>
                   </div>
                 </div>
