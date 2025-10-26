@@ -3,7 +3,7 @@ import { type Address, erc20Abi, getAddress, isAddress, isAddressEqual } from "v
 import { useReadContracts } from "wagmi";
 import { ETH, USDC, WBTC } from "~/data/token-contracts";
 import { Combobox } from "./combobox";
-import { TokenLabel } from "./token-label";
+import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "./ui/token-display";
 
 // Format: "chainId:tokenAddress:decimals:symbol"
 export function formatTokenValue(chainId: number, address: string, decimals: number, symbol: string): string {
@@ -122,13 +122,28 @@ export function TokenSelector({ chainId, value, onChange, disabled }: TokenSelec
       const parsed = parseTokenValue(tokenValue);
       if (parsed) {
         const { address, chainId, symbol } = parsed;
-        return <TokenLabel tokenAddress={address} chainId={chainId} symbol={symbol} />;
+        return (
+          <TokenDisplayRoot tokenAddress={address} chainId={chainId} symbol={symbol} className="gap-2">
+            <TokenDisplayIcon className="size-4" />
+            <TokenDisplaySymbol />
+          </TokenDisplayRoot>
+        );
       }
 
       // Handle raw addresses for preview (before transformation)
       if (isAddress(tokenValue) && chainId && previewMetadata && isAddressEqual(previewMetadata.address, tokenValue)) {
         // If we have loaded metadata, show it
-        return <TokenLabel tokenAddress={previewMetadata.address} chainId={chainId} symbol={previewMetadata.symbol} />;
+        return (
+          <TokenDisplayRoot
+            tokenAddress={previewMetadata.address}
+            chainId={chainId}
+            symbol={previewMetadata.symbol}
+            className="gap-2"
+          >
+            <TokenDisplayIcon className="size-4" />
+            <TokenDisplaySymbol />
+          </TokenDisplayRoot>
+        );
       }
 
       return null;

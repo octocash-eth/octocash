@@ -28,6 +28,41 @@ vi.mock("~/components/ui/address-display", () => ({
   AddressDisplayText: () => <span data-testid="address-display-text">0x1234...7890</span>,
 }));
 
+// Mock TokenDisplay components that use wagmi hooks
+vi.mock("~/components/ui/token-display", () => ({
+  TokenDisplayRoot: ({
+    children,
+    tokenAddress,
+    chainId,
+    className,
+  }: {
+    children: React.ReactNode;
+    tokenAddress: string;
+    chainId: number;
+    className?: string;
+  }) => (
+    <div className={className} data-testid="token-display-root" data-token={tokenAddress} data-chain={chainId}>
+      {children}
+    </div>
+  ),
+  TokenDisplayIcon: ({ className }: { className?: string }) => (
+    <div className={className} data-testid="token-display-icon" />
+  ),
+  TokenDisplaySymbol: () => <span data-testid="token-display-symbol">TOKEN</span>,
+  TokenDisplayAmount: ({ amount }: { amount: bigint }) => (
+    <span data-testid="token-display-amount">{amount.toString()}</span>
+  ),
+}));
+
+// Mock ChainIcon component
+vi.mock("~/components/chain-icon", () => ({
+  ChainIcon: ({ chain, className }: { chain: string; className?: string }) => (
+    <div className={className} data-testid="chain-icon">
+      {chain}
+    </div>
+  ),
+}));
+
 import { PlanCard } from "./plan-card";
 
 describe("PlanCard", () => {

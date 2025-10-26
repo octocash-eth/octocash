@@ -5,6 +5,7 @@
 - This project uses Vitest, not Bun's built-in test runner
 - For watch mode: `bun run test`
 - For coverage: `bun run coverage`
+- Avoid running integration tests when working because they are slow, just run `bun run test run app`
 
 ## Development Commands
 - `bun dev` - Start development server

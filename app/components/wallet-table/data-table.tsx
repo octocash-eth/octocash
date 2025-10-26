@@ -14,14 +14,15 @@ import {
 } from "@tanstack/react-table";
 import { Coins, Link, RotateCcw, Wallet } from "lucide-react";
 import * as React from "react";
+import { supportedChains } from "~/data/supported-chains";
 import { ChainIcon } from "../chain-icon";
-import { TokenIcon } from "../token-icon";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "../ui/address-display";
 import { Button } from "../ui/button";
 import { DataGrid, DataGridContainer } from "../ui/data-grid";
 import { DataGridPagination } from "../ui/data-grid-pagination";
 import { DataGridTable } from "../ui/data-grid-table";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
+import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "../ui/token-display";
 import { uniq } from "./utils";
 import type { WalletTableFilterConfig } from "./wallet-table-filters";
 import { WalletTableFilters } from "./wallet-table-filters";
@@ -44,12 +45,28 @@ function RenderedAddressCell({ address }: { address: string }) {
   );
 }
 
-function RenderedTokenCell({ token: { token, iconUrl } }: { token: { token: string; iconUrl?: string } }) {
+function RenderedTokenCell({
+  token: { token, tokenAddress, chain },
+}: {
+  token: { token: string; tokenAddress?: string; chain?: string };
+}) {
+  // Map chain name to chainId
+  const chainId = React.useMemo(() => {
+    if (!chain) return undefined;
+    const foundChain = supportedChains.find((c) => c.name === chain);
+    return foundChain?.id;
+  }, [chain]);
+
+  // Fallback for cases where tokenAddress/chainId might not be available
+  if (!tokenAddress || !chainId) {
+    return <div className="flex items-center gap-2">{token}</div>;
+  }
+
   return (
-    <div className="flex items-center gap-2">
-      <TokenIcon token={token} iconUrl={iconUrl} className="size-4" />
-      {token}
-    </div>
+    <TokenDisplayRoot tokenAddress={tokenAddress} chainId={chainId} symbol={token} className="gap-2">
+      <TokenDisplayIcon className="size-4" />
+      <TokenDisplaySymbol />
+    </TokenDisplayRoot>
   );
 }
 
@@ -81,7 +98,7 @@ export function DataTable<TData extends object, TValue>({
 
   // Unique tokens
   const tokens = React.useMemo(() => {
-    return uniq(data, "token", ["token", "iconUrl"]);
+    return uniq(data, "token", ["token", "tokenAddress", "chain"]);
   }, [data]);
 
   // Unique chains
@@ -107,7 +124,9 @@ export function DataTable<TData extends object, TValue>({
         emptyMessage: "No tokens available",
         items: tokens,
         getValue: (option) => (option as { token: string }).token,
-        renderOption: (option) => <RenderedTokenCell token={option as { token: string; iconUrl?: string }} />,
+        renderOption: (option) => (
+          <RenderedTokenCell token={option as { token: string; tokenAddress?: string; chain?: string }} />
+        ),
       },
       {
         id: "chain",

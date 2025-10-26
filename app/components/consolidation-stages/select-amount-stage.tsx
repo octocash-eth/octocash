@@ -1,6 +1,5 @@
 import * as React from "react";
 import { ChainIcon } from "~/components/chain-icon";
-import { TokenIcon } from "~/components/token-icon";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/ui/address-display";
 import {
   TokenAmountSelectorInput,
@@ -8,6 +7,7 @@ import {
   TokenAmountSelectorRoot,
   TokenAmountSelectorSlider,
 } from "~/components/ui/token-amount-selector";
+import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "~/components/ui/token-display";
 import type { WalletData } from "~/components/wallet-table/columns";
 
 interface TokenWithAmount extends WalletData {
@@ -67,11 +67,32 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
             <div key={token.id} className="border rounded-lg p-4 space-y-3">
               {/* Token Header */}
               <div className="flex justify-between items-start">
-                <div className="flex items-center gap-2">
-                  <TokenIcon token={token.token} iconUrl={token.iconUrl} className="size-8" />
+                <TokenDisplayRoot
+                  tokenAddress={token.tokenAddress}
+                  chainId={(() => {
+                    const chain = token.chain;
+                    // Map chain name to ID
+                    // TODO: This is a workaround, ideally WalletData should extend TokenAmount
+                    const chainMap: Record<string, number> = {
+                      Ethereum: 1,
+                      "OP Mainnet": 10,
+                      "Arbitrum One": 42161,
+                      Base: 8453,
+                      Polygon: 137,
+                      "Linea Mainnet": 59144,
+                      Unichain: 1301,
+                    };
+                    return chainMap[chain] || 1;
+                  })()}
+                  symbol={token.token}
+                  className="gap-2"
+                >
+                  <TokenDisplayIcon className="size-8" />
                   <div className="flex flex-col">
                     <div className="flex items-center gap-1.5">
-                      <span className="font-medium">{token.token}</span>
+                      <span className="font-medium">
+                        <TokenDisplaySymbol />
+                      </span>
                       <span className="text-xs text-muted-foreground flex items-center gap-1">
                         on
                         <ChainIcon chain={token.chain} className="size-3" />
@@ -85,7 +106,7 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
                       </AddressDisplayRoot>
                     </div>
                   </div>
-                </div>
+                </TokenDisplayRoot>
                 <div className="text-right">
                   <div className="font-medium">
                     {currentUsdValue.toLocaleString("en-US", {

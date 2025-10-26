@@ -1,11 +1,10 @@
 import { ChevronDown, ChevronUp, Inbox, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
-import { formatUnits, zeroAddress } from "viem";
+import { zeroAddress } from "viem";
 import { useToken } from "wagmi";
 import { ChainIcon } from "~/components/chain-icon";
 import { SiteHeader } from "~/components/site-header";
-import { TokenLabel } from "~/components/token-label";
 import { TransactionPlanViewer } from "~/components/transaction-plan";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/ui/address-display";
 import { Button } from "~/components/ui/button";
@@ -17,6 +16,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
+import {
+  TokenDisplayAmount,
+  TokenDisplayIcon,
+  TokenDisplayRoot,
+  TokenDisplaySymbol,
+} from "~/components/ui/token-display";
 import { SITE_DESCRIPTION, SITE_NAME } from "~/data/site";
 import { chains } from "~/data/supported-chains";
 import { useConsolidationRecords } from "~/hooks/use-consolidation-records";
@@ -284,12 +289,17 @@ function TokenCard({ token }: { token: TokenAmount }) {
   return (
     <div className="bg-background rounded-lg border border-border p-3 space-y-2">
       {/* Token Info */}
-      <div className="flex items-center gap-2">
-        <TokenLabel tokenAddress={token.token} chainId={token.chainId} symbol={token.symbol} />
-        {token.amount > 0n && (
-          <span className="ml-auto font-semibold text-sm">{formatUnits(token.amount, token.decimals)}</span>
-        )}
-      </div>
+      <TokenDisplayRoot tokenAddress={token.token} chainId={token.chainId} symbol={token.symbol} className="gap-2">
+        <div className="flex items-center gap-2 flex-1">
+          <TokenDisplayIcon className="size-4" />
+          <TokenDisplaySymbol />
+          {token.amount > 0n && (
+            <span className="ml-auto font-semibold text-sm">
+              <TokenDisplayAmount amount={token.amount} />
+            </span>
+          )}
+        </div>
+      </TokenDisplayRoot>
 
       {/* Chain & Wallet Info */}
       <div className="flex items-center justify-between text-xs">

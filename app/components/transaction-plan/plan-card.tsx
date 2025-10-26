@@ -1,27 +1,14 @@
 import { Check, Circle, ExternalLink, Loader2, X } from "lucide-react";
-import { formatUnits } from "viem";
 import { chains } from "~/data/supported-chains";
 import type { StepResult, TransactionStep } from "~/lib/types";
 import { ChainIcon } from "../chain-icon";
-import { TokenIcon } from "../token-icon";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "../ui/address-display";
+import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "../ui/token-display";
 
 interface PlanCardProps {
   step: TransactionStep;
   stepNumber: number;
   result?: StepResult;
-}
-
-function truncateAddress(address: string): string {
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
-}
-
-function formatAmount(amount: bigint, decimals: number = 18): string {
-  const value = Number(formatUnits(amount, decimals));
-  if (value !== 0 && value < 0.000001) return "<0.000001";
-  return value.toLocaleString(undefined, {
-    maximumFractionDigits: 6,
-  });
 }
 
 function getExplorerUrl(chainId: number, txHash: string): string {
@@ -30,36 +17,15 @@ function getExplorerUrl(chainId: number, txHash: string): string {
   return `${chain.blockExplorers.default.url}/tx/${txHash}`;
 }
 
-function getTokenIconUrl(chainId: number, tokenAddress: string): string {
-  return `https://assets.octo.cash/token/${chainId}/${tokenAddress}`;
-}
-
 function getActionContent(step: TransactionStep, result?: StepResult): React.ReactNode {
   const chainName = chains[step.chainId as keyof typeof chains]?.name || `Chain ${step.chainId}`;
   const isPast = step.status === "success";
   const isExecuting = step.status === "executing";
 
-  let inputAmount = "";
-  let outputAmount = "";
-
-  if (step.inputTokens[0].amount > 0n) {
-    inputAmount = formatAmount(step.inputTokens[0].amount, step.inputTokens[0].decimals || 18);
-  }
-
-  if (isPast && result?.actualOutput) {
-    outputAmount = formatAmount(result.actualOutput.amount, result.actualOutput.decimals || 18);
-  } else if (step.outputToken.amount > 0n) {
-    outputAmount = formatAmount(step.outputToken.amount, step.outputToken.decimals || 18);
-  }
-
   const chainIcon = (chainId: number) => {
     const chainName = chains[chainId as keyof typeof chains]?.name || `Chain ${chainId}`;
     return <ChainIcon chain={chainName} className="size-4 inline-block" />;
   };
-
-  const tokenIcon = (chainId: number, tokenAddress: string, symbol: string) => (
-    <TokenIcon token={symbol} iconUrl={getTokenIconUrl(chainId, tokenAddress)} className="size-4 inline-block" />
-  );
 
   const addressDisplay = (address: string) => (
     <AddressDisplayRoot address={address} className="inline-flex gap-1">
@@ -68,17 +34,15 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
     </AddressDisplayRoot>
   );
 
-  // Group token icon + amount + symbol together with popover
-  const tokenAmount = (
-    amount: string,
-    chainId: number,
-    tokenAddress: string,
-    symbol: string,
-    walletAddress: string,
-  ) => (
-    <span className="inline-flex items-center gap-1" title={`Wallet: ${truncateAddress(walletAddress)}`}>
-      {tokenIcon(chainId, tokenAddress, symbol)} {amount} {symbol}
-    </span>
+  // Group token icon + amount + symbol together with TokenDisplay
+  const tokenAmount = (amount: bigint, chainId: number, tokenAddress: string, symbol: string) => (
+    <TokenDisplayRoot tokenAddress={tokenAddress} chainId={chainId} symbol={symbol} className="inline-flex gap-1">
+      <span className="inline-flex items-center gap-1">
+        <TokenDisplayIcon className="size-4 inline-block" />
+        <TokenDisplayAmount amount={amount} />
+        <TokenDisplaySymbol />
+      </span>
+    </TokenDisplayRoot>
   );
 
   // Group chain icon + name together
@@ -90,29 +54,22 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
 
   switch (step.type) {
     case "swap": {
-      const outputToken = isPast && result?.actualOutput ? result.actualOutput : step.outputToken;
+      const outputToken = result?.actualOutput ?? step.outputToken;
       const inputWallets = [...new Set(step.inputTokens.map((t) => t.walletAddress))];
       return (
         <>
           <span className="text-gray-600">{isPast ? "Swapped" : isExecuting ? "Swapping" : "Swap"}</span>{" "}
           {step.inputTokens.map((inputToken) => {
-            const amount = formatAmount(inputToken.amount, inputToken.decimals || 18);
             const key = `${inputToken.token}-${inputToken.chainId}-${inputToken.walletAddress}`;
             return (
               <span key={key}>
                 {step.inputTokens.indexOf(inputToken) > 0 && <span className="text-gray-500"> + </span>}
-                {tokenAmount(amount, inputToken.chainId, inputToken.token, inputToken.symbol, inputToken.walletAddress)}
+                {tokenAmount(inputToken.amount, inputToken.chainId, inputToken.token, inputToken.symbol)}
               </span>
             );
           })}{" "}
           <span className="text-gray-500">→</span>{" "}
-          {tokenAmount(
-            outputAmount,
-            outputToken.chainId,
-            outputToken.token,
-            outputToken.symbol,
-            outputToken.walletAddress,
-          )}{" "}
+          {tokenAmount(outputToken.amount, outputToken.chainId, outputToken.token, outputToken.symbol)}{" "}
           <span className="text-gray-500">on</span> {chainBadge(step.chainId, chainName)}{" "}
           <span className="text-gray-400 text-xs inline-flex items-center gap-1">
             (
@@ -136,7 +93,7 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
       return (
         <>
           <span className="text-gray-600">{isPast ? "Bridged" : isExecuting ? "Bridging" : "Bridge"}</span>{" "}
-          {tokenAmount(inputAmount, inputToken.chainId, inputToken.token, inputToken.symbol, inputToken.walletAddress)}{" "}
+          {tokenAmount(inputToken.amount, inputToken.chainId, inputToken.token, inputToken.symbol)}{" "}
           <span className="text-gray-500">from</span> {chainBadge(step.chainId, chainName)}{" "}
           <span className="text-gray-500">to</span> {chainBadge(destChainId, destChain)}{" "}
           <span className="text-gray-400 text-xs inline-flex items-center gap-1">
@@ -159,17 +116,11 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
         </>
       );
     case "claim": {
-      const outputToken = isPast && result?.actualOutput ? result.actualOutput : step.outputToken;
+      const outputToken = result?.actualOutput ?? step.outputToken;
       return (
         <>
           <span className="text-gray-600">{isPast ? "Claimed" : isExecuting ? "Claiming" : "Claim"}</span>{" "}
-          {tokenAmount(
-            outputAmount,
-            outputToken.chainId,
-            outputToken.token,
-            outputToken.symbol,
-            outputToken.walletAddress,
-          )}{" "}
+          {tokenAmount(outputToken.amount, outputToken.chainId, outputToken.token, outputToken.symbol)}{" "}
           <span className="text-gray-500">on</span> {chainBadge(step.chainId, chainName)}{" "}
           <span className="text-gray-400 text-xs inline-flex items-center gap-1">
             ({addressDisplay(outputToken.walletAddress)})
@@ -184,12 +135,11 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
         <>
           <span className="text-gray-600">{isPast ? "Transferred" : isExecuting ? "Transferring" : "Transfer"}</span>{" "}
           {step.inputTokens.map((inputToken) => {
-            const amount = formatAmount(inputToken.amount, inputToken.decimals || 18);
             const key = `${inputToken.token}-${inputToken.chainId}-${inputToken.walletAddress}`;
             return (
               <span key={key}>
                 {step.inputTokens.indexOf(inputToken) > 0 && <span className="text-gray-500"> + </span>}
-                {tokenAmount(amount, inputToken.chainId, inputToken.token, inputToken.symbol, inputToken.walletAddress)}
+                {tokenAmount(inputToken.amount, inputToken.chainId, inputToken.token, inputToken.symbol)}
               </span>
             );
           })}{" "}

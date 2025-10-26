@@ -53,6 +53,29 @@ vi.mock("~/components/token-icon", () => ({
   ),
 }));
 
+// Mock TokenDisplay components to avoid WagmiProvider requirement
+vi.mock("~/components/ui/token-display", () => ({
+  TokenDisplayRoot: ({
+    children,
+    tokenAddress,
+    chainId,
+    className,
+  }: {
+    children: React.ReactNode;
+    tokenAddress: string;
+    chainId: number;
+    className?: string;
+  }) => (
+    <div className={className} data-testid="token-display-root" data-token={tokenAddress} data-chain={chainId}>
+      {children}
+    </div>
+  ),
+  TokenDisplayIcon: ({ className }: { className?: string }) => (
+    <div className={className} data-testid="token-display-icon" />
+  ),
+  TokenDisplaySymbol: () => <span data-testid="token-display-symbol">TEST</span>,
+}));
+
 interface TokenWithAmount extends WalletData {
   amountToConsolidate: string;
 }

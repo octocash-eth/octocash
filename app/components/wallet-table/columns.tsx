@@ -8,7 +8,6 @@ import { Skeleton } from "~/components/ui/skeleton";
 
 import { supportedChains } from "~/data/supported-chains";
 import { ChainIcon } from "../chain-icon";
-import { TokenIcon } from "../token-icon";
 import {
   AddressDisplayAvatar,
   AddressDisplayLink,
@@ -23,6 +22,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import {
+  TokenDisplayIcon,
+  TokenDisplayLink,
+  TokenDisplayName,
+  TokenDisplayRoot,
+  TokenDisplaySymbol,
+} from "../ui/token-display";
 
 export type WalletData = {
   id: string;
@@ -78,36 +84,37 @@ export const columns: ColumnDef<WalletData>[] = [
     size: 200,
     header: ({ column }) => <DataGridColumnHeader column={column} title="Token" />,
     cell: ({ row }) => {
-      const tokenName = row.getValue("token") as string;
+      const tokenSymbol = row.getValue("token") as string;
       const tokenAddress = row.original.tokenAddress;
-      const chainName = row.getValue("chain") as string;
-      const fullTokenName = row.original.tokenName || tokenName;
       const walletAddress = row.original.wallet;
+      const chainName = row.getValue("chain") as string;
+      const fullTokenName = row.original.tokenName || tokenSymbol;
+      const chain = supportedChains.find((chain) => chain.name === chainName);
+      const chainId = chain?.id;
 
       // If we don't have a token address, just show the token name
-      if (!tokenAddress) {
-        return <div className="text-left">{tokenName}</div>;
+      if (!tokenAddress || !chainId) {
+        return <div className="text-left">{tokenSymbol}</div>;
       }
 
-      // Get the explorer URL for this token
-      const explorerUrl = getExplorerUrl(chainName, tokenAddress, walletAddress);
-
       return (
-        <div className="text-left flex items-center gap-1">
-          <TokenIcon token={row.original.token} iconUrl={row.original.iconUrl} className="size-4 md:size-5" />
-          <span title={fullTokenName} className="truncate text-nowrap">
-            {fullTokenName}
-          </span>
-          <span className="text-muted-foreground">{tokenName}</span>
-          <a
-            href={explorerUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-500 hover:text-blue-700 inline-flex items-center"
-            title={`View on block explorer`}
+        <div className="text-left">
+          <TokenDisplayRoot
+            tokenAddress={tokenAddress}
+            chainId={chainId}
+            symbol={tokenSymbol}
+            fullName={fullTokenName}
+            className="gap-1"
           >
-            <ExternalLink className="h-3 w-3 ml-1" />
-          </a>
+            <TokenDisplayIcon className="size-4 md:size-5" />
+            <TokenDisplayName className="truncate text-nowrap" />
+            <span className="text-muted-foreground">
+              <TokenDisplaySymbol />
+            </span>
+            <TokenDisplayLink walletAddress={walletAddress}>
+              <ExternalLink className="h-3 w-3 ml-1" />
+            </TokenDisplayLink>
+          </TokenDisplayRoot>
         </div>
       );
     },
