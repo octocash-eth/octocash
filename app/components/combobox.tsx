@@ -1,8 +1,9 @@
-import { Check, ChevronsUpDown, Plus, X } from "lucide-react";
+import { Check, ChevronDown, Plus, X } from "lucide-react";
 import * as React from "react";
 import { Button } from "~/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "~/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "~/components/ui/popover";
+import { triggerStyles } from "~/components/ui/select";
 import { cn } from "~/lib/utils";
 
 export interface ComboboxOption {
@@ -21,6 +22,7 @@ interface ComboboxProps {
   className?: string;
   isValidOption?: (value: string) => [boolean, string];
   disabled?: boolean;
+  size?: "sm" | "default";
 }
 
 export function Combobox({
@@ -34,6 +36,7 @@ export function Combobox({
   className,
   isValidOption,
   disabled,
+  size = "default",
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false);
   const [options, setOptions] = React.useState<ComboboxOption[]>(initialOptions);
@@ -110,22 +113,23 @@ export function Combobox({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button
+        <button
           disabled={disabled}
-          variant="outline"
           type="button"
           aria-haspopup="listbox"
           aria-expanded={open}
-          className={cn("w-full justify-between", className)}
+          data-size={size}
+          className={cn(triggerStyles, "w-full", className)}
+          data-placeholder={!selectedOption ? "" : undefined}
         >
           {selectedOption ? labelFunction(selectedOption.value) : placeholder}
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-        </Button>
+          <ChevronDown className="size-4 opacity-50" />
+        </button>
       </PopoverTrigger>
-      <PopoverContent className="w-full p-0" align="start">
-        <Command shouldFilter={false}>
+      <PopoverContent className="p-0" style={{ width: "var(--radix-popover-trigger-width)" }} align="start">
+        <Command shouldFilter={false} defaultValue={value}>
           <CommandInput placeholder={searchPlaceholder} value={searchValue} onValueChange={setSearchValue} />
-          <CommandList>
+          <CommandList onWheel={(e) => e.stopPropagation()}>
             <CommandEmpty>No options found.</CommandEmpty>
             <CommandGroup>
               {filteredOptions.map((option) => (
@@ -135,16 +139,16 @@ export function Combobox({
                   onSelect={handleSelect}
                   className="flex items-center justify-between"
                 >
-                  <div className="flex items-center">
-                    <Check className={cn("mr-2 h-4 w-4", value === option.value ? "opacity-100" : "opacity-0")} />
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <Check className={cn("h-4 w-4 shrink-0", value === option.value ? "opacity-100" : "opacity-0")} />
                     {labelFunction(option.value)}
                   </div>
                   {option.removable && (
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-auto p-1 hover:bg-transparent text-muted-foreground hover:text-red-500"
-                      onClick={(e) => {
+                      className="h-auto p-1 hover:bg-transparent text-muted-foreground hover:text-red-500 shrink-0"
+                      onClick={(e: React.MouseEvent) => {
                         e.stopPropagation();
                         handleRemoveOption(option);
                       }}
