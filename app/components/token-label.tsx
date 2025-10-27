@@ -1,18 +1,16 @@
-import { TokenIcon } from "./token-icon";
+import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "./ui/token-display";
 
 interface TokenLabelProps {
   tokenAddress: string;
   chainId: number;
-  symbol: string;
+  symbol?: string;
 }
 
 export function TokenLabel({ tokenAddress, chainId, symbol }: TokenLabelProps) {
-  const iconUrl = `https://assets.octo.cash/token/${chainId}/${tokenAddress}`;
-
   return (
-    <div className="flex items-center gap-2">
-      <TokenIcon token={symbol} iconUrl={iconUrl} className="size-4" />
-      <span>{symbol}</span>
-    </div>
+    <TokenDisplayRoot tokenAddress={tokenAddress} chainId={chainId} symbol={symbol}>
+      <TokenDisplayIcon className="size-4" />
+      <TokenDisplaySymbol />
+    </TokenDisplayRoot>
   );
 }

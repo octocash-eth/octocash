@@ -60,11 +60,6 @@ export function ConsolidateTokensModal({
 
   const { addresses } = useAccount();
 
-  const addressOptions = React.useMemo(
-    () => (addresses ?? []).map((address) => ({ value: address, label: address })),
-    [addresses],
-  );
-
   const destinationChainId = Number(destinationChain);
 
   // Derive sourceTokens from consolidatedTokens and other state
@@ -119,7 +114,7 @@ export function ConsolidateTokensModal({
     if (destinationChainId) {
       const usdcAddress = USDC[destinationChainId as keyof typeof USDC];
       if (usdcAddress) {
-        setDestinationTokenAddr(formatTokenValue(destinationChainId, usdcAddress, 6, "USDC"));
+        setDestinationTokenAddr(formatTokenValue(destinationChainId, usdcAddress, 6, "USDC", "USD Coin"));
       }
     }
   }, [destinationChainId]);
@@ -273,7 +268,6 @@ export function ConsolidateTokensModal({
                 setDestinationChain={setDestinationChain}
                 destinationTokenAddr={destinationTokenAddr}
                 setDestinationTokenAddr={setDestinationTokenAddr}
-                addressOptions={addressOptions}
               />
               <div className="pt-4 flex gap-2">
                 <Button onClick={handleBack} variant="outline" className="flex-1">

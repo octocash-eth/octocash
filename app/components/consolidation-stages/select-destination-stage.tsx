@@ -1,9 +1,11 @@
-import { useId } from "react";
+import React, { useId } from "react";
+import type { Address } from "viem";
+import { useAccount } from "wagmi";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { supportedChains } from "~/data/supported-chains";
 import { AddressSelector } from "../address-selector";
 import { ChainIcon } from "../chain-icon";
-import { TokenSelector } from "../token-selector";
+import { getDefaultTokenOptions, TokenSelector } from "../token-selector";
 
 interface SelectDestinationStageProps {
   destinationWallet: string;
@@ -12,7 +14,6 @@ interface SelectDestinationStageProps {
   setDestinationChain: (value: string) => void;
   destinationTokenAddr: string;
   setDestinationTokenAddr: (value: string) => void;
-  addressOptions: Array<{ value: string; label: string }>;
 }
 
 export function SelectDestinationStage({
@@ -22,9 +23,9 @@ export function SelectDestinationStage({
   setDestinationChain,
   destinationTokenAddr,
   setDestinationTokenAddr,
-  addressOptions,
 }: SelectDestinationStageProps) {
   const _destinationChainId = useId();
+  const { addresses = [] as Address[] } = useAccount();
 
   // Available chains for destination
   const availableChains = supportedChains.map((chain) => ({
@@ -36,6 +37,9 @@ export function SelectDestinationStage({
     availableChains.find((chain) => chain.chainId === Number(destinationChain))?.chainId,
   );
 
+  // Memoize token options to avoid creating new array reference on every render
+  const tokenOptions = React.useMemo(() => getDefaultTokenOptions(destinationChainId), [destinationChainId]);
+
   return (
     <div className="space-y-5">
       <div className="space-y-2">
@@ -43,7 +47,7 @@ export function SelectDestinationStage({
           Destination Wallet
         </label>
         <AddressSelector
-          options={addressOptions}
+          options={addresses.map((address) => ({ value: address, label: address }))}
           value={destinationWallet}
           onChange={setDestinationWallet}
           chainId={destinationChainId}
@@ -80,6 +84,7 @@ export function SelectDestinationStage({
           value={destinationTokenAddr}
           onChange={setDestinationTokenAddr}
           disabled={!destinationChainId}
+          options={tokenOptions}
         />
       </div>
     </div>

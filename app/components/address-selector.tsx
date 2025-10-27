@@ -18,7 +18,7 @@ import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "./
 //   ];
 //
 // Auto-enrichment: The AddressSelector automatically looks up ENS names for plain
-// addresses using the @ensdomains/ensjs library for reverse resolution.
+// addresses for reverse resolution.
 // Plain addresses like "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb" will be enriched to
 // "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb:name.eth" if an ENS reverse record exists.
 //
@@ -26,7 +26,9 @@ import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "./
 // the component automatically resolves it to an address and formats the value as
 // "address:ensName". This enables filtering by ENS name in future searches.
 export function formatAddressValue(address: string, ensName?: string): string {
-  return ensName ? `${address}:${ensName}` : address;
+  // Normalize address to checksum format to ensure consistent deduplication
+  const normalizedAddress = getAddress(address);
+  return ensName ? `${normalizedAddress}:${ensName}` : normalizedAddress;
 }
 
 export function parseAddressValue(value: string): { address: string; ensName?: string } | null {
@@ -111,11 +113,13 @@ export function AddressSelector({
     chainId: 1,
   });
 
-  const [allOptions, setAllOptions] = React.useState<ComboboxOption[]>(options);
-
-  React.useEffect(() => {
-    setAllOptions(options);
-  }, [options]);
+  // Derive allOptions directly from props to avoid stale state
+  const [customOptions, setCustomOptions] = React.useState<ComboboxOption[]>([]);
+  const allOptions = React.useMemo(() => {
+    // Merge provided options with any custom options the user added
+    const custom = customOptions.filter((custom) => !options.some((p) => p.value === custom.value));
+    return [...options, ...custom];
+  }, [options, customOptions]);
 
   // reverse enrich para options
   const addressesToEnrich = React.useMemo(
@@ -158,9 +162,9 @@ export function AddressSelector({
     [enrichedOptions],
   );
 
-  // Add option if it doesn't already exist
+  // Add custom option if it doesn't already exist
   const upsertOption = React.useCallback((value: string) => {
-    setAllOptions((prev) => (prev.some((o) => o.value === value) ? prev : [...prev, { value }]));
+    setCustomOptions((prev) => (prev.some((o) => o.value === value) ? prev : [...prev, { value }]));
   }, []);
 
   // Resolve any user input to a formatted 'address:ensName' or null if invalid/unresolvable
