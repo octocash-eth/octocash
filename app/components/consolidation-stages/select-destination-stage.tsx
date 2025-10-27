@@ -1,14 +1,14 @@
 import React, { useId } from "react";
-import { type Address, isAddressEqual } from "viem";
+import { type Address, getAddress, isAddress } from "viem";
 import { useAccount } from "wagmi";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { supportedChains } from "~/data/supported-chains";
 import { AddressSelector } from "../address-selector";
 import { ChainIcon } from "../chain-icon";
-import { getDefaultTokenOptions, parseTokenValue, TokenSelector } from "../token-selector";
+import { getDefaultTokenOptions, type TokenData, TokenSelector } from "../token-selector";
 
 export interface DestinationSelection {
-  walletAddress?: string;
+  walletAddress?: Address;
   chainId?: number;
   tokenInfo?: {
     address: Address;
@@ -40,29 +40,23 @@ export function SelectDestinationStage({ value, onChange }: SelectDestinationSta
     [value.chainId],
   );
 
-  // Memoize the formatted token value for the selector
-  const tokenValue = React.useMemo(() => {
-    if (!value.tokenInfo || !value.chainId) return "";
-    const { address } = value.tokenInfo;
-    // Check if this matches one of the default options
-    const matchingOption = tokenOptions.find((opt) => {
-      const parsed = parseTokenValue(opt.value);
-      return parsed && isAddressEqual(parsed.address, address);
-    });
-    // If found, use the full formatted value; otherwise create a minimal one
-    return matchingOption?.value || address;
-  }, [value.tokenInfo, value.chainId, tokenOptions]);
+  const tokenValue = value.tokenInfo?.address || "";
 
   const handleWalletChange = (walletAddress: string) => {
-    onChange({ ...value, walletAddress });
+    onChange({ ...value, walletAddress: isAddress(walletAddress) ? getAddress(walletAddress) : undefined });
   };
 
   const handleChainChange = (chainId: string) => {
     onChange({ ...value, chainId: Number(chainId), tokenInfo: undefined });
   };
 
-  const handleTokenChange = (token: string) => {
-    const tokenInfo = parseTokenValue(token);
+  const handleTokenChange = (tokenData: TokenData) => {
+    // Extract only the fields we need
+    const tokenInfo = {
+      address: tokenData.address,
+      decimals: tokenData.decimals,
+      symbol: tokenData.symbol,
+    };
     onChange({ ...value, tokenInfo });
   };
 

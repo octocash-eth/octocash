@@ -86,10 +86,11 @@ export function ConsolidateTokensModal({
       return undefined;
 
     const sendTo = getAddress(destination.walletAddress ?? "");
-    const intermediateWallet = addresses.includes(sendTo) ? sendTo : addresses[0];
+    if (sourceTokens.length === 0) return undefined;
+    const intermediateWallet = addresses.includes(sendTo) ? sendTo : sourceTokens[0].walletAddress;
     const tokenInfo = destination.tokenInfo;
 
-    if (!tokenInfo) return undefined;
+    if (!tokenInfo || !isAddress(tokenInfo.address)) return undefined;
 
     return {
       token: getAddress(tokenInfo.address),
@@ -98,7 +99,7 @@ export function ConsolidateTokensModal({
       symbol: tokenInfo.symbol,
       decimals: tokenInfo.decimals,
     };
-  }, [currentStage, destination, addresses]);
+  }, [currentStage, destination, addresses, sourceTokens]);
 
   // Calculate actual total value based on selected amounts
   const actualTotalToConsolidate = React.useMemo(() => {

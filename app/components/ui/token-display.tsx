@@ -45,7 +45,7 @@ function TokenDisplayRoot({
   chainId,
   symbol: providedSymbol,
   decimals: providedDecimals,
-  name: providedname,
+  name: providedName,
   children,
   className,
 }: TokenDisplayRootProps) {
@@ -64,7 +64,7 @@ function TokenDisplayRoot({
   // Resolve values: use provided values first, then fetched data, then defaults
   const resolvedSymbol = providedSymbol || tokenData?.symbol || "???";
   const resolvedDecimals = providedDecimals ?? tokenData?.decimals ?? 18;
-  const resolvedname = providedname || tokenData?.name;
+  const resolvedName = providedName || tokenData?.name;
 
   // Generate icon URL
   const iconUrl = React.useMemo(() => {
@@ -84,12 +84,12 @@ function TokenDisplayRoot({
       chainId,
       symbol: resolvedSymbol,
       decimals: resolvedDecimals,
-      name: resolvedname,
+      name: resolvedName,
       iconUrl,
       explorerUrl,
       tokenUrl: tokenAddress !== zeroAddress ? `${explorerUrl}/token/${tokenAddress}` : undefined,
     }),
-    [tokenAddress, chainId, resolvedSymbol, resolvedDecimals, resolvedname, iconUrl, explorerUrl],
+    [tokenAddress, chainId, resolvedSymbol, resolvedDecimals, resolvedName, iconUrl, explorerUrl],
   );
 
   return (

@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, test, vi } from "vitest";
-import { formatTokenValue, parseTokenValue, TokenSelector } from "./token-selector";
+import { formatTokenValue, parseTokenValue, type TokenData, TokenSelector } from "./token-selector";
 
 // Mock wagmi hooks
 vi.mock("wagmi", () => ({
@@ -86,7 +86,7 @@ describe("parseTokenValue", () => {
 });
 
 describe("TokenSelector", () => {
-  const mockOnChange = vi.fn();
+  const mockOnChange = vi.fn((_tokenData: TokenData) => {});
 
   test("renders with placeholder", () => {
     renderWithQueryClient(<TokenSelector chainId={1} value="" onChange={mockOnChange} />);
@@ -99,8 +99,9 @@ describe("TokenSelector", () => {
   });
 
   test("displays selected token", () => {
-    const testToken = formatTokenValue(1, "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", 6, "USDC", "USD Coin");
-    renderWithQueryClient(<TokenSelector chainId={1} value={testToken} onChange={mockOnChange} />);
+    const testAddress = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+    const options = [{ value: formatTokenValue(1, testAddress, 6, "USDC", "USD Coin") }];
+    renderWithQueryClient(<TokenSelector chainId={1} value={testAddress} onChange={mockOnChange} options={options} />);
 
     // Should show the token symbol
     expect(screen.getByText("USDC")).toBeInTheDocument();
@@ -126,7 +127,7 @@ describe("TokenSelector", () => {
 });
 
 describe("TokenSelector with initial tokens", () => {
-  const mockOnChange = vi.fn();
+  const mockOnChange = vi.fn((_tokenData: TokenData) => {});
 
   test("renders with default USDC, WBTC, ETH tokens for mainnet", () => {
     renderWithQueryClient(<TokenSelector chainId={1} value="" onChange={mockOnChange} />);
@@ -139,15 +140,18 @@ describe("TokenSelector with initial tokens", () => {
   });
 
   test("uses WETH label for Polygon", () => {
-    const wethToken = formatTokenValue(137, "0x11cd37bb86f65419713f30673a480ea33c826872", 18, "WETH", "Wrapped Ether");
-    renderWithQueryClient(<TokenSelector chainId={137} value={wethToken} onChange={mockOnChange} />);
+    const wethAddress = "0x11cd37bb86f65419713f30673a480ea33c826872";
+    const options = [{ value: formatTokenValue(137, wethAddress, 18, "WETH", "Wrapped Ether") }];
+    renderWithQueryClient(
+      <TokenSelector chainId={137} value={wethAddress} onChange={mockOnChange} options={options} />,
+    );
 
     expect(screen.getByText("WETH")).toBeInTheDocument();
   });
 });
 
 describe("TokenSelector validation", () => {
-  const mockOnChange = vi.fn();
+  const mockOnChange = vi.fn((_tokenData: TokenData) => {});
 
   test("shows error message for invalid input", async () => {
     const { user } = renderWithQueryClient(<TokenSelector chainId={1} value="" onChange={mockOnChange} />);
@@ -217,7 +221,7 @@ describe("TokenSelector validation", () => {
 });
 
 describe("TokenSelector preserves user-added tokens", () => {
-  const mockOnChange = vi.fn();
+  const mockOnChange = vi.fn((_tokenData: TokenData) => {});
 
   test("preserves tokens when options reference changes", async () => {
     const user = userEvent.setup();

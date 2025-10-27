@@ -43,7 +43,7 @@ export function parseTokenValue(value: string):
   if (parts.length < 5) return undefined;
 
   const chainId = Number.parseInt(parts[0] || "", 10);
-  const address = getAddress(parts[1]);
+  const address = isAddress(parts[1]) ? getAddress(parts[1]) : undefined;
   const decimals = Number.parseInt(parts[2] || "", 10);
   const symbol = parts[3];
   // Name might contain colons, so join the rest
@@ -57,6 +57,14 @@ export function parseTokenValue(value: string):
 }
 
 interface TokenMetadata {
+  decimals: number;
+  symbol: string;
+  name: string;
+}
+
+export interface TokenData {
+  chainId: number;
+  address: Address;
   decimals: number;
   symbol: string;
   name: string;
@@ -172,7 +180,7 @@ export function getDefaultTokenOptions(chainId: number): ComboboxOption[] {
 interface TokenSelectorProps {
   chainId: number;
   value: string;
-  onChange: (value: string) => void;
+  onChange: (tokenData: TokenData) => void;
   placeholder?: string;
   searchPlaceholder?: string;
   disabled?: boolean;
@@ -198,16 +206,6 @@ export function TokenSelector({
     const custom = customOptions.filter((custom) => !provided.some((p) => p.value === custom.value));
     return [...provided, ...custom];
   }, [options, customOptions]);
-
-  // Clear selection if the current value is for a different chain
-  React.useEffect(() => {
-    if (!value) return;
-
-    const parsed = parseTokenValue(value);
-    if (parsed && parsed.chainId !== chainId) {
-      onChange("");
-    }
-  }, [chainId, value, onChange]);
 
   // Clear custom options when chain changes
   // biome-ignore lint/correctness/useExhaustiveDependencies: chainId is a prop and we need to react to its changes
@@ -361,7 +359,10 @@ export function TokenSelector({
       const isExistingOption = enrichedOptions.some((o) => o.value === newValue);
 
       if (isExistingOption) {
-        onChange(newValue);
+        const parsed = parseTokenValue(newValue);
+        if (parsed) {
+          onChange(parsed);
+        }
         return;
       }
 
@@ -383,10 +384,10 @@ export function TokenSelector({
 
         // If token already exists, don't add it again
         if (tokenExists) return;
-      }
 
-      upsertOption(formatted);
-      onChange(formatted);
+        upsertOption(formatted);
+        onChange(parsed);
+      }
     },
     [onChange, resolveToFormattedValue, upsertOption, enrichedOptions],
   );
@@ -408,24 +409,22 @@ export function TokenSelector({
     [chainId],
   );
 
-  // Convert the value to internal format if needed
-  // If parent passes a raw address, find the matching formatted option
+  // Convert the address value from parent to internal formatted value
+  // Similar to AddressSelector pattern - parent works with primitive (address),
+  // component uses formatted value internally
   const internalValue = React.useMemo(() => {
     if (!value) return value;
 
-    // If value is already formatted, use it as-is
-    if (parseTokenValue(value)) return value;
+    // Validate and normalize the address
+    if (!isAddress(value)) return "";
 
-    // If value is a raw address, find the matching formatted option
-    if (isAddress(value)) {
-      const matchingOption = enrichedOptions.find((opt) => {
-        const parsed = parseTokenValue(opt.value);
-        return parsed && isAddressEqual(parsed.address, value);
-      });
-      return matchingOption?.value || value;
-    }
+    // Find the matching formatted option for this address
+    const matchingOption = enrichedOptions.find((opt) => {
+      const parsed = parseTokenValue(opt.value);
+      return parsed && isAddressEqual(parsed.address, value as Address);
+    });
 
-    return value;
+    return matchingOption?.value || "";
   }, [value, enrichedOptions]);
 
   return (
