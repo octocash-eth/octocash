@@ -88,7 +88,7 @@ export const columns: ColumnDef<WalletData>[] = [
       const tokenAddress = row.original.tokenAddress;
       const walletAddress = row.original.wallet;
       const chainName = row.getValue("chain") as string;
-      const fullTokenName = row.original.tokenName || tokenSymbol;
+      const tokenName = row.original.tokenName || tokenSymbol;
       const chain = supportedChains.find((chain) => chain.name === chainName);
       const chainId = chain?.id;
 
@@ -103,7 +103,7 @@ export const columns: ColumnDef<WalletData>[] = [
             tokenAddress={tokenAddress}
             chainId={chainId}
             symbol={tokenSymbol}
-            fullName={fullTokenName}
+            name={tokenName}
             className="gap-1"
           >
             <TokenDisplayIcon className="size-4 md:size-5" />

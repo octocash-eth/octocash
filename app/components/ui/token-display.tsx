@@ -13,7 +13,7 @@ interface TokenDisplayContextValue {
   chainId: number;
   symbol: string;
   decimals: number;
-  fullName?: string;
+  name?: string;
   iconUrl: string;
   explorerUrl?: string;
   tokenUrl?: string;
@@ -35,7 +35,7 @@ interface TokenDisplayRootProps {
   chainId: number;
   symbol?: string;
   decimals?: number;
-  fullName?: string;
+  name?: string;
   children: React.ReactNode;
   className?: string;
 }
@@ -45,7 +45,7 @@ function TokenDisplayRoot({
   chainId,
   symbol: providedSymbol,
   decimals: providedDecimals,
-  fullName: providedFullName,
+  name: providedname,
   children,
   className,
 }: TokenDisplayRootProps) {
@@ -64,7 +64,7 @@ function TokenDisplayRoot({
   // Resolve values: use provided values first, then fetched data, then defaults
   const resolvedSymbol = providedSymbol || tokenData?.symbol || "???";
   const resolvedDecimals = providedDecimals ?? tokenData?.decimals ?? 18;
-  const resolvedFullName = providedFullName || tokenData?.name;
+  const resolvedname = providedname || tokenData?.name;
 
   // Generate icon URL
   const iconUrl = React.useMemo(() => {
@@ -84,12 +84,12 @@ function TokenDisplayRoot({
       chainId,
       symbol: resolvedSymbol,
       decimals: resolvedDecimals,
-      fullName: resolvedFullName,
+      name: resolvedname,
       iconUrl,
       explorerUrl,
       tokenUrl: tokenAddress !== zeroAddress ? `${explorerUrl}/token/${tokenAddress}` : undefined,
     }),
-    [tokenAddress, chainId, resolvedSymbol, resolvedDecimals, resolvedFullName, iconUrl, explorerUrl],
+    [tokenAddress, chainId, resolvedSymbol, resolvedDecimals, resolvedname, iconUrl, explorerUrl],
   );
 
   return (
@@ -130,8 +130,8 @@ TokenDisplaySymbol.displayName = "TokenDisplaySymbol";
 interface TokenDisplayNameProps extends React.ComponentProps<"span"> {}
 
 const TokenDisplayName = React.forwardRef<HTMLSpanElement, TokenDisplayNameProps>(({ className, ...props }, ref) => {
-  const { fullName, symbol } = useTokenDisplay();
-  const displayName = fullName || symbol;
+  const { name, symbol } = useTokenDisplay();
+  const displayName = name || symbol;
 
   return (
     <span ref={ref} className={cn("truncate text-nowrap", className)} title={displayName} {...props}>

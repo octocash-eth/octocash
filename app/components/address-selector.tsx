@@ -216,8 +216,9 @@ export function AddressSelector({
       const isExistingOption = enrichedOptions.some((o) => o.value === newValue);
 
       if (isExistingOption) {
-        // Selecting an existing option - just call onChange
-        onChange(newValue);
+        // Selecting an existing option - extract just the address and call onChange
+        const parsed = parseAddressValue(newValue);
+        onChange(parsed?.address || newValue);
         return;
       }
 
@@ -237,16 +238,31 @@ export function AddressSelector({
         if (addressExists) return;
       }
       upsertOption(formatted);
-      onChange(formatted);
+      onChange(parsed?.address || formatted);
     },
     [onChange, resolveToFormattedValue, upsertOption, enrichedOptions],
   );
+
+  // Convert plain address from parent to formatted value for Combobox
+  const internalValue = React.useMemo(() => {
+    // If value is already formatted, use it
+    const parsed = parseAddressValue(value);
+    if (!parsed) return value;
+
+    // Find the matching option with full formatting
+    const matchingOption = enrichedOptions.find((o) => {
+      const optParsed = parseAddressValue(o.value);
+      return optParsed && optParsed.address.toLowerCase() === parsed.address.toLowerCase();
+    });
+
+    return matchingOption?.value || value;
+  }, [value, enrichedOptions]);
 
   return (
     <Combobox
       disabled={disabled || !mainnetPublicClient}
       options={enrichedOptions}
-      value={value}
+      value={internalValue}
       onValueChange={handleAddressChange}
       labelFunction={labelFunction}
       placeholder={placeholder}

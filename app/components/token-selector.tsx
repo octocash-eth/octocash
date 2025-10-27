@@ -1,13 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import type { Address } from "viem";
-import { erc20Abi, getAddress, isAddress, zeroAddress } from "viem";
+import { erc20Abi, getAddress, isAddress, isAddressEqual, zeroAddress } from "viem";
 import { usePublicClient } from "wagmi";
 import { ETH, USDC, WBTC } from "~/data/token-contracts";
 import { Combobox, type ComboboxOption } from "./combobox";
 import { TokenLabel } from "./token-label";
 
-// Format: "chainId:address:decimals:symbol:fullName"
+// Format: "chainId:address:decimals:symbol:name"
 // Example usage:
 //   const options = [
 //     { value: formatTokenValue(1, "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", 6, "USDC", "USD Coin") },
@@ -22,36 +22,38 @@ export function formatTokenValue(
   address: string,
   decimals: number,
   symbol: string,
-  fullName: string,
+  name: string,
 ): string {
   // Normalize address to checksum format to ensure consistent deduplication
   const normalizedAddress = getAddress(address);
-  return `${chainId}:${normalizedAddress}:${decimals}:${symbol}:${fullName}`;
+  return `${chainId}:${normalizedAddress}:${decimals}:${symbol}:${name}`;
 }
 
-export function parseTokenValue(value: string): {
-  chainId: number;
-  address: string;
-  decimals: number;
-  symbol: string;
-  fullName: string;
-} | null {
-  if (!value) return null;
+export function parseTokenValue(value: string):
+  | {
+      chainId: number;
+      address: Address;
+      decimals: number;
+      symbol: string;
+      name: string;
+    }
+  | undefined {
+  if (!value) return undefined;
   const parts = value.split(":");
-  if (parts.length < 5) return null;
+  if (parts.length < 5) return undefined;
 
   const chainId = Number.parseInt(parts[0] || "", 10);
-  const address = parts[1];
+  const address = getAddress(parts[1]);
   const decimals = Number.parseInt(parts[2] || "", 10);
   const symbol = parts[3];
-  // fullName might contain colons, so join the rest
-  const fullName = parts.slice(4).join(":");
+  // Name might contain colons, so join the rest
+  const name = parts.slice(4).join(":");
 
-  if (Number.isNaN(chainId) || !address || Number.isNaN(decimals) || !symbol || !fullName) {
-    return null;
+  if (Number.isNaN(chainId) || !address || Number.isNaN(decimals) || !symbol || !name) {
+    return undefined;
   }
 
-  return { chainId, address, decimals, symbol, fullName };
+  return { chainId, address, decimals, symbol, name };
 }
 
 interface TokenMetadata {
@@ -406,11 +408,31 @@ export function TokenSelector({
     [chainId],
   );
 
+  // Convert the value to internal format if needed
+  // If parent passes a raw address, find the matching formatted option
+  const internalValue = React.useMemo(() => {
+    if (!value) return value;
+
+    // If value is already formatted, use it as-is
+    if (parseTokenValue(value)) return value;
+
+    // If value is a raw address, find the matching formatted option
+    if (isAddress(value)) {
+      const matchingOption = enrichedOptions.find((opt) => {
+        const parsed = parseTokenValue(opt.value);
+        return parsed && isAddressEqual(parsed.address, value);
+      });
+      return matchingOption?.value || value;
+    }
+
+    return value;
+  }, [value, enrichedOptions]);
+
   return (
     <Combobox
       disabled={disabled || !publicClient}
       options={enrichedOptions}
-      value={value}
+      value={internalValue}
       onValueChange={handleTokenChange}
       labelFunction={labelFunction}
       placeholder={placeholder}

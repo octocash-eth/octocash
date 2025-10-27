@@ -1,29 +1,28 @@
 import React, { useId } from "react";
-import type { Address } from "viem";
+import { type Address, isAddressEqual } from "viem";
 import { useAccount } from "wagmi";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { supportedChains } from "~/data/supported-chains";
 import { AddressSelector } from "../address-selector";
 import { ChainIcon } from "../chain-icon";
-import { getDefaultTokenOptions, TokenSelector } from "../token-selector";
+import { getDefaultTokenOptions, parseTokenValue, TokenSelector } from "../token-selector";
 
-interface SelectDestinationStageProps {
-  destinationWallet: string;
-  setDestinationWallet: (value: string) => void;
-  destinationChain: string;
-  setDestinationChain: (value: string) => void;
-  destinationTokenAddr: string;
-  setDestinationTokenAddr: (value: string) => void;
+export interface DestinationSelection {
+  walletAddress?: string;
+  chainId?: number;
+  tokenInfo?: {
+    address: Address;
+    decimals: number;
+    symbol: string;
+  };
 }
 
-export function SelectDestinationStage({
-  destinationWallet,
-  setDestinationWallet,
-  destinationChain,
-  setDestinationChain,
-  destinationTokenAddr,
-  setDestinationTokenAddr,
-}: SelectDestinationStageProps) {
+interface SelectDestinationStageProps {
+  value: DestinationSelection;
+  onChange: (value: DestinationSelection) => void;
+}
+
+export function SelectDestinationStage({ value, onChange }: SelectDestinationStageProps) {
   const _destinationChainId = useId();
   const { addresses = [] as Address[] } = useAccount();
 
@@ -33,12 +32,39 @@ export function SelectDestinationStage({
     chainId: chain.id,
   }));
 
-  const destinationChainId = Number(
-    availableChains.find((chain) => chain.chainId === Number(destinationChain))?.chainId,
-  );
+  const destinationChain = value.chainId ? value.chainId.toString() : "";
 
   // Memoize token options to avoid creating new array reference on every render
-  const tokenOptions = React.useMemo(() => getDefaultTokenOptions(destinationChainId), [destinationChainId]);
+  const tokenOptions = React.useMemo(
+    () => (value.chainId ? getDefaultTokenOptions(value.chainId) : []),
+    [value.chainId],
+  );
+
+  // Memoize the formatted token value for the selector
+  const tokenValue = React.useMemo(() => {
+    if (!value.tokenInfo || !value.chainId) return "";
+    const { address } = value.tokenInfo;
+    // Check if this matches one of the default options
+    const matchingOption = tokenOptions.find((opt) => {
+      const parsed = parseTokenValue(opt.value);
+      return parsed && isAddressEqual(parsed.address, address);
+    });
+    // If found, use the full formatted value; otherwise create a minimal one
+    return matchingOption?.value || address;
+  }, [value.tokenInfo, value.chainId, tokenOptions]);
+
+  const handleWalletChange = (walletAddress: string) => {
+    onChange({ ...value, walletAddress });
+  };
+
+  const handleChainChange = (chainId: string) => {
+    onChange({ ...value, chainId: Number(chainId), tokenInfo: undefined });
+  };
+
+  const handleTokenChange = (token: string) => {
+    const tokenInfo = parseTokenValue(token);
+    onChange({ ...value, tokenInfo });
+  };
 
   return (
     <div className="space-y-5">
@@ -48,9 +74,9 @@ export function SelectDestinationStage({
         </label>
         <AddressSelector
           options={addresses.map((address) => ({ value: address, label: address }))}
-          value={destinationWallet}
-          onChange={setDestinationWallet}
-          chainId={destinationChainId}
+          value={value.walletAddress ?? ""}
+          onChange={handleWalletChange}
+          chainId={value.chainId}
         />
       </div>
 
@@ -58,7 +84,7 @@ export function SelectDestinationStage({
         <label htmlFor={_destinationChainId} className="text-sm font-medium">
           Destination Chain
         </label>
-        <Select value={destinationChain} onValueChange={setDestinationChain} required>
+        <Select value={destinationChain} onValueChange={handleChainChange} required>
           <SelectTrigger id={_destinationChainId} className="w-full">
             <SelectValue placeholder="Select chain" />
           </SelectTrigger>
@@ -80,10 +106,10 @@ export function SelectDestinationStage({
           Destination Token
         </label>
         <TokenSelector
-          chainId={destinationChainId}
-          value={destinationTokenAddr}
-          onChange={setDestinationTokenAddr}
-          disabled={!destinationChainId}
+          chainId={value.chainId ?? 1}
+          value={tokenValue}
+          onChange={handleTokenChange}
+          disabled={!value.chainId}
           options={tokenOptions}
         />
       </div>

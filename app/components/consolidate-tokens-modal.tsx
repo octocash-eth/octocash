@@ -26,8 +26,7 @@ import { USDC } from "~/data/token-contracts";
 import type { ConsolidationState, DestinationToken, SourceToken } from "~/lib/types";
 import { ConfirmPlanStage } from "./consolidation-stages/confirm-plan-stage";
 import { SelectAmountStage } from "./consolidation-stages/select-amount-stage";
-import { SelectDestinationStage } from "./consolidation-stages/select-destination-stage";
-import { formatTokenValue, parseTokenValue } from "./token-selector";
+import { type DestinationSelection, SelectDestinationStage } from "./consolidation-stages/select-destination-stage";
 
 interface ConsolidateTokensModalProps {
   walletData: WalletData[];
@@ -40,9 +39,11 @@ export function ConsolidateTokensModal({
   rowSelection = {},
   selectedRows = 0,
 }: ConsolidateTokensModalProps) {
-  const [destinationWallet, setDestinationWallet] = React.useState("");
-  const [destinationChain, setDestinationChain] = React.useState("");
-  const [destinationTokenAddr, setDestinationTokenAddr] = React.useState("");
+  const [destination, setDestination] = React.useState({
+    walletAddress: undefined,
+    chainId: undefined,
+    tokenInfo: undefined,
+  } as DestinationSelection);
   const [open, setOpen] = React.useState(false);
   const [currentStage, setCurrentStage] = React.useState(1);
   const [planId, setPlanId] = React.useState("");
@@ -59,8 +60,6 @@ export function ConsolidateTokensModal({
   }, [rowSelection, walletData, tokenAmounts]);
 
   const { addresses } = useAccount();
-
-  const destinationChainId = Number(destinationChain);
 
   // Derive sourceTokens from consolidatedTokens and other state
   const sourceTokens = React.useMemo<SourceToken[]>(() => {
@@ -82,23 +81,24 @@ export function ConsolidateTokensModal({
   }, [currentStage, consolidatedTokens]);
 
   // Derive destinationToken from form state
-  const destinationToken = React.useMemo<DestinationToken | null>(() => {
-    if (currentStage !== 3 || !isAddress(destinationWallet) || !addresses) return null;
+  const destinationToken = React.useMemo<DestinationToken | undefined>(() => {
+    if (currentStage !== 3 || !isAddress(destination.walletAddress ?? "") || !destination.chainId || !addresses)
+      return undefined;
 
-    const sendTo = getAddress(destinationWallet);
+    const sendTo = getAddress(destination.walletAddress ?? "");
     const intermediateWallet = addresses.includes(sendTo) ? sendTo : addresses[0];
-    const tokenInfo = parseTokenValue(destinationTokenAddr);
+    const tokenInfo = destination.tokenInfo;
 
-    if (!tokenInfo) return null;
+    if (!tokenInfo) return undefined;
 
     return {
       token: getAddress(tokenInfo.address),
-      chainId: tokenInfo.chainId,
+      chainId: destination.chainId,
       walletAddress: intermediateWallet,
       symbol: tokenInfo.symbol,
       decimals: tokenInfo.decimals,
     };
-  }, [currentStage, destinationWallet, destinationTokenAddr, addresses]);
+  }, [currentStage, destination, addresses]);
 
   // Calculate actual total value based on selected amounts
   const actualTotalToConsolidate = React.useMemo(() => {
@@ -111,13 +111,21 @@ export function ConsolidateTokensModal({
   }, [consolidatedTokens]);
 
   React.useEffect(() => {
-    if (destinationChainId) {
-      const usdcAddress = USDC[destinationChainId as keyof typeof USDC];
+    if (destination.chainId) {
+      const usdcAddress = USDC[destination.chainId as keyof typeof USDC];
       if (usdcAddress) {
-        setDestinationTokenAddr(formatTokenValue(destinationChainId, usdcAddress, 6, "USDC", "USD Coin"));
+        setDestination((prev) => ({
+          ...prev,
+          chainId: destination.chainId,
+          tokenInfo: {
+            address: usdcAddress,
+            decimals: 6,
+            symbol: "USDC",
+          },
+        }));
       }
     }
-  }, [destinationChainId]);
+  }, [destination.chainId]);
 
   // Reset stage when modal is closed
   React.useEffect(() => {
@@ -160,13 +168,13 @@ export function ConsolidateTokensModal({
       // Check stage 2 requirements (for stage 3)
       if (stageNumber >= 3) {
         const hasValidDestination =
-          isAddress(destinationWallet) && destinationChain !== "" && destinationTokenAddr !== "";
+          isAddress(destination.walletAddress ?? "") && destination.chainId && destination.tokenInfo !== undefined;
         if (!hasValidDestination) return false;
       }
 
       return true;
     },
-    [currentStage, consolidatedTokens, destinationWallet, destinationChain, destinationTokenAddr],
+    [currentStage, consolidatedTokens, destination],
   );
 
   const handleNext = React.useCallback(() => {
@@ -261,14 +269,7 @@ export function ConsolidateTokensModal({
             </StepperContent>
 
             <StepperContent value={2}>
-              <SelectDestinationStage
-                destinationWallet={destinationWallet}
-                setDestinationWallet={setDestinationWallet}
-                destinationChain={destinationChain}
-                setDestinationChain={setDestinationChain}
-                destinationTokenAddr={destinationTokenAddr}
-                setDestinationTokenAddr={setDestinationTokenAddr}
-              />
+              <SelectDestinationStage value={destination} onChange={setDestination} />
               <div className="pt-4 flex gap-2">
                 <Button onClick={handleBack} variant="outline" className="flex-1">
                   Back

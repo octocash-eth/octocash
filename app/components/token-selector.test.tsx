@@ -54,7 +54,7 @@ describe("parseTokenValue", () => {
       address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
       decimals: 6,
       symbol: "USDC",
-      fullName: "USD Coin",
+      name: "USD Coin",
     });
   });
 
@@ -65,23 +65,23 @@ describe("parseTokenValue", () => {
       address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599",
       decimals: 8,
       symbol: "WBTC",
-      fullName: "Wrapped BTC",
+      name: "Wrapped BTC",
     });
   });
 
-  test("returns null for empty value", () => {
+  test("returns undefined for empty value", () => {
     const result = parseTokenValue("");
-    expect(result).toBeNull();
+    expect(result).toBeUndefined();
   });
 
-  test("returns null for invalid format", () => {
+  test("returns undefined for invalid format", () => {
     const result = parseTokenValue("invalid-format");
-    expect(result).toBeNull();
+    expect(result).toBeUndefined();
   });
 
-  test("returns null for incomplete format", () => {
+  test("returns undefined for incomplete format", () => {
     const result = parseTokenValue("1:0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48:6");
-    expect(result).toBeNull();
+    expect(result).toBeUndefined();
   });
 });
 
