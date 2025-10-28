@@ -40,6 +40,9 @@ export function SiteHeader() {
         </div>
 
         <div className="flex items-center gap-2">
+          <div className="md:hidden">
+            <ThemeToggle variant="ghost" />
+          </div>
           <div className="hidden md:flex items-center gap-2">
             {NAV.map(({ to, label }) => (
               <NavLink key={to} to={to} className={cn(buttonVariants({ variant: "link", size: "lg" }))}>
@@ -79,7 +82,6 @@ export function SiteHeader() {
             ))}
           </nav>
           <div className="flex items-center gap-2 mt-4 px-3">
-            <ThemeToggle />
             <GatedConnectButton />
           </div>
         </div>

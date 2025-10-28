@@ -20,7 +20,7 @@ export const FEATURES_CONTENT = {
     {
       title: "Seven Seas, One View",
       description: "See all your tokens across 7 chains. No more wallet hopping.",
-      imageSrc: "/decorations/feature-card-1.svg",
+      imageSrc: (theme: "light" | "dark") => `/decorations/feature-card-1-${theme}.svg`,
       imageAlt: "Multi-chain illustration",
       imageWidth: 484,
       imageHeight: 333,
@@ -28,7 +28,7 @@ export const FEATURES_CONTENT = {
     {
       title: "Choose Your Journey",
       description: "Select which tokens to consolidate and where to send them. You're always in control.",
-      imageSrc: "/decorations/feature-card-2.svg",
+      imageSrc: (_theme: "light" | "dark") => "/decorations/feature-card-2.svg",
       imageAlt: "Simple process illustration",
       imageWidth: 484,
       imageHeight: 333,
@@ -37,7 +37,7 @@ export const FEATURES_CONTENT = {
       title: "Treasures Secured",
       description:
         "Built on trusted protocols. Your treasures arrive in a matter of seconds, exactly where you want them.",
-      imageSrc: "/decorations/feature-card-3.svg",
+      imageSrc: (_theme: "light" | "dark") => "/decorations/feature-card-3.svg",
       imageAlt: "Security illustration",
       imageWidth: 484,
       imageHeight: 333,

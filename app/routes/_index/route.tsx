@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { FeatureCard } from "~/components/feature-card";
 import { SiteHeader } from "~/components/site-header";
+import { useTheme } from "~/components/theme-provider";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "~/components/ui/accordion";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardDescription, CardTitle } from "~/components/ui/card";
@@ -14,6 +15,7 @@ import {
   SUPPORT_CONTENT,
 } from "~/data/homepage";
 import { SITE_DESCRIPTION, SITE_NAME } from "~/data/site";
+import { HeroBg } from "~/images/hero-bg";
 import { SupportedChains } from "./supported-chains";
 
 export function meta() {
@@ -21,6 +23,7 @@ export function meta() {
 }
 
 export default function Home() {
+  const { resolvedTheme } = useTheme();
   return (
     <div className="relative flex flex-col min-h-screen">
       <SiteHeader />
@@ -33,21 +36,15 @@ export default function Home() {
       >
         {/* Background Decorations */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
-          <img
-            src="/decorations/section-1-bg.svg"
-            alt=""
-            width={1728}
-            height={989}
-            className="absolute bottom-0 left-1/2 -translate-x-1/2 h-auto w-auto min-w-full object-cover object-bottom min-h-[80%]"
-          />
+          <HeroBg className="absolute bottom-0 left-1/2 -translate-x-1/2 block h-full w-auto min-w-full max-w-none" />
         </div>
 
         {/* Content Container - Centered in available space */}
         <div className="relative z-10 flex-1 flex flex-col items-center justify-center gap-2 sm:gap-3 md:gap-4 lg:gap-6 text-center max-w-6xl mx-auto w-full">
-          <h1 className="font-grotesc text-5xl md:text-8xl font-bold leading-none text-purple-500 px-4">
+          <h1 className="font-grotesque text-5xl md:text-8xl font-bold leading-none text-secondary px-4">
             {HERO_CONTENT.title}
           </h1>
-          <p className="font-grotesc text-3xl md:text-4xl font-normal leading-tight text-violet-500 max-w-6xl px-4">
+          <p className="font-grotesque text-3xl md:text-4xl font-normal leading-tight text-foreground max-w-6xl px-4">
             {HERO_CONTENT.subtitle}
           </p>
           <Link to={HERO_CONTENT.ctaLink} className="mt-1 sm:mt-2 md:mt-3 lg:mt-4">
@@ -72,7 +69,7 @@ export default function Home() {
         {/* Background Ocean - Starts After Hero */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           <img
-            src="/decorations/background-ocean.svg"
+            src={`/decorations/background-ocean-${resolvedTheme}.svg`}
             alt=""
             width={1728}
             height={4895}
@@ -88,13 +85,13 @@ export default function Home() {
               {/* Text Content */}
               <div className="flex-1 space-y-8">
                 <div>
-                  <h2 className="font-grotesc text-4xl md:text-5xl font-bold mb-8 text-primary">
+                  <h2 className="font-grotesque text-4xl md:text-5xl font-bold mb-8 text-primary">
                     {HOW_IT_WORKS_CONTENT.title}
                   </h2>
-                  <p className="font-grotesc text-3xl md:text-4xl text-violet-500 leading-tight">
+                  <p className="font-grotesque text-3xl md:text-4xl text-foreground leading-tight">
                     {HOW_IT_WORKS_CONTENT.paragraphs[0]}
                   </p>
-                  <p className="font-grotesc text-3xl md:text-4xl text-violet-500 leading-tight mt-4">
+                  <p className="font-grotesque text-3xl md:text-4xl text-foreground leading-tight mt-4">
                     {HOW_IT_WORKS_CONTENT.paragraphs[1]}
                   </p>
                 </div>
@@ -125,10 +122,10 @@ export default function Home() {
           <div className="max-w-7xl mx-auto">
             {/* Section Header */}
             <div className="text-center mb-16 max-w-4xl mx-auto">
-              <h2 className="font-grotesc text-4xl md:text-5xl font-bold mb-6 text-pink-500 leading-none">
+              <h2 className="font-grotesque text-4xl md:text-5xl font-bold mb-6 text-primary leading-none">
                 {FEATURES_CONTENT.title}
               </h2>
-              <p className="text-3xl md:text-4xl text-violet-500 leading-tight">{FEATURES_CONTENT.subtitle}</p>
+              <p className="text-3xl md:text-4xl text-foreground leading-tight">{FEATURES_CONTENT.subtitle}</p>
             </div>
 
             {/* Feature Cards Grid */}
@@ -138,7 +135,7 @@ export default function Home() {
                   key={card.title}
                   title={card.title}
                   description={card.description}
-                  imageSrc={card.imageSrc}
+                  imageSrc={card.imageSrc(resolvedTheme)}
                   imageAlt={card.imageAlt}
                   imageWidth={card.imageWidth}
                   imageHeight={card.imageHeight}
@@ -151,15 +148,15 @@ export default function Home() {
             <Card className="shadow-md">
               <CardContent className="p-8 flex flex-col items-center justify-center space-y-6">
                 <div className="md:text-center space-y-4">
-                  <CardTitle className="font-grotesc text-3xl md:text-4xl font-bold text-purple-500">
+                  <CardTitle className="font-grotesque text-3xl md:text-4xl font-bold text-secondary">
                     {FEATURES_CONTENT.trustedTech.title}
                   </CardTitle>
-                  <CardDescription className="text-2xl md:text-3xl text-violet-500">
+                  <CardDescription className="text-2xl md:text-3xl text-foreground">
                     {FEATURES_CONTENT.trustedTech.description}
                   </CardDescription>
                 </div>
                 <img
-                  src="/decorations/trusted-tech.svg"
+                  src={`/decorations/trusted-tech-${resolvedTheme}.svg`}
                   alt="Circle CCTP and Odos logos"
                   width={716}
                   height={107}
@@ -187,10 +184,10 @@ export default function Home() {
               {/* Text and Buttons */}
               <div className="flex-1 space-y-8">
                 <div>
-                  <h2 className="font-grotesc text-4xl md:text-5xl font-bold mb-8 text-pink-500 leading-none">
+                  <h2 className="font-grotesque text-4xl md:text-5xl font-bold mb-8 text-primary leading-none">
                     {SUPPORT_CONTENT.title}
                   </h2>
-                  <p className="text-3xl md:text-4xl text-violet-500 max-w-2xl leading-tight">
+                  <p className="text-3xl md:text-4xl text-foreground max-w-2xl leading-tight">
                     {SUPPORT_CONTENT.description}
                   </p>
                 </div>
@@ -217,7 +214,7 @@ export default function Home() {
 
           {/* Coral Decoration */}
           <img
-            src="/decorations/coral-3.svg"
+            src={`/decorations/coral-3-${resolvedTheme}.svg`}
             alt=""
             width={188}
             height={152}
@@ -239,10 +236,10 @@ export default function Home() {
 
             {/* Section Header */}
             <div className="mb-12">
-              <h2 className="font-grotesc text-4xl md:text-5xl font-bold mb-6 text-pink-500 leading-none">
+              <h2 className="font-grotesque text-4xl md:text-5xl font-bold mb-6 text-primary leading-none">
                 {FAQ_CONTENT.title}
               </h2>
-              <p className="font-grotesc text-3xl md:text-4xl text-violet-500 lg:w-2/3 leading-tight">
+              <p className="font-grotesque text-3xl md:text-4xl text-foreground lg:w-2/3 leading-tight">
                 {FAQ_CONTENT.subtitle}
               </p>
             </div>
@@ -251,10 +248,10 @@ export default function Home() {
             <Accordion type="single" collapsible className="space-y-4">
               {FAQ_ITEMS.map((item, index) => (
                 <AccordionItem key={`item-${index + 1}`} value={`item-${index + 1}`} className="border rounded-xl px-4">
-                  <AccordionTrigger className="font-grotesc text-3xl md:text-4xl font-bold text-pink-500 hover:no-underline leading-tight">
+                  <AccordionTrigger className="font-grotesque text-3xl md:text-4xl font-bold text-primary hover:no-underline leading-tight">
                     {item.question}
                   </AccordionTrigger>
-                  <AccordionContent className="text-2xl md:text-3xl text-violet-500 leading-tight">
+                  <AccordionContent className="text-2xl md:text-3xl text-foreground leading-tight">
                     {item.answer}
                   </AccordionContent>
                 </AccordionItem>
@@ -266,14 +263,16 @@ export default function Home() {
         {/* Footer */}
         <footer className="relative">
           <img
-            src="/decorations/footer-ocean.svg"
+            src={`/decorations/background-footer-${resolvedTheme}.svg`}
             alt=""
             width={1728}
             height={750}
             className="w-full h-full object-cover opacity-100"
           />
-          <div className="relative px-4 sm:px-6 lg:px-8 pb-12 z-10 text-center bg-[#ECDFC1]">
-            <p className="text-2xl md:text-3xl font-medium text-orange-900">{FOOTER_CONTENT.copyright}</p>
+          <div className="relative px-4 sm:px-6 lg:px-8 pb-12 z-10 text-center bg-[#ecdfc1] dark:bg-[#624e20]">
+            <p className="text-2xl md:text-3xl font-medium text-orange-900 dark:text-white">
+              {FOOTER_CONTENT.copyright}
+            </p>
           </div>
         </footer>
       </div>

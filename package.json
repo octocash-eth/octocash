@@ -37,6 +37,7 @@
     "ethereum-blockies-base64": "^1.0.2",
     "isbot": "^5.1.27",
     "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router": "^7.7.1",
