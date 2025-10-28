@@ -58,20 +58,20 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
       const inputWallets = [...new Set(step.inputTokens.map((t) => t.walletAddress))];
       return (
         <>
-          <span className="text-gray-600">{isPast ? "Swapped" : isExecuting ? "Swapping" : "Swap"}</span>{" "}
+          <span className="text-foreground">{isPast ? "Swapped" : isExecuting ? "Swapping" : "Swap"}</span>{" "}
           {step.inputTokens.map((inputToken) => {
             const key = `${inputToken.token}-${inputToken.chainId}-${inputToken.walletAddress}`;
             return (
               <span key={key}>
-                {step.inputTokens.indexOf(inputToken) > 0 && <span className="text-gray-500"> + </span>}
+                {step.inputTokens.indexOf(inputToken) > 0 && <span className="text-muted-foreground"> + </span>}
                 {tokenAmount(inputToken.amount, inputToken.chainId, inputToken.token, inputToken.symbol)}
               </span>
             );
           })}{" "}
-          <span className="text-gray-500">→</span>{" "}
+          <span className="text-muted-foreground">→</span>{" "}
           {tokenAmount(outputToken.amount, outputToken.chainId, outputToken.token, outputToken.symbol)}{" "}
-          <span className="text-gray-500">on</span> {chainBadge(step.chainId, chainName)}{" "}
-          <span className="text-gray-400 text-xs inline-flex items-center gap-1">
+          <span className="text-muted-foreground">on</span> {chainBadge(step.chainId, chainName)}{" "}
+          <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
             (
             {inputWallets.map((wallet) => (
               <span key={wallet}>
@@ -92,11 +92,11 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
       const destChainId = step.outputToken.chainId || step.chainId;
       return (
         <>
-          <span className="text-gray-600">{isPast ? "Bridged" : isExecuting ? "Bridging" : "Bridge"}</span>{" "}
+          <span className="text-foreground">{isPast ? "Bridged" : isExecuting ? "Bridging" : "Bridge"}</span>{" "}
           {tokenAmount(inputToken.amount, inputToken.chainId, inputToken.token, inputToken.symbol)}{" "}
-          <span className="text-gray-500">from</span> {chainBadge(step.chainId, chainName)}{" "}
-          <span className="text-gray-500">to</span> {chainBadge(destChainId, destChain)}{" "}
-          <span className="text-gray-400 text-xs inline-flex items-center gap-1">
+          <span className="text-muted-foreground">from</span> {chainBadge(step.chainId, chainName)}{" "}
+          <span className="text-muted-foreground">to</span> {chainBadge(destChainId, destChain)}{" "}
+          <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
             ({addressDisplay(inputToken.walletAddress)}
             {inputToken.walletAddress !== step.outputToken.walletAddress && (
               <> → {addressDisplay(step.outputToken.walletAddress)}</>
@@ -109,20 +109,20 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
     case "attestation":
       return (
         <>
-          <span className="text-gray-600">
+          <span className="text-foreground">
             {isPast ? "Waited for" : isExecuting ? "Waiting for" : "Wait for"} attestation
           </span>{" "}
-          <span className="text-gray-500">on</span> {chainBadge(step.chainId, chainName)}
+          <span className="text-muted-foreground">on</span> {chainBadge(step.chainId, chainName)}
         </>
       );
     case "claim": {
       const outputToken = result?.actualOutput ?? step.outputToken;
       return (
         <>
-          <span className="text-gray-600">{isPast ? "Claimed" : isExecuting ? "Claiming" : "Claim"}</span>{" "}
+          <span className="text-foreground">{isPast ? "Claimed" : isExecuting ? "Claiming" : "Claim"}</span>{" "}
           {tokenAmount(outputToken.amount, outputToken.chainId, outputToken.token, outputToken.symbol)}{" "}
-          <span className="text-gray-500">on</span> {chainBadge(step.chainId, chainName)}{" "}
-          <span className="text-gray-400 text-xs inline-flex items-center gap-1">
+          <span className="text-muted-foreground">on</span> {chainBadge(step.chainId, chainName)}{" "}
+          <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
             ({addressDisplay(outputToken.walletAddress)})
           </span>
         </>
@@ -133,18 +133,18 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
       const outputToken = step.outputToken;
       return (
         <>
-          <span className="text-gray-600">{isPast ? "Transferred" : isExecuting ? "Transferring" : "Transfer"}</span>{" "}
+          <span className="text-foreground">{isPast ? "Transferred" : isExecuting ? "Transferring" : "Transfer"}</span>{" "}
           {step.inputTokens.map((inputToken) => {
             const key = `${inputToken.token}-${inputToken.chainId}-${inputToken.walletAddress}`;
             return (
               <span key={key}>
-                {step.inputTokens.indexOf(inputToken) > 0 && <span className="text-gray-500"> + </span>}
+                {step.inputTokens.indexOf(inputToken) > 0 && <span className="text-muted-foreground"> + </span>}
                 {tokenAmount(inputToken.amount, inputToken.chainId, inputToken.token, inputToken.symbol)}
               </span>
             );
           })}{" "}
-          <span className="text-gray-500">on</span> {chainBadge(step.chainId, chainName)}{" "}
-          <span className="text-gray-400 text-xs inline-flex items-center gap-1">
+          <span className="text-muted-foreground">on</span> {chainBadge(step.chainId, chainName)}{" "}
+          <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
             ({addressDisplay(inputToken.walletAddress)} → {addressDisplay(outputToken.walletAddress)})
           </span>
         </>
@@ -153,7 +153,7 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
     default:
       return (
         <>
-          <span className="text-gray-600">Transaction</span> <span className="text-gray-500">on</span>{" "}
+          <span className="text-foreground">Transaction</span> <span className="text-muted-foreground">on</span>{" "}
           {chainBadge(step.chainId, chainName)}
         </>
       );
@@ -167,7 +167,7 @@ export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
   const isFailed = step.status === "failed";
 
   return (
-    <div className="flex items-center justify-between py-2 px-3 hover:bg-gray-50 rounded transition-colors">
+    <div className="flex items-center justify-between py-2 px-3 rounded transition-colors hover:bg-muted/60 dark:hover:bg-muted/30">
       {/* Left side: Status icon + Action text */}
       <div className="flex gap-3 flex-1 min-w-0">
         {/* Status Icon or Step Number */}
@@ -176,7 +176,7 @@ export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
             <span className="text-xs font-semibold">{stepNumber}</span>
           </div>
         ) : isPending ? (
-          <Circle className="w-5 h-5 text-gray-400 flex-shrink-0" />
+          <Circle className="w-5 h-5 text-muted-foreground flex-shrink-0" />
         ) : isExecuting ? (
           <Loader2 className="w-5 h-5 text-primary animate-spin flex-shrink-0" />
         ) : isSuccess ? (
@@ -186,7 +186,7 @@ export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
         ) : null}
 
         {/* Action description */}
-        <div className="text-sm text-gray-700 flex items-center gap-1.5 flex-wrap min-w-0">
+        <div className="text-sm text-foreground flex items-center gap-1.5 flex-wrap min-w-0">
           {getActionContent(step, result)}
         </div>
       </div>
@@ -198,7 +198,7 @@ export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
             href={getExplorerUrl(step.chainId, result.transactionHash)}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 hover:underline"
+            className="inline-flex items-center gap-1 text-sm text-primary hover:text-primary/80 hover:underline"
           >
             View tx
             <ExternalLink className="w-3 h-3" />
@@ -206,7 +206,7 @@ export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
         )}
         {isFailed && (
           <span
-            className="text-sm font-medium text-red-600"
+            className="text-sm font-medium text-destructive"
             title={step.error ? `${step.error.title}. ${step.error.message}` : undefined}
           >
             Failed

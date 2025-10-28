@@ -17,7 +17,7 @@ const buttonVariants = cva(
         destructive: `${defaultButtonStyles} shadow-button-destructive bg-destructive border-destructive-shadow text-destructive-foreground hover:bg-destructive-hover hover:text-destructive-hover-foreground`,
         outline: `${defaultButtonStyles} shadow-none`,
         secondary: `${defaultButtonStyles} text-button-secondary-foreground bg-button-secondary hover:bg-accent hover:text-button-secondary-foreground`,
-        ghost: `${defaultButtonStyles} bg-transparent border-transparent shadow-none dark:hover:bg-accent/50`,
+        ghost: `${defaultButtonStyles} bg-transparent border-transparent shadow-none dark:hover:bg-accent/50 dark:hover:text-button-secondary-foreground`,
         link: `text-button-link-foreground hover:text-button-link-hover-foreground active:text-button-link-active-foreground`,
       },
       size: {
