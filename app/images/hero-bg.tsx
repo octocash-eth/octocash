@@ -77,6 +77,7 @@ export function HeroBg({ className }: HeroBgProps) {
       xmlns="http://www.w3.org/2000/svg"
       initial={false}
       className={className}
+      preserveAspectRatio="xMidYMid slice"
     >
       <mask
         id={ids.mask}

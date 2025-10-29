@@ -36,7 +36,7 @@ export default function Home() {
       >
         {/* Background Decorations */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
-          <HeroBg className="absolute bottom-0 left-1/2 -translate-x-1/2 block h-full w-auto min-w-full max-w-none" />
+          <HeroBg className="absolute inset-x-0 bottom-0 block h-full w-full" />
         </div>
 
         {/* Content Container - Centered in available space */}
@@ -200,7 +200,7 @@ export default function Home() {
               </div>
 
               {/* Illustration */}
-              <div className="flex-shrink-0">
+              <div className="shrink-0">
                 <img
                   src="/decorations/support-illustration.svg"
                   alt="Support illustration"
