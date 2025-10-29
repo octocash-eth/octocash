@@ -190,6 +190,241 @@ describe("executeConsolidationPlan", () => {
     expect(finalState.plan[1].inputTokens[0].amount).toBe(980000n); // Updated to actual
   });
 
+  test("value changes during execution - track intermediate state updates", async () => {
+    const DAI_ADDRESS = "0x6B175474E89094C44Da98b954EedeAC495271d0F" as Address;
+    const WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as Address;
+
+    // Complex scenario: WETH -> USDC -> DAI (2 swaps with recalculation)
+    const step1: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(WETH_ADDRESS, 1000000000000000000n, 1)], // 1 WETH
+      outputToken: makeToken(USDC_ADDRESS, 3000000000n, 1), // Estimated 3000 USDC
+      dependsOn: [],
+      partialDependency: false,
+    };
+
+    const step2: TransactionStep = {
+      id: "step-2",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 3000000000n, 1, { provenance: "step-1" })],
+      outputToken: makeToken(DAI_ADDRESS, 3000000000000000000000n, 1), // Estimated 3000 DAI
+      dependsOn: ["step-1"],
+      partialDependency: false,
+    };
+
+    mockState.plan = [step1, step2];
+
+    // Mock swap 1: WETH -> USDC (actual: 3100 USDC, estimated: 3000)
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 3100000000n, // 3100 USDC (better than estimated)
+      transactionHash: "0xswap1",
+    });
+
+    // Mock recalculation quote for step 2
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(DAI_ADDRESS, 3100000000000000000000n, 1)); // 3100 DAI
+
+    // Mock swap 2: USDC -> DAI
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 3098000000000000000000n, // 3098 DAI (slightly less due to slippage)
+      transactionHash: "0xswap2",
+    });
+
+    const { values: intermediateStates, finalValue: finalState } = await consumeGenerator(
+      executeConsolidationPlan(mockState, mockWalletClient),
+    );
+
+    // Track state changes through execution
+    expect(intermediateStates.length).toBeGreaterThan(0);
+
+    // Find state after step 1 completes
+    const stateAfterStep1 = intermediateStates.find(
+      (s) => s.results["step-1"]?.status === "success" && s.results["step-2"]?.status !== "success",
+    );
+
+    expect(stateAfterStep1).toBeDefined();
+    if (stateAfterStep1) {
+      // After step 1: step 2 input should be recalculated
+      expect(stateAfterStep1.plan[1].inputTokens[0].amount).toBe(3100000000n); // Updated from 3000 to 3100
+      expect(stateAfterStep1.plan[1].outputToken.amount).toBe(3100000000000000000000n); // Recalculated estimate
+
+      // Step 1 result should have actual output
+      expect(stateAfterStep1.results["step-1"].actualOutput?.amount).toBe(3100000000n);
+    }
+
+    // Final state checks
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-1"].actualOutput?.amount).toBe(3100000000n);
+    expect(finalState.results["step-2"].actualOutput?.amount).toBe(3098000000000000000000n);
+
+    // Verify provenance was used correctly
+    expect(finalState.plan[1].inputTokens[0].provenance).toBe("step-1");
+  });
+
+  test("value changes with multiple dependencies - track cascade effect", async () => {
+    const DAI_ADDRESS = "0x6B175474E89094C44Da98b954EedeAC495271d0F" as Address;
+    const WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as Address;
+    const WBTC_ADDRESS = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599" as Address;
+
+    // Complex: swap1 (WETH->USDC) + swap2 (DAI->USDC) -> swap3 (USDC->WBTC)
+    // Test that final swap gets updated amounts from both sources
+    const step1: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(WETH_ADDRESS, 1000000000000000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 2000000000n, 1, { provenance: "step-1" }),
+      dependsOn: [],
+      partialDependency: false,
+    };
+
+    const step2: TransactionStep = {
+      id: "step-2",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(DAI_ADDRESS, 1000000000000000000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000000n, 1, { provenance: "step-2" }),
+      dependsOn: [],
+      partialDependency: false,
+    };
+
+    const step3: TransactionStep = {
+      id: "step-3",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken(USDC_ADDRESS, 2000000000n, 1, { provenance: "step-1" }),
+        makeToken(USDC_ADDRESS, 1000000000n, 1, { provenance: "step-2" }),
+      ],
+      outputToken: makeToken(WBTC_ADDRESS, 10000000n, 1),
+      dependsOn: ["step-1", "step-2"],
+      partialDependency: false,
+    };
+
+    mockState.plan = [step1, step2, step3];
+
+    // Mock swap 1 with better output
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 2100000000n, // 2100 USDC (estimated 2000)
+      transactionHash: "0xswap1",
+    });
+
+    // Mock swap 2 with worse output
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 950000000n, // 950 USDC (estimated 1000)
+      transactionHash: "0xswap2",
+    });
+
+    // Mock recalculation quote for step 3 (uses actual amounts from both swaps)
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(WBTC_ADDRESS, 10200000n, 1)); // Updated estimate
+
+    // Mock swap 3
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 10150000n,
+      transactionHash: "0xswap3",
+    });
+
+    const { values: intermediateStates, finalValue: finalState } = await consumeGenerator(
+      executeConsolidationPlan(mockState, mockWalletClient),
+    );
+
+    // Find state after step 1 completes (before step 2)
+    const stateAfterStep1 = intermediateStates.find(
+      (s) => s.results["step-1"]?.status === "success" && !s.results["step-2"],
+    );
+
+    expect(stateAfterStep1).toBeDefined();
+    if (stateAfterStep1) {
+      // Step 3 first input should be updated from step 1
+      expect(stateAfterStep1.plan[2].inputTokens[0].amount).toBe(2100000000n); // Updated from step 1
+      // Step 3 second input not yet updated (step 2 hasn't run)
+      expect(stateAfterStep1.plan[2].inputTokens[1].amount).toBe(1000000000n); // Original estimate
+    }
+
+    // Verify final state has both inputs updated
+    expect(finalState.plan[2].inputTokens[0].amount).toBe(2100000000n); // From step 1
+    expect(finalState.plan[2].inputTokens[1].amount).toBe(950000000n); // From step 2
+
+    // Verify getSwapQuote was called with both updated amounts for step 3
+    expect(getSwapQuote).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ amount: 2100000000n, provenance: "step-1" }),
+        expect.objectContaining({ amount: 950000000n, provenance: "step-2" }),
+      ]),
+      expect.objectContaining({ token: WBTC_ADDRESS }),
+    );
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-3"].actualOutput?.amount).toBe(10150000n);
+  });
+
+  test("value changes with partial execution - track state before and after pause", async () => {
+    const step1: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      dependsOn: [],
+      partialDependency: false,
+    };
+
+    const step2: TransactionStep = {
+      id: "step-2",
+      type: "bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1, { provenance: "step-1" })],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 10),
+      dependsOn: ["step-1"],
+      partialDependency: false,
+    };
+
+    mockState.plan = [step1, step2];
+
+    // Step 1 succeeds with different amount
+    vi.mocked(executeOdosSwapOrTransfer).mockResolvedValueOnce({
+      amount: 980000n,
+      transactionHash: "0xswap1",
+    });
+
+    // Step 2 fails
+    vi.mocked(executeCCTPBurn).mockRejectedValueOnce(new Error("Bridge network error"));
+
+    const { values: intermediateStates, finalValue: finalState } = await consumeGenerator(
+      executeConsolidationPlan(mockState, mockWalletClient),
+    );
+
+    // Find state right before step 2 execution
+    const stateBeforeStep2 = intermediateStates.find(
+      (s) => s.results["step-1"]?.status === "success" && !s.results["step-2"],
+    );
+
+    expect(stateBeforeStep2).toBeDefined();
+    if (stateBeforeStep2) {
+      // Step 2 should have recalculated input
+      expect(stateBeforeStep2.plan[1].inputTokens[0].amount).toBe(980000n);
+      expect(stateBeforeStep2.plan[1].outputToken.amount).toBe(980000n);
+    }
+
+    // Final state should be paused with step 1 success, step 2 failed
+    expect(finalState.status).toBe("paused");
+    expect(finalState.results["step-1"].status).toBe("success");
+    expect(finalState.results["step-1"].actualOutput?.amount).toBe(980000n);
+    expect(finalState.results["step-2"].status).toBe("failed");
+
+    // Plan should still reflect recalculated values for potential retry
+    expect(finalState.plan[1].inputTokens[0].amount).toBe(980000n);
+  });
+
   test("partial dependency adaptation - attestation adapts when some bridges fail", async () => {
     const bridge1: TransactionStep = {
       id: "bridge-1",

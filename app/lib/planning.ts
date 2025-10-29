@@ -310,7 +310,6 @@ async function processChainWalletSwaps(
  * @param steps - Previously created swap steps
  * @param tokens - Tokens containing USDC to bridge (from processChainWalletSwaps)
  * @param destinationToken - Final target token and chain
- * @param intermediateWallet - Wallet to execute the last steps (claim and transfer)
  * @param log - Logging function for debug output
  * @returns Object containing all steps (input + bridge) and bridged USDC tokens on dest chain
  *
@@ -320,7 +319,6 @@ async function createBridgeSteps(
   steps: TransactionStep[],
   tokens: TokenAmount[],
   destinationToken: DestinationToken,
-  intermediateWallet: Address,
   log: (...args: unknown[]) => void,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
   const bridgedTokens: TokenAmount[] = [];
@@ -365,7 +363,7 @@ async function createBridgeSteps(
       token: destChainUSDC,
       amount: amountAfterFee,
       chainId: destinationToken.chainId,
-      walletAddress: intermediateWallet,
+      walletAddress: destinationToken.walletAddress,
       symbol: "USDC",
       decimals: 6,
       provenance: stepId, // Mark this token as coming from this bridge step
@@ -409,14 +407,12 @@ async function createBridgeSteps(
  * @param steps - All steps created so far (includes bridge steps)
  * @param tokens - Bridged USDC tokens on destination chain
  * @param destinationToken - Final target token and chain
- * @param intermediateWallet - Wallet to execute the last steps (claim and transfer)
  * @returns Object containing all steps (input + attestation + claim) and claim output token
  */
 function createAttestationAndClaimSteps(
   steps: TransactionStep[],
   tokens: TokenAmount[],
   destinationToken: DestinationToken,
-  intermediateWallet: Address,
 ): { steps: TransactionStep[]; tokens: TokenAmount[] } {
   const bridgeSteps = steps.filter((s) => s.type === "bridge");
 
@@ -439,9 +435,10 @@ function createAttestationAndClaimSteps(
       token: destChainUSDC,
       amount: bridgeSteps.reduce((sum, s) => sum + s.outputToken.amount, 0n),
       chainId: destinationToken.chainId,
-      walletAddress: intermediateWallet,
+      walletAddress: destinationToken.walletAddress,
       symbol: "USDC",
       decimals: 6,
+      provenance: attestationStepId,
     },
     dependsOn: bridgeStepIds,
     partialDependency: true,
@@ -455,7 +452,7 @@ function createAttestationAndClaimSteps(
     token: destChainUSDC,
     amount: totalBridged,
     chainId: destinationToken.chainId,
-    walletAddress: intermediateWallet,
+    walletAddress: destinationToken.walletAddress,
     symbol: "USDC",
     decimals: 6,
     provenance: claimStepId, // Mark this token as coming from this claim step
@@ -597,6 +594,7 @@ async function createFinalSwaps(
     const transferOutput: TokenAmount = {
       ...token,
       walletAddress: destinationToken.walletAddress,
+      provenance: stepId,
     };
 
     steps.push({
@@ -631,6 +629,44 @@ async function createFinalSwaps(
   );
 
   return { steps, tokens: finalTokens };
+}
+
+async function createFinalTransfer(
+  steps: TransactionStep[],
+  tokens: TokenAmount[],
+  destinationToken: DestinationToken,
+  log: (...args: unknown[]) => void,
+): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
+  if (tokens.length !== 1) {
+    throw new Error("PlanningError: Final transfer step must have exactly one token");
+  }
+
+  const token = tokens[0];
+  const stepId = `step-${steps.length + 1}`;
+  const previousStepId = steps[steps.length - 1].id;
+
+  const transferOutput: TokenAmount = {
+    ...token,
+    walletAddress: destinationToken.walletAddress,
+    provenance: stepId,
+  };
+
+  steps.push({
+    id: stepId,
+    type: "transfer",
+    status: "pending",
+    chainId: destinationToken.chainId,
+    inputTokens: [token],
+    outputToken: transferOutput,
+    dependsOn: [previousStepId],
+    partialDependency: false,
+  });
+
+  log(
+    `🔍 [DEBUG] Added transfer step ${stepId} from wallet ${token.walletAddress} to ${destinationToken.walletAddress}`,
+  );
+
+  return { steps, tokens: [transferOutput] };
 }
 
 /**
@@ -694,12 +730,15 @@ export async function planConsolidation(
     transports,
   );
   const intermediateWallet = await resolveIntermediateWallet(sourceTokens, destinationToken, connectedWallets);
-
+  const intermediateToken = { ...destinationToken, walletAddress: intermediateWallet };
   // Build consolidation pipeline
-  let { steps, tokens } = await processChainWalletSwaps(sourceTokens, destinationToken, log);
-  ({ steps, tokens } = await createBridgeSteps(steps, tokens, destinationToken, intermediateWallet, log));
-  ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, destinationToken, intermediateWallet));
-  ({ steps, tokens } = await createFinalSwaps(steps, tokens, destinationToken, log));
+  let { steps, tokens } = await processChainWalletSwaps(sourceTokens, intermediateToken, log);
+  ({ steps, tokens } = await createBridgeSteps(steps, tokens, intermediateToken, log));
+  ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, intermediateToken));
+  ({ steps, tokens } = await createFinalSwaps(steps, tokens, intermediateToken, log));
+  if (intermediateWallet !== destinationToken.walletAddress) {
+    ({ steps, tokens } = await createFinalTransfer(steps, tokens, destinationToken, log));
+  }
 
   // Validate plan constraints
   const attestationSteps = steps.filter((s) => s.type === "attestation");

@@ -832,6 +832,262 @@ describe("planConsolidation", () => {
     expect(bridgeStep?.inputTokens[0].provenance).toBeUndefined();
   });
 
+  test("provenance tracking - complex multi-step provenance chain", async () => {
+    // Test: ETH -> USDC (swap) -> bridge -> claim -> WBTC (swap)
+    // Verify provenance flows through entire chain
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: ETH_ADDRESS,
+        amount: 1000000000000000000n, // 1 POL
+        chainId: 137, // Polygon
+        walletAddress: WALLET,
+        symbol: "POL",
+        decimals: 18,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1, // Ethereum
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    // Mock swap POL -> USDC on Polygon
+    vi.mocked(getSwapQuote).mockResolvedValueOnce({
+      token: USDC_ADDRESS,
+      amount: 3000000000n, // 3000 USDC
+      chainId: 137,
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    });
+
+    // Mock final swap USDC -> WBTC on Ethereum
+    vi.mocked(getSwapQuote).mockResolvedValueOnce({
+      token: WBTC_ADDRESS,
+      amount: 8000n,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    });
+
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+    const swapStep1 = result.find((s) => s.type === "swap" && s.chainId === 137);
+    const bridgeStep = result.find((s) => s.type === "bridge");
+    const claimStep = result.find((s) => s.type === "claim");
+    const swapStep2 = result.find((s) => s.type === "swap" && s.chainId === 1);
+
+    expect(swapStep1).toBeDefined();
+    expect(bridgeStep).toBeDefined();
+    expect(claimStep).toBeDefined();
+    expect(swapStep2).toBeDefined();
+
+    // Verify provenance chain
+    // 1. First swap output has its own provenance
+    expect(swapStep1?.outputToken.provenance).toBe(swapStep1?.id);
+
+    // 2. Bridge input inherits provenance from swap output
+    expect(bridgeStep?.inputTokens[0].provenance).toBe(swapStep1?.id);
+
+    // 3. Bridge output has its own provenance
+    expect(bridgeStep?.outputToken.provenance).toBe(bridgeStep?.id);
+
+    // 4. Claim input inherits provenance from bridge output
+    expect(claimStep?.inputTokens[0].provenance).toBe(bridgeStep?.id);
+
+    // 5. Claim output has its own provenance
+    expect(claimStep?.outputToken.provenance).toBe(claimStep?.id);
+
+    // 6. Final swap input inherits provenance from claim output
+    expect(swapStep2?.inputTokens[0].provenance).toBe(claimStep?.id);
+
+    // 7. Final swap output has its own provenance
+    expect(swapStep2?.outputToken.provenance).toBe(swapStep2?.id);
+  });
+
+  test("provenance tracking - multiple bridges from different wallets", async () => {
+    const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+    const WALLET_3 = "0x3333333333333333333333333333333333333333" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: ETH_ADDRESS,
+        amount: 1000000000000000000n, // 1 POL from wallet 1
+        chainId: 137,
+        walletAddress: WALLET,
+        symbol: "POL",
+        decimals: 18,
+      },
+      {
+        token: USDC_OPTIMISM,
+        amount: 500000000n, // 500 USDC from wallet 2
+        chainId: 10,
+        walletAddress: WALLET_2,
+        symbol: "USDC",
+        decimals: 6,
+      },
+      {
+        token: USDC_OPTIMISM,
+        amount: 300000000n, // 300 USDC from wallet 3
+        chainId: 10,
+        walletAddress: WALLET_3,
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    // Mock swap POL -> USDC
+    vi.mocked(getSwapQuote).mockResolvedValueOnce({
+      token: USDC_ADDRESS,
+      amount: 2000000000n,
+      chainId: 137,
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    });
+
+    // Mock final swap
+    vi.mocked(getSwapQuote).mockResolvedValueOnce({
+      token: WBTC_ADDRESS,
+      amount: 8000n,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    });
+
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2, WALLET_3]);
+
+    const swapStep = result.find((s) => s.type === "swap" && s.chainId === 137);
+    const bridges = result.filter((s) => s.type === "bridge");
+    const claimStep = result.find((s) => s.type === "claim");
+
+    // Find bridges by wallet
+    const bridge1 = bridges.find((b) => b.inputTokens[0].walletAddress === WALLET);
+    const bridge2 = bridges.find((b) => b.inputTokens[0].walletAddress === WALLET_2);
+    const bridge3 = bridges.find((b) => b.inputTokens[0].walletAddress === WALLET_3);
+
+    expect(swapStep).toBeDefined();
+    expect(bridge1).toBeDefined();
+    expect(bridge2).toBeDefined();
+    expect(bridge3).toBeDefined();
+    expect(claimStep).toBeDefined();
+
+    // Bridge 1 input should have provenance from swap
+    expect(bridge1?.inputTokens[0].provenance).toBe(swapStep?.id);
+
+    // Bridge 2 input should NOT have provenance (existing USDC)
+    expect(bridge2?.inputTokens[0].provenance).toBeUndefined();
+
+    // Bridge 3 input should NOT have provenance (existing USDC)
+    expect(bridge3?.inputTokens[0].provenance).toBeUndefined();
+
+    // All bridges should have their own provenance on output
+    expect(bridge1?.outputToken.provenance).toBe(bridge1?.id);
+    expect(bridge2?.outputToken.provenance).toBe(bridge2?.id);
+    expect(bridge3?.outputToken.provenance).toBe(bridge3?.id);
+
+    // Claim should have all three bridge provenances in its inputs
+    expect(claimStep?.inputTokens).toHaveLength(3);
+    expect(claimStep?.inputTokens[0].provenance).toBe(bridge1?.id);
+    expect(claimStep?.inputTokens[1].provenance).toBe(bridge2?.id);
+    expect(claimStep?.inputTokens[2].provenance).toBe(bridge3?.id);
+  });
+
+  test("provenance tracking - transfer step should have provenance", async () => {
+    const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+
+    // Scenario: Token already at destination token/chain but wrong wallet
+    // This creates a single transfer step without swap
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: WBTC_ADDRESS,
+        amount: 10000000n, // 0.1 WBTC
+        chainId: 1,
+        walletAddress: WALLET_2, // Different wallet than destination
+        symbol: "WBTC",
+        decimals: 8,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET, // Destination wallet
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2]);
+
+    const transferStep = result.find((s) => s.type === "transfer");
+
+    expect(transferStep).toBeDefined();
+
+    // Transfer input should NOT have provenance (existing token, not from a step)
+    expect(transferStep?.inputTokens[0].provenance).toBeUndefined();
+
+    // Transfer output has its own provenance
+    expect(transferStep?.outputToken.provenance).toBe(transferStep?.id);
+  });
+
+  test("provenance tracking - batched swaps should each have unique provenance", async () => {
+    // Create 8 tokens on the same chain to trigger batching
+    const sourceTokens: TokenAmount[] = Array.from({ length: 8 }, (_, i) => ({
+      token: `0x${i.toString().padStart(40, "0")}` as Address,
+      amount: 1000000n,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: `TOKEN${i}`,
+      decimals: 18,
+    }));
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: WBTC_ADDRESS,
+      amount: 8000n,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    });
+
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+    const swapSteps = result.filter((s) => s.type === "swap");
+
+    // Should have 2 swap steps due to batching
+    expect(swapSteps).toHaveLength(2);
+
+    // Each swap should have unique provenance
+    expect(swapSteps[0].outputToken.provenance).toBe(swapSteps[0].id);
+    expect(swapSteps[1].outputToken.provenance).toBe(swapSteps[1].id);
+    expect(swapSteps[0].id).not.toBe(swapSteps[1].id);
+  });
+
   test("transfer step - destination token at wrong wallet should create transfer step", async () => {
     const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
 
@@ -1211,6 +1467,73 @@ describe("planConsolidation", () => {
 
     // Bridge output should go to destination wallet
     expect(bridgeStep?.outputToken.walletAddress).toBe(WALLET);
+  });
+
+  test("bridge and swap to non-connected destination wallet - should add post-claim transfer", async () => {
+    const NON_CONNECTED_WALLET = "0x4444444444444444444444444444444444444444" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: USDC_OPTIMISM,
+        amount: 1000000n, // 1 USDC
+        chainId: 10, // Optimism
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1, // Ethereum
+      walletAddress: NON_CONNECTED_WALLET, // Not in connected wallets
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+    // Mock final swap USDC -> WBTC on Ethereum
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: WBTC_ADDRESS,
+      amount: 8000n,
+      chainId: 1,
+      walletAddress: WALLET, // Intermediate wallet (not non-connected wallet)
+      symbol: "WBTC",
+      decimals: 8,
+    });
+
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+    const bridgeStep = result.find((s: TransactionStep) => s.type === "bridge");
+    const claimStep = result.find((s: TransactionStep) => s.type === "claim");
+    const swapStep = result.find((s: TransactionStep) => s.type === "swap");
+    const transferStep = result.find(
+      (s: TransactionStep) => s.type === "transfer" && s.outputToken.walletAddress === NON_CONNECTED_WALLET,
+    );
+
+    expect(bridgeStep).toBeDefined();
+    expect(claimStep).toBeDefined();
+    expect(swapStep).toBeDefined();
+
+    if (!bridgeStep || !claimStep || !swapStep) {
+      return;
+    }
+
+    // Bridge and claim should output to intermediate wallet (WALLET)
+    expect(bridgeStep.outputToken.walletAddress).toBe(WALLET);
+    expect(claimStep.outputToken.walletAddress).toBe(WALLET);
+
+    // CRITICAL: Swap should output to INTERMEDIATE wallet, not directly to non-connected wallet
+    expect(swapStep.outputToken.walletAddress).toBe(WALLET);
+
+    // CRITICAL: There should be a transfer step to move tokens to non-connected wallet
+    expect(transferStep).toBeDefined();
+    if (transferStep) {
+      expect(transferStep.inputTokens[0].walletAddress).toBe(WALLET);
+      expect(transferStep.outputToken.walletAddress).toBe(NON_CONNECTED_WALLET);
+      expect(transferStep.dependsOn).toContain(swapStep.id);
+    }
   });
 
   test("no connected wallet has gas on destination chain - should throw PlanningError", async () => {

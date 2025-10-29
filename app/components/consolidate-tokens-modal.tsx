@@ -1,6 +1,5 @@
 import * as React from "react";
 import { getAddress, isAddress, parseUnits } from "viem";
-import { useAccount } from "wagmi";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
