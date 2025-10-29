@@ -100,7 +100,7 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
     };
 
     // Step 5: Generate plan
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // Step 6: Verify Plan Display
     expect(plan.length).toBeGreaterThanOrEqual(5);
@@ -212,7 +212,7 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
       decimals: 6,
     };
 
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
     const swapStep = plan.find((s) => s.type === "swap");
 
     expect(swapStep).toBeDefined();
@@ -264,7 +264,7 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
       decimals: 8,
     };
 
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     const state: ConsolidationState = {
       id: "test-states",

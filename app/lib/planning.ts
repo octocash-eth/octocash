@@ -10,6 +10,54 @@ import type { DestinationToken, TokenAmount, TransactionStep } from "./types";
 const SUPPORTED_CHAINS = Object.keys(chains).map(Number);
 
 /**
+ * Finds a suitable intermediate wallet in case the destination wallet is not connected
+ * It ensures the wallet has sufficient gas to execute the claim and transfer steps
+ *
+ * @param sourceTokens - Array of source tokens
+ * @param destinationToken - Destination token
+ * @param connectedWallets - Array of connected wallets
+ * @returns The intermediate wallet address
+ */
+async function resolveIntermediateWallet(
+  sourceTokens: TokenAmount[],
+  destinationToken: DestinationToken,
+  connectedWallets: readonly Address[] = [],
+): Promise<Address> {
+  const destinationWallet = destinationToken.walletAddress;
+  const isDestinationConnected = connectedWallets.some((wallet) => isAddressEqual(wallet, destinationWallet));
+
+  if (isDestinationConnected) {
+    await ensureSufficientGas([[destinationToken.chainId, destinationWallet]], transports);
+    return destinationWallet;
+  }
+
+  const searchOrder = [...new Set([...sourceTokens.map((token) => token.walletAddress), ...connectedWallets])];
+
+  const insufficient = await ensureSufficientGas(
+    searchOrder.map((wallet) => [destinationToken.chainId, wallet]),
+    transports,
+    false,
+  );
+
+  // Find the first wallet that has sufficient gas
+  const sufficient = searchOrder.find(
+    (wallet) =>
+      !insufficient.some(
+        ([chainId, address]) => chainId === destinationToken.chainId && isAddressEqual(address, wallet),
+      ),
+  );
+  if (!sufficient) {
+    const chain = chains[destinationToken.chainId as keyof typeof chains];
+    const chainName = chain?.name ?? `chain ${destinationToken.chainId}`;
+    throw new Error(
+      `PlanningError: Destination wallet ${destinationWallet} is not connected and no connected wallet has sufficient gas on ${chainName}`,
+    );
+  }
+
+  return sufficient;
+}
+
+/**
  * Batches tokens into groups of maximum size for efficient processing
  *
  * @param tokens - Array of tokens to split into batches
@@ -47,6 +95,7 @@ function batchTokens(tokens: TokenAmount[], maxBatchSize: number): TokenAmount[]
 function validateInputs(
   sourceTokens: TokenAmount[],
   destinationToken: DestinationToken,
+  connectedWallets: readonly Address[],
   log: (...args: unknown[]) => void,
 ): void {
   log("🔍 [DEBUG] planConsolidation called with:", {
@@ -85,6 +134,16 @@ function validateInputs(
 
   if (!SUPPORTED_CHAINS.includes(destinationToken.chainId)) {
     throw new Error(`UnsupportedRouteError: Destination chain ${destinationToken.chainId} is not supported`);
+  }
+
+  const missingSourceWallet = sourceTokens.find(
+    (token) => !connectedWallets.some((wallet) => isAddressEqual(wallet, token.walletAddress)),
+  );
+
+  if (missingSourceWallet) {
+    throw new Error(
+      `PlanningError: Source wallet ${missingSourceWallet.walletAddress} is not among the connected wallets`,
+    );
   }
 }
 
@@ -251,6 +310,7 @@ async function processChainWalletSwaps(
  * @param steps - Previously created swap steps
  * @param tokens - Tokens containing USDC to bridge (from processChainWalletSwaps)
  * @param destinationToken - Final target token and chain
+ * @param intermediateWallet - Wallet to execute the last steps (claim and transfer)
  * @param log - Logging function for debug output
  * @returns Object containing all steps (input + bridge) and bridged USDC tokens on dest chain
  *
@@ -260,6 +320,7 @@ async function createBridgeSteps(
   steps: TransactionStep[],
   tokens: TokenAmount[],
   destinationToken: DestinationToken,
+  intermediateWallet: Address,
   log: (...args: unknown[]) => void,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
   const bridgedTokens: TokenAmount[] = [];
@@ -304,7 +365,7 @@ async function createBridgeSteps(
       token: destChainUSDC,
       amount: amountAfterFee,
       chainId: destinationToken.chainId,
-      walletAddress: destinationToken.walletAddress,
+      walletAddress: intermediateWallet,
       symbol: "USDC",
       decimals: 6,
       provenance: stepId, // Mark this token as coming from this bridge step
@@ -348,12 +409,14 @@ async function createBridgeSteps(
  * @param steps - All steps created so far (includes bridge steps)
  * @param tokens - Bridged USDC tokens on destination chain
  * @param destinationToken - Final target token and chain
+ * @param intermediateWallet - Wallet to execute the last steps (claim and transfer)
  * @returns Object containing all steps (input + attestation + claim) and claim output token
  */
 function createAttestationAndClaimSteps(
   steps: TransactionStep[],
   tokens: TokenAmount[],
   destinationToken: DestinationToken,
+  intermediateWallet: Address,
 ): { steps: TransactionStep[]; tokens: TokenAmount[] } {
   const bridgeSteps = steps.filter((s) => s.type === "bridge");
 
@@ -376,7 +439,7 @@ function createAttestationAndClaimSteps(
       token: destChainUSDC,
       amount: bridgeSteps.reduce((sum, s) => sum + s.outputToken.amount, 0n),
       chainId: destinationToken.chainId,
-      walletAddress: destinationToken.walletAddress,
+      walletAddress: intermediateWallet,
       symbol: "USDC",
       decimals: 6,
     },
@@ -392,7 +455,7 @@ function createAttestationAndClaimSteps(
     token: destChainUSDC,
     amount: totalBridged,
     chainId: destinationToken.chainId,
-    walletAddress: destinationToken.walletAddress,
+    walletAddress: intermediateWallet,
     symbol: "USDC",
     decimals: 6,
     provenance: claimStepId, // Mark this token as coming from this claim step
@@ -596,6 +659,7 @@ async function createFinalSwaps(
  *
  * @param sourceTokens - Array of tokens to consolidate (max 50)
  * @param destinationToken - Final target token and chain for consolidation
+ * @param connectedWallets - Wallets that are available for signing
  * @param log - Optional logging function for debug output
  * @returns Array of transaction steps with dependencies and bundling information
  *
@@ -610,6 +674,7 @@ async function createFinalSwaps(
  *     { token: "0x...", amount: 50n, chainId: 8453, ... },  // USDC on Base
  *   ],
  *   { token: "0x...", chainId: 8453, symbol: "WETH", ... }, // Target: WETH on Base
+ *   [WALLET1, WALLET2], // Wallets that are available for signing
  *   console.log
  * );
  * // Returns: [swap1, swap2, bridge, attestation, claim, finalSwap]
@@ -617,16 +682,23 @@ async function createFinalSwaps(
 export async function planConsolidation(
   sourceTokens: TokenAmount[],
   destinationToken: DestinationToken,
+  connectedWallets: readonly Address[],
   log: (...args: unknown[]) => void = () => {},
 ): Promise<TransactionStep[]> {
   // Validate inputs
-  validateInputs(sourceTokens, destinationToken, log);
-  await ensureSufficientGas(sourceTokens, destinationToken, transports);
+  validateInputs(sourceTokens, destinationToken, connectedWallets, log);
+
+  // Ensure sufficient gas for source wallets and find a suitable intermediate wallet
+  await ensureSufficientGas(
+    sourceTokens.map((token) => [token.chainId, token.walletAddress]),
+    transports,
+  );
+  const intermediateWallet = await resolveIntermediateWallet(sourceTokens, destinationToken, connectedWallets);
 
   // Build consolidation pipeline
   let { steps, tokens } = await processChainWalletSwaps(sourceTokens, destinationToken, log);
-  ({ steps, tokens } = await createBridgeSteps(steps, tokens, destinationToken, log));
-  ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, destinationToken));
+  ({ steps, tokens } = await createBridgeSteps(steps, tokens, destinationToken, intermediateWallet, log));
+  ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, destinationToken, intermediateWallet));
   ({ steps, tokens } = await createFinalSwaps(steps, tokens, destinationToken, log));
 
   // Validate plan constraints

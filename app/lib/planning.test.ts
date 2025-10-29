@@ -7,11 +7,17 @@ import type { TokenAmount, TransactionStep } from "./types";
 vi.mock("./odos");
 vi.mock("./cctp");
 vi.mock("./gas", () => ({
-  ensureSufficientGas: vi.fn().mockResolvedValue(undefined),
+  ensureSufficientGas: vi.fn().mockImplementation((chainWalletPairs, _transports, failOnInsufficientGas) => {
+    if (failOnInsufficientGas) {
+      return Promise.resolve(chainWalletPairs);
+    }
+    return Promise.resolve([]);
+  }),
   getNativeBalance: vi.fn().mockResolvedValue(1000000000000000000n), // 1 ETH
 }));
 
 import { getBridgeFee } from "./cctp";
+import { ensureSufficientGas } from "./gas";
 import { getSwapQuote } from "./odos";
 import { planConsolidation } from "./planning";
 
@@ -49,7 +55,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     });
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     expect(result).toHaveLength(1);
     expect(result[0].type).toBe("swap");
@@ -107,7 +113,7 @@ describe("planConsolidation", () => {
 
     vi.mocked(getBridgeFee).mockResolvedValue(0n);
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // Should have: swap, bridge, bridge, attestation, claim, swap
     expect(result.length).toBeGreaterThanOrEqual(5);
@@ -159,7 +165,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     });
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // First step should be bridge, not swap
     expect(result[0].type).toBe("bridge");
@@ -195,7 +201,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     });
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // Should only have swap, no bridge/attestation/claim
     const types = result.map((s: TransactionStep) => s.type);
@@ -233,7 +239,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     });
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // Check if tokens are split into multiple batches (max 6 per batch)
     const swapSteps = result.filter((s: TransactionStep) => s.type === "swap");
@@ -253,7 +259,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     };
 
-    await expect(planConsolidation(sourceTokens, destinationToken)).rejects.toThrow("PlanningError");
+    await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow("PlanningError");
   });
 
   test("invalid input - unsupported source chain should throw UnsupportedRouteError", async () => {
@@ -276,7 +282,7 @@ describe("planConsolidation", () => {
       decimals: 18,
     };
 
-    await expect(planConsolidation(sourceTokens, destinationToken)).rejects.toThrow("UnsupportedRouteError");
+    await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow("UnsupportedRouteError");
   });
 
   test("invalid input - unsupported destination chain should throw UnsupportedRouteError", async () => {
@@ -299,7 +305,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     };
 
-    await expect(planConsolidation(sourceTokens, destinationToken)).rejects.toThrow("UnsupportedRouteError");
+    await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow("UnsupportedRouteError");
   });
 
   test("API failure - should throw ExternalAPIError", async () => {
@@ -324,7 +330,7 @@ describe("planConsolidation", () => {
 
     vi.mocked(getSwapQuote).mockRejectedValue(new Error("API unavailable"));
 
-    await expect(planConsolidation(sourceTokens, destinationToken)).rejects.toThrow("ExternalAPIError");
+    await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow("ExternalAPIError");
   });
 
   test("same chain WETH to WBTC - should plan direct swap without going through USDC", async () => {
@@ -358,7 +364,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     });
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // Should only have one swap step (WETH -> WBTC directly)
     expect(result).toHaveLength(1);
@@ -425,7 +431,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     });
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET2]);
 
     // Should have 2 separate swap steps (one per wallet)
     const swapSteps = result.filter((s: TransactionStep) => s.type === "swap");
@@ -470,7 +476,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     };
 
-    await expect(planConsolidation(sourceTokens, destinationToken)).rejects.toThrow(
+    await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(
       "PlanningError: Too many source tokens (max 50)",
     );
   });
@@ -495,7 +501,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     };
 
-    await expect(planConsolidation(sourceTokens, destinationToken)).rejects.toThrow(
+    await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(
       "PlanningError: Token amount must be greater than 0",
     );
   });
@@ -520,7 +526,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     };
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // Should have no steps since token is already the destination token
     expect(result).toHaveLength(0);
@@ -548,7 +554,7 @@ describe("planConsolidation", () => {
       decimals: 6,
     };
 
-    const result = await planConsolidation(sourceTokens, destinationToken, logSpy);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET], logSpy);
 
     // Should have no steps since token is already USDC on destination chain
     expect(result).toHaveLength(0);
@@ -612,7 +618,7 @@ describe("planConsolidation", () => {
 
     vi.mocked(getBridgeFee).mockResolvedValue(0n);
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_1, WALLET_2, WALLET_3]);
 
     // Find all bridge steps
     const bridgeSteps = result.filter((s: TransactionStep) => s.type === "bridge");
@@ -686,7 +692,7 @@ describe("planConsolidation", () => {
       decimals: 6,
     });
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     const swapStep = result.find((s) => s.type === "swap");
     expect(swapStep).toBeDefined();
@@ -715,7 +721,7 @@ describe("planConsolidation", () => {
 
     vi.mocked(getBridgeFee).mockResolvedValue(100n);
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     const bridgeStep = result.find((s) => s.type === "bridge");
     expect(bridgeStep).toBeDefined();
@@ -744,7 +750,7 @@ describe("planConsolidation", () => {
 
     vi.mocked(getBridgeFee).mockResolvedValue(100n);
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     const claimStep = result.find((s) => s.type === "claim");
     expect(claimStep).toBeDefined();
@@ -783,7 +789,7 @@ describe("planConsolidation", () => {
 
     vi.mocked(getBridgeFee).mockResolvedValue(1000000n); // 1 USDC fee
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     const swapStep = result.find((s) => s.type === "swap");
     const bridgeStep = result.find((s) => s.type === "bridge");
@@ -817,7 +823,7 @@ describe("planConsolidation", () => {
 
     vi.mocked(getBridgeFee).mockResolvedValue(100n);
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     const bridgeStep = result.find((s) => s.type === "bridge");
 
@@ -848,7 +854,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     };
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2]);
 
     // Should have exactly one transfer step
     expect(result).toHaveLength(1);
@@ -906,7 +912,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     };
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2, WALLET_3]);
 
     // Should have two transfer steps
     const transferSteps = result.filter((s: TransactionStep) => s.type === "transfer");
@@ -972,7 +978,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     });
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2]);
 
     // Should have one swap and one transfer
     const swapSteps = result.filter((s: TransactionStep) => s.type === "swap");
@@ -1027,7 +1033,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     });
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2]);
 
     // Should have exactly one swap step
     expect(result).toHaveLength(1);
@@ -1076,7 +1082,7 @@ describe("planConsolidation", () => {
       decimals: 8,
     });
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2]);
 
     // Find the final swap step (after claim)
     const claimStep = result.find((s: TransactionStep) => s.type === "claim");
@@ -1092,6 +1098,52 @@ describe("planConsolidation", () => {
     // CRITICAL: Verify final swap output goes to DESTINATION wallet
     expect(finalSwap?.outputToken.walletAddress).toBe(WALLET);
     expect(finalSwap?.outputToken.token).toBe(WBTC_ADDRESS);
+  });
+
+  test("bridge to non-connected destination wallet - should add post-claim transfer", async () => {
+    const NON_CONNECTED_WALLET = "0x4444444444444444444444444444444444444444" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: USDC_ADDRESS,
+        amount: 2000000n,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+
+    const destinationToken = {
+      token: USDC_OPTIMISM,
+      chainId: 10,
+      walletAddress: NON_CONNECTED_WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    };
+
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+    const bridgeStep = result.find((s: TransactionStep) => s.type === "bridge");
+    const claimStep = result.find((s: TransactionStep) => s.type === "claim");
+    const transferStep = result.find(
+      (s: TransactionStep) => s.type === "transfer" && s.outputToken.walletAddress === NON_CONNECTED_WALLET,
+    );
+
+    expect(bridgeStep).toBeDefined();
+    expect(claimStep).toBeDefined();
+    expect(transferStep).toBeDefined();
+
+    if (!bridgeStep || !claimStep || !transferStep) {
+      return;
+    }
+
+    expect(bridgeStep.outputToken.walletAddress).toBe(WALLET);
+    expect(claimStep.outputToken.walletAddress).toBe(WALLET);
+    expect(transferStep.inputTokens[0].walletAddress).toBe(WALLET);
+    expect(transferStep.dependsOn).toContain(claimStep.id);
   });
 
   test("swap before bridge - should output to SOURCE wallet (not destination wallet)", async () => {
@@ -1139,7 +1191,7 @@ describe("planConsolidation", () => {
 
     vi.mocked(getBridgeFee).mockResolvedValue(0n);
 
-    const result = await planConsolidation(sourceTokens, destinationToken);
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2]);
 
     // Find the swap step BEFORE bridge (swap POL to USDC on Polygon)
     const swapBeforeBridge = result.find((s: TransactionStep) => s.type === "swap" && s.chainId === 137);
@@ -1159,5 +1211,45 @@ describe("planConsolidation", () => {
 
     // Bridge output should go to destination wallet
     expect(bridgeStep?.outputToken.walletAddress).toBe(WALLET);
+  });
+
+  test("no connected wallet has gas on destination chain - should throw PlanningError", async () => {
+    const NON_CONNECTED_WALLET = "0x4444444444444444444444444444444444444444" as Address;
+    const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: USDC_OPTIMISM,
+        amount: 1000000n,
+        chainId: 10, // Optimism
+        walletAddress: WALLET_2,
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1, // Ethereum
+      walletAddress: NON_CONNECTED_WALLET, // Not in connected wallets
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    // Mock ensureSufficientGas to return that ALL connected wallets have insufficient gas on Ethereum (chain 1)
+    // This includes the first call (validation) and second call (finding fallback wallet)
+    vi.mocked(ensureSufficientGas)
+      .mockResolvedValueOnce([]) // First call for source chains
+      .mockResolvedValueOnce([
+        [1, WALLET_2], // WALLET_2 has insufficient gas on Ethereum
+        [1, WALLET], // WALLET has insufficient gas on Ethereum
+      ]);
+
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+    // Should throw error because destination wallet is not connected and no connected wallet has gas
+    await expect(planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2])).rejects.toThrow(
+      "PlanningError: Destination wallet 0x4444444444444444444444444444444444444444 is not connected and no connected wallet has sufficient gas on Ethereum",
+    );
   });
 });

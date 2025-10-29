@@ -111,12 +111,17 @@ describe("gas", () => {
         decimals: 18,
       };
 
+      const chainAddresses = [
+        ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
+        [tokenOut.chainId, tokenOut.walletAddress],
+      ] as [number, Address][];
+
       const transports = {
         [mainnet.id]: {} as Transport,
         [optimism.id]: {} as Transport,
       };
 
-      await expect(ensureSufficientGas(tokensIn, tokenOut, transports)).resolves.not.toThrow();
+      await expect(ensureSufficientGas(chainAddresses, transports)).resolves.not.toThrow();
     });
 
     test("should throw when source wallet has insufficient gas", async () => {
@@ -147,11 +152,16 @@ describe("gas", () => {
         decimals: 18,
       };
 
+      const chainAddresses = [
+        ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
+        [tokenOut.chainId, tokenOut.walletAddress],
+      ] as [number, Address][];
+
       const transports = {
         [mainnet.id]: {} as Transport,
       };
 
-      await expect(ensureSufficientGas(tokensIn, tokenOut, transports)).rejects.toThrow("Insufficient gas on");
+      await expect(ensureSufficientGas(chainAddresses, transports)).rejects.toThrow("Insufficient gas on");
     });
 
     test("should throw when destination wallet has insufficient gas", async () => {
@@ -192,14 +202,68 @@ describe("gas", () => {
         decimals: 18,
       };
 
+      const chainAddresses = [
+        ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
+        [tokenOut.chainId, tokenOut.walletAddress],
+      ] as [number, Address][];
+
       const transports = {
         [mainnet.id]: {} as Transport,
         [optimism.id]: {} as Transport,
       };
 
-      await expect(ensureSufficientGas(tokensIn, tokenOut, transports)).rejects.toThrow(
-        "Insufficient gas on OP Mainnet",
-      );
+      await expect(ensureSufficientGas(chainAddresses, transports)).rejects.toThrow("Insufficient gas on OP Mainnet");
+    });
+
+    test("should return failing chains and wallets when requested", async () => {
+      mockGetGasThresholdForChain.mockReturnValue("0.5");
+
+      let invocation = 0;
+      const mockGetBalance = vi.fn().mockImplementation(() => {
+        invocation++;
+        if (invocation === 1) {
+          return Promise.resolve(parseUnits("1", 18));
+        }
+        return Promise.resolve(parseUnits("0.1", 18));
+      });
+
+      mockGetPublicClient.mockReturnValue({
+        getBalance: mockGetBalance,
+      } as Partial<PublicClient> as PublicClient);
+
+      const tokensIn: TokenAmount[] = [
+        {
+          chainId: mainnet.id,
+          walletAddress: "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address,
+          token: "0x0000000000000000000000000000000000000000" as Address,
+          amount: parseUnits("100", 18),
+          symbol: "ETH",
+          decimals: 18,
+        },
+      ];
+
+      const tokenOut: TokenAmount = {
+        chainId: optimism.id,
+        walletAddress: "0x19afE793Fb51902883F68f06685aE5277aF13857" as Address,
+        token: "0x0000000000000000000000000000000000000000" as Address,
+        amount: parseUnits("100", 18),
+        symbol: "ETH",
+        decimals: 18,
+      };
+
+      const chainAddresses = [
+        ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
+        [tokenOut.chainId, tokenOut.walletAddress],
+      ] as [number, Address][];
+
+      const transports = {
+        [mainnet.id]: {} as Transport,
+        [optimism.id]: {} as Transport,
+      };
+
+      const insufficient = await ensureSufficientGas(chainAddresses, transports, false);
+
+      expect(insufficient).toEqual([[tokenOut.chainId, tokenOut.walletAddress]]);
     });
 
     test("should deduplicate checks for same chain and wallet", async () => {
@@ -240,12 +304,17 @@ describe("gas", () => {
         decimals: 18,
       };
 
+      const chainAddresses = [
+        ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
+        [tokenOut.chainId, tokenOut.walletAddress],
+      ] as [number, Address][];
+
       const transports = {
         [mainnet.id]: {} as Transport,
         [optimism.id]: {} as Transport,
       };
 
-      await ensureSufficientGas(tokensIn, tokenOut, transports);
+      await ensureSufficientGas(chainAddresses, transports);
 
       // Should only check balance twice: once for mainnet address, once for optimism address
       expect(mockGetBalance).toHaveBeenCalledTimes(2);
@@ -281,11 +350,16 @@ describe("gas", () => {
         decimals: 18,
       };
 
+      const chainAddresses = [
+        ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
+        [tokenOut.chainId, tokenOut.walletAddress],
+      ] as [number, Address][];
+
       const transports = {
         [mainnet.id]: {} as Transport,
       };
 
-      await ensureSufficientGas(tokensIn, tokenOut, transports);
+      await ensureSufficientGas(chainAddresses, transports);
 
       // Should only check once since same chain+address
       expect(mockGetBalance).toHaveBeenCalledTimes(1);
@@ -327,6 +401,11 @@ describe("gas", () => {
         decimals: 18,
       };
 
+      const chainAddresses = [
+        ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
+        [tokenOut.chainId, tokenOut.walletAddress],
+      ] as [number, Address][];
+
       const transports = {
         [mainnet.id]: {} as Transport,
         [optimism.id]: {} as Transport,
@@ -334,7 +413,7 @@ describe("gas", () => {
       };
 
       try {
-        await ensureSufficientGas(tokensIn, tokenOut, transports);
+        await ensureSufficientGas(chainAddresses, transports);
         expect.fail("Should have thrown an error");
       } catch (error) {
         const errorMessage = (error as Error).message;
@@ -374,12 +453,17 @@ describe("gas", () => {
         decimals: 18,
       };
 
+      const chainAddresses = [
+        ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
+        [tokenOut.chainId, tokenOut.walletAddress],
+      ] as [number, Address][];
+
       const transports = {
         [mainnet.id]: {} as Transport,
       };
 
       try {
-        await ensureSufficientGas(tokensIn, tokenOut, transports);
+        await ensureSufficientGas(chainAddresses, transports);
         expect.fail("Should have thrown an error");
       } catch (error) {
         const errorMessage = (error as Error).message;
@@ -424,12 +508,17 @@ describe("gas", () => {
         decimals: 18,
       };
 
+      const chainAddresses = [
+        ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
+        [tokenOut.chainId, tokenOut.walletAddress],
+      ] as [number, Address][];
+
       const transports = {
         [mainnet.id]: {} as Transport,
         [optimism.id]: {} as Transport,
       };
 
-      await ensureSufficientGas(tokensIn, tokenOut, transports);
+      await ensureSufficientGas(chainAddresses, transports);
 
       // Should deduplicate by lowercase address
       expect(mockGetBalance).toHaveBeenCalledTimes(2);

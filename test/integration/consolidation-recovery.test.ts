@@ -99,7 +99,7 @@ describe("Scenario 8: Browser Recovery", () => {
     };
 
     // Generate plan
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     const state: ConsolidationState = {
       id: "recovery-test-1",
@@ -146,7 +146,7 @@ describe("Scenario 8: Browser Recovery", () => {
         decimals: 8,
     };
 
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // Simulate a failed state
     const state: ConsolidationState = {
@@ -228,8 +228,8 @@ describe("Scenario 8: Browser Recovery", () => {
         decimals: 8,
     };
 
-    const plan1 = await planConsolidation(sourceTokens1, destinationToken);
-    const plan2 = await planConsolidation(sourceTokens2, destinationToken);
+    const plan1 = await planConsolidation(sourceTokens1, destinationToken, [WALLET]);
+    const plan2 = await planConsolidation(sourceTokens2, destinationToken, [WALLET]);
 
     const state1: ConsolidationState = {
       id: "consolidation-1",
@@ -286,7 +286,7 @@ describe("Scenario 8: Browser Recovery", () => {
         decimals: 8,
     };
 
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // Create incomplete consolidation
     const incompleteState: ConsolidationState = {
@@ -339,7 +339,7 @@ describe("Scenario 8: Browser Recovery", () => {
         decimals: 8,
     };
 
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // Create completed consolidation
     const completedState: ConsolidationState = {
@@ -383,7 +383,7 @@ describe("Scenario 8: Browser Recovery", () => {
         decimals: 6,
     };
 
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     const state: ConsolidationState = {
       id: "persistence-test",

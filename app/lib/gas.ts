@@ -1,8 +1,7 @@
-import { type Address, type Chain, formatUnits, parseUnits, type Transport } from "viem";
+import { type Address, type Chain, formatUnits, getAddress, parseUnits, type Transport } from "viem";
 import { getGasThresholdForChain } from "~/data/gas-thresholds";
 import { chains } from "~/data/supported-chains";
 import { getPublicClient, retryOnRateLimit } from "./public-client";
-import type { TokenAmount } from "./types";
 
 export async function getNativeBalance(chain: Chain, address: Address, transport?: Transport): Promise<bigint> {
   const client = getPublicClient(chain.id, transport);
@@ -10,31 +9,17 @@ export async function getNativeBalance(chain: Chain, address: Address, transport
 }
 
 export async function ensureSufficientGas(
-  tokensIn: TokenAmount[],
-  tokenOut: Omit<TokenAmount, "amount">,
+  chainAddresses: [number, Address][],
   transports?: Record<number, Transport>,
-): Promise<void> {
-  // Check per (chainId, walletAddress) pair among sources, plus destination pair
-  type Pair = { chainId: number; address: Address };
-  const toKey = (p: Pair) => `${p.chainId}:${p.address.toLowerCase()}`;
-  const pairsMap = new Map<string, Pair>();
-  for (const t of tokensIn) {
-    const key = toKey({ chainId: t.chainId, address: t.walletAddress });
-    if (!pairsMap.has(key)) pairsMap.set(key, { chainId: t.chainId, address: t.walletAddress });
-  }
-  const destKey = toKey({
-    chainId: tokenOut.chainId,
-    address: tokenOut.walletAddress,
-  });
-  if (!pairsMap.has(destKey)) {
-    pairsMap.set(destKey, {
-      chainId: tokenOut.chainId,
-      address: tokenOut.walletAddress,
-    });
-  }
-
-  const insufficients: string[] = [];
-  for (const { chainId, address } of pairsMap.values()) {
+  failOnInsufficientGas: boolean = true,
+): Promise<[number, Address][]> {
+  const deduplicated = [...new Set(chainAddresses.map(([chainId, address]) => `${chainId}:${getAddress(address)}`))];
+  const insufficients: [number, Address, string, string][] = [];
+  for (const chainAddress of deduplicated) {
+    const [chainId, address] = chainAddress.split(":").map((v, i) => (i === 0 ? Number(v) : getAddress(v))) as [
+      number,
+      Address,
+    ];
     const thresholdStr = getGasThresholdForChain(chainId);
     const thresholdWei = parseUnits(thresholdStr, 18);
     const balanceWei = await getNativeBalance(
@@ -43,17 +28,20 @@ export async function ensureSufficientGas(
       transports?.[chainId as keyof typeof transports],
     );
     if (balanceWei < thresholdWei) {
-      const chain = chains[chainId as keyof typeof chains] as Chain;
-      const [chainName, symbol] = [chain.name, chain.nativeCurrency.symbol];
       const human = formatUnits(balanceWei, 18);
-      insufficients.push(
-        `Insufficient gas on ${chainName} for ${address}. Balance ${human} ${symbol} < required ${thresholdStr} ${symbol}. Please top up at https://gas.zip`,
-      );
+      insufficients.push([chainId, address, human, thresholdStr]);
     }
   }
 
-  if (insufficients.length > 0) {
-    const message = insufficients.join("; ");
+  if (failOnInsufficientGas && insufficients.length > 0) {
+    const message = insufficients
+      .map(([chainId, address, human, thresholdStr]) => {
+        const chain = chains[chainId as keyof typeof chains] as Chain;
+        const [chainName, symbol] = [chain.name, chain.nativeCurrency.symbol];
+        return `Insufficient gas on ${chainName} for ${address}. Balance ${human} ${symbol} < required ${thresholdStr} ${symbol}. Please top up at https://gas.zip.`;
+      })
+      .join("\n");
     throw new Error(message);
   }
+  return insufficients.map(([chainId, address]) => [chainId, address]);
 }

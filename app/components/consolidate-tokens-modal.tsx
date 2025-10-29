@@ -59,8 +59,6 @@ export function ConsolidateTokensModal({
       });
   }, [rowSelection, walletData, tokenAmounts]);
 
-  const { addresses } = useAccount();
-
   // Derive sourceTokens from consolidatedTokens and other state
   const sourceTokens = React.useMemo<SourceToken[]>(() => {
     if (currentStage !== 3) return [];
@@ -82,12 +80,10 @@ export function ConsolidateTokensModal({
 
   // Derive destinationToken from form state
   const destinationToken = React.useMemo<DestinationToken | undefined>(() => {
-    if (currentStage !== 3 || !isAddress(destination.walletAddress ?? "") || !destination.chainId || !addresses)
-      return undefined;
+    if (currentStage !== 3 || !isAddress(destination.walletAddress ?? "") || !destination.chainId) return undefined;
 
     const sendTo = getAddress(destination.walletAddress ?? "");
     if (sourceTokens.length === 0) return undefined;
-    const intermediateWallet = addresses.includes(sendTo) ? sendTo : sourceTokens[0].walletAddress;
     const tokenInfo = destination.tokenInfo;
 
     if (!tokenInfo || !isAddress(tokenInfo.address)) return undefined;
@@ -95,11 +91,11 @@ export function ConsolidateTokensModal({
     return {
       token: getAddress(tokenInfo.address),
       chainId: destination.chainId,
-      walletAddress: intermediateWallet,
+      walletAddress: sendTo,
       symbol: tokenInfo.symbol,
       decimals: tokenInfo.decimals,
     };
-  }, [currentStage, destination, addresses, sourceTokens]);
+  }, [currentStage, destination, sourceTokens]);
 
   // Calculate actual total value based on selected amounts
   const actualTotalToConsolidate = React.useMemo(() => {

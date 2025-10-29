@@ -89,7 +89,7 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     const destinationToken = makeToken(WBTC_ADDRESS, 0n, 1, { symbol: "WBTC", decimals: 8 });
 
     // Generate plan
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // Expected steps:
     // 1. Swap USDT -> USDC (Optimism)
@@ -217,7 +217,7 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
         decimals: 6,
     };
 
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // Force the first swap (USDT on Optimism) to fail
     vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async () => {
@@ -277,7 +277,7 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
         decimals: 8,
     };
 
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
     
     const bridges = plan.filter((s) => s.type === "bridge");
     const optimismBridge = bridges.find((b) => b.chainId === 10);
@@ -350,7 +350,7 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
         decimals: 6,
     };
 
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     const swapStep = plan.find((s) => s.type === "swap");
     const bridgeStep = plan.find((s) => s.type === "bridge");

@@ -105,7 +105,7 @@ describe("Scenario: Multi-Bridge Claim Amount Aggregation", () => {
     };
 
     // Step 2: Generate plan
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     console.log("\n=== Initial Plan ===");
     for (const step of plan) {
@@ -199,7 +199,7 @@ describe("Scenario: Multi-Bridge Claim Amount Aggregation", () => {
       decimals: 6,
     };
 
-    const plan = await planConsolidation(sourceTokens, destinationToken);
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     const bridgeSteps = plan.filter((s) => s.type === "bridge");
     const claimStep = plan.find((s) => s.type === "claim");

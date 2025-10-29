@@ -61,7 +61,9 @@ describe("gas", () => {
 
   describe("ensureSufficientGas", () => {
     test("should not throw an error if the gas is sufficient", async () => {
-      await expect(ensureSufficientGas(tokensIn, tokenOut, transports)).resolves.not.toThrow();
+      const chainAddresses = tokensIn.map((token) => [token.chainId, token.walletAddress]) as [number, Address][];
+      chainAddresses.push([tokenOut.chainId, tokenOut.walletAddress]);
+      await expect(ensureSufficientGas(chainAddresses, transports)).resolves.not.toThrow();
     });
   });
 });
