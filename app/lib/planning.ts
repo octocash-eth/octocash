@@ -637,13 +637,14 @@ async function createFinalTransfer(
   destinationToken: DestinationToken,
   log: (...args: unknown[]) => void,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
-  if (tokens.length !== 1) {
-    throw new Error("PlanningError: Final transfer step must have exactly one token");
+  const consolidatedTokens = groupTokensByChainAndWallet(tokens, true);
+  if (consolidatedTokens.length !== 1 || consolidatedTokens[0].length !== 1) {
+    throw new Error("PlanningError: Final transfer step must have exactly one token in the same wallet and chain");
   }
 
-  const token = tokens[0];
+  const token = consolidatedTokens[0][0];
   const stepId = `step-${steps.length + 1}`;
-  const previousStepId = steps[steps.length - 1].id;
+  const previousStepId = steps.length > 0 ? steps[steps.length - 1].id : undefined;
 
   const transferOutput: TokenAmount = {
     ...token,
@@ -658,7 +659,7 @@ async function createFinalTransfer(
     chainId: destinationToken.chainId,
     inputTokens: [token],
     outputToken: transferOutput,
-    dependsOn: [previousStepId],
+    dependsOn: previousStepId ? [previousStepId] : [],
     partialDependency: false,
   });
 
@@ -736,7 +737,7 @@ export async function planConsolidation(
   ({ steps, tokens } = await createBridgeSteps(steps, tokens, intermediateToken, log));
   ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, intermediateToken));
   ({ steps, tokens } = await createFinalSwaps(steps, tokens, intermediateToken, log));
-  if (intermediateWallet !== destinationToken.walletAddress) {
+  if (!isAddressEqual(intermediateWallet, destinationToken.walletAddress)) {
     ({ steps, tokens } = await createFinalTransfer(steps, tokens, destinationToken, log));
   }
 

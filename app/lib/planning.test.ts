@@ -1575,4 +1575,152 @@ describe("planConsolidation", () => {
       "PlanningError: Destination wallet 0x4444444444444444444444444444444444444444 is not connected and no connected wallet has sufficient gas on Ethereum",
     );
   });
+
+  test("simple transfer to non-connected wallet - same chain same token", async () => {
+    const NON_CONNECTED_WALLET = "0x4444444444444444444444444444444444444444" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: WBTC_ADDRESS,
+        amount: 10000000n, // 0.1 WBTC
+        chainId: 1, // Ethereum
+        walletAddress: WALLET, // From connected wallet
+        symbol: "WBTC",
+        decimals: 8,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1, // Ethereum (same chain)
+      walletAddress: NON_CONNECTED_WALLET, // Non-connected wallet
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+    // Should have exactly one transfer step
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe("transfer");
+
+    // Verify transfer step details
+    const transferStep = result[0];
+    expect(transferStep.chainId).toBe(1);
+    expect(transferStep.inputTokens).toHaveLength(1);
+    expect(transferStep.inputTokens[0].walletAddress).toBe(WALLET);
+    expect(transferStep.inputTokens[0].token).toBe(WBTC_ADDRESS);
+    expect(transferStep.inputTokens[0].amount).toBe(10000000n);
+
+    // Output should be at non-connected wallet
+    expect(transferStep.outputToken.walletAddress).toBe(NON_CONNECTED_WALLET);
+    expect(transferStep.outputToken.token).toBe(WBTC_ADDRESS);
+    expect(transferStep.outputToken.amount).toBe(10000000n);
+
+    // No swap calls should be made
+    expect(getSwapQuote).not.toHaveBeenCalled();
+  });
+
+  test("complex: bridge + swap, transfer from different wallet, final transfer to non-connected wallet", async () => {
+    const NON_CONNECTED_WALLET = "0x4444444444444444444444444444444444444444" as Address;
+    const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+    const WALLET_3 = "0x3333333333333333333333333333333333333333" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: USDC_OPTIMISM, // USDC on Optimism
+        amount: 1000000n, // 1 USDC
+        chainId: 10, // Optimism
+        walletAddress: WALLET_2, // From wallet 2
+        symbol: "USDC",
+        decimals: 6,
+      },
+      {
+        token: WBTC_ADDRESS, // WBTC on Ethereum (destination chain)
+        amount: 5000000n, // 0.05 WBTC already at destination chain/token but wrong wallet
+        chainId: 1, // Ethereum
+        walletAddress: WALLET_3, // From wallet 3
+        symbol: "WBTC",
+        decimals: 8,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1, // Ethereum
+      walletAddress: NON_CONNECTED_WALLET, // Non-connected wallet
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+    // Mock swap USDC -> WBTC on Ethereum
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: WBTC_ADDRESS,
+      amount: 8000n, // 0.00008 WBTC
+      chainId: 1,
+      walletAddress: WALLET_2, // Intermediate wallet (first source wallet)
+      symbol: "WBTC",
+      decimals: 8,
+    });
+
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2, WALLET_3]);
+
+    // Find all step types
+    const bridgeStep = result.find((s: TransactionStep) => s.type === "bridge");
+    const attestationStep = result.find((s: TransactionStep) => s.type === "attestation");
+    const claimStep = result.find((s: TransactionStep) => s.type === "claim");
+    const swapStep = result.find((s: TransactionStep) => s.type === "swap");
+    const transferSteps = result.filter((s: TransactionStep) => s.type === "transfer");
+
+    // Verify all expected steps exist
+    expect(bridgeStep).toBeDefined();
+    expect(attestationStep).toBeDefined();
+    expect(claimStep).toBeDefined();
+    expect(swapStep).toBeDefined();
+    expect(transferSteps.length).toBe(2); // One for WBTC from WALLET_3 to WALLET_2, one for final transfer to NON_CONNECTED_WALLET
+
+    if (!bridgeStep || !claimStep || !swapStep) {
+      return;
+    }
+
+    // Verify bridge step (USDC from Optimism to Ethereum)
+    expect(bridgeStep.chainId).toBe(10); // Bridge happens on source chain
+    expect(bridgeStep.inputTokens[0].walletAddress).toBe(WALLET_2);
+    expect(bridgeStep.inputTokens[0].token).toBe(USDC_OPTIMISM);
+    expect(bridgeStep.outputToken.walletAddress).toBe(WALLET_2); // Bridge to intermediate wallet (first source wallet)
+
+    // Verify swap step (USDC -> WBTC after claim)
+    expect(swapStep.chainId).toBe(1);
+    expect(swapStep.inputTokens[0].symbol).toBe("USDC");
+    expect(swapStep.outputToken.token).toBe(WBTC_ADDRESS);
+    expect(swapStep.outputToken.walletAddress).toBe(WALLET_2); // Swap outputs to intermediate wallet (first source wallet)
+    expect(swapStep.dependsOn).toContain(claimStep.id); // Swap depends on claim
+
+    // Find the transfer steps
+    const wallet3Transfer = transferSteps.find((s: TransactionStep) => s.inputTokens[0].walletAddress === WALLET_3);
+    const finalTransfer = transferSteps.find(
+      (s: TransactionStep) => s.outputToken.walletAddress === NON_CONNECTED_WALLET,
+    );
+
+    // Verify transfer from WALLET_3 to WALLET_2 (consolidating WBTC at intermediate wallet)
+    expect(wallet3Transfer).toBeDefined();
+    if (wallet3Transfer) {
+      expect(wallet3Transfer.inputTokens[0].token).toBe(WBTC_ADDRESS);
+      expect(wallet3Transfer.inputTokens[0].amount).toBe(5000000n);
+      expect(wallet3Transfer.outputToken.walletAddress).toBe(WALLET_2);
+      expect(wallet3Transfer.dependsOn).toContain(claimStep.id); // Transfer depends on claim
+    }
+
+    // Verify final transfer to non-connected wallet
+    expect(finalTransfer).toBeDefined();
+    if (finalTransfer) {
+      expect(finalTransfer.inputTokens[0].walletAddress).toBe(WALLET_2);
+      expect(finalTransfer.inputTokens[0].token).toBe(WBTC_ADDRESS);
+      expect(finalTransfer.outputToken.walletAddress).toBe(NON_CONNECTED_WALLET);
+      // Final transfer depends on previous steps
+      expect(finalTransfer.dependsOn.length).toBeGreaterThan(0);
+    }
+  });
 });
