@@ -12,7 +12,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { Coins, Link, RotateCcw, Wallet } from "lucide-react";
+import { Coins, Link, RotateCw, Wallet } from "lucide-react";
 import * as React from "react";
 import { supportedChains } from "~/data/supported-chains";
 import { ChainIcon } from "../chain-icon";
@@ -158,6 +158,7 @@ export function DataTable<TData extends object, TValue>({
     getFilteredRowModel: getFilteredRowModel(),
     onColumnVisibilityChange: setColumnVisibility,
     onRowSelectionChange: setRowSelection,
+    enableRowSelection: true,
     state: {
       sorting,
       columnFilters,
@@ -173,7 +174,7 @@ export function DataTable<TData extends object, TValue>({
         <WalletTableFilters setColumnFilters={setColumnFilters} filterConfigs={filterConfigs} />
         {onRefresh ? (
           <Button variant="outline" size="icon" onClick={onRefresh} className="ml-auto" disabled={isRefreshing}>
-            <RotateCcw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+            <RotateCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
             <span className="sr-only">Refresh table data</span>
           </Button>
         ) : null}
@@ -185,6 +186,12 @@ export function DataTable<TData extends object, TValue>({
         isLoading={isRefreshing}
         loadingMode="skeleton"
         emptyMessage="No tokens found"
+        onRowClick={(rowData) => {
+          const row = table.getRowModel().rows.find((r) => r.original === rowData);
+          if (row) {
+            row.toggleSelected();
+          }
+        }}
         tableLayout={{
           headerSticky: true,
           headerBackground: false,
@@ -192,6 +199,9 @@ export function DataTable<TData extends object, TValue>({
           cellBorder: false,
           rowBorder: false,
           width: "fixed",
+        }}
+        tableClassNames={{
+          bodyRow: "cursor-default",
         }}
       >
         <DataGridContainer>
