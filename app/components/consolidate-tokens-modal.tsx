@@ -242,7 +242,7 @@ export function ConsolidateTokensModal({
                   disabled={!canNavigateToStage(stageNumber)}
                 >
                   <StepperTrigger className="flex flex-col items-start justify-center gap-3.5 grow">
-                    <StepperIndicator className="bg-border rounded-full h-1 w-full data-[state=active]:bg-primary data-[state=completed]:bg-primary" />
+                    <StepperIndicator className="bg-border rounded-full h-1 w-full data-[state=active]:bg-secondary/80 data-[state=completed]:bg-secondary/50" />
                     <div className="flex flex-col items-start gap-1">
                       <StepperTitle className="text-start font-semibold group-data-[state=inactive]/step:text-muted-foreground">
                         {stage.title}

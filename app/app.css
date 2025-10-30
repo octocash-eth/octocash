@@ -189,7 +189,7 @@ body {
 
 .dark {
   --radius: 0.625rem;
-  --background: var(--color-violet-800);
+  --background: var(--color-violet-700);
   --foreground: var(--color-white);
   --card: var(--color-violet-800);
   --card-foreground: var(--color-white);
@@ -197,7 +197,7 @@ body {
   --popover-foreground: var(--color-white);
   --primary: var(--color-pink-500);
   --primary-foreground: var(--color-violet-800);
-  --secondary: var(--color-pink-500);
+  --secondary: var(--color-purple-500);
   --secondary-foreground: var(--color-white);
   --muted: var(--color-violet-700);
   --muted-foreground: var(--color-purple-100);
@@ -208,8 +208,8 @@ body {
   --destructive-shadow: var(--color-red-900);
   --destructive-hover: var(--color-red-600);
   --destructive-hover-foreground: var(--color-white);
-  --border: var(--color-violet-700);
-  --input: var(--color-violet-700);
+  --border: var(--color-violet-500);
+  --input: var(--color-violet-300);
   --ring: var(--color-pink-500);
   --chart-1: var(--color-orange-400);
   --chart-2: var(--color-teal-400);
@@ -225,7 +225,7 @@ body {
   --sidebar-border: var(--color-violet-700);
   --sidebar-ring: var(--color-pink-500);
   --shadow-button: 3px 3px 0 0 var(--color-pink-500);
-  --shadow-button-active: inset 0 4px 4px 0 color-mix(in srgb, var(--color-pink-500) 30%, transparent);
+  --shadow-button-active: inset 0 4px 4px 0 color-mix(in srgb, var(--color-purple-900) 70%, transparent);
   --shadow-button-destructive: 3px 3px 0 0 var(--color-destructive-shadow);
   --color-button-primary: var(--color-violet-500);
   --color-button-primary-foreground: var(--color-pink-500);

@@ -6,7 +6,7 @@ import type * as React from "react";
 import { cn } from "~/lib/utils";
 
 const defaultButtonStyles =
-  "border border-border-button shadow-button disabled:shadow-none active:shadow-button-active text-button-primary-foreground hover:bg-primary/90 hover:text-primary-foreground";
+  "border border-border-button shadow-button disabled:shadow-none active:shadow-button-active text-button-primary-foreground hover:bg-primary/90 hover:text-primary-foreground dark:hover:text-white";
 
 const buttonVariants = cva(
   "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive",
@@ -17,7 +17,7 @@ const buttonVariants = cva(
         destructive: `${defaultButtonStyles} shadow-button-destructive bg-destructive border-destructive-shadow text-destructive-foreground hover:bg-destructive-hover hover:text-destructive-hover-foreground`,
         outline: `${defaultButtonStyles} shadow-none`,
         secondary: `${defaultButtonStyles} text-button-secondary-foreground bg-button-secondary hover:bg-accent hover:text-button-secondary-foreground`,
-        ghost: `${defaultButtonStyles} bg-transparent border-transparent shadow-none dark:hover:bg-accent/50 dark:hover:text-button-secondary-foreground`,
+        ghost: `${defaultButtonStyles} bg-transparent border-transparent shadow-none active:shadow-none dark:hover:bg-accent/50 dark:hover:text-button-secondary-foreground`,
         link: `text-button-link-foreground hover:text-button-link-hover-foreground active:text-button-link-active-foreground`,
       },
       size: {
