@@ -1,0 +1,8 @@
+# Robots.txt for OctoCash
+User-agent: *
+Allow: /
+
+# Exclude dashboard and history from indexing (user-specific pages)
+Disallow: /dashboard
+Disallow: /history
+Disallow: /mock

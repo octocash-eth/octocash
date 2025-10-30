@@ -41,6 +41,17 @@ export default function App() {
   );
 }
 
+// HydrateFallback for SEO - shows static content while JavaScript loads
+export function HydrateFallback() {
+  return (
+    <ThemeProvider storageKey="theme" defaultTheme="light">
+      <WalletProvider>
+        <Outlet />
+      </WalletProvider>
+    </ThemeProvider>
+  );
+}
+
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   let message = "Oops!";
   let details = "An unexpected error occurred.";
