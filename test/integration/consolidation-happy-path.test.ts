@@ -124,16 +124,14 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
     expect(bridgeSteps.length).toBeGreaterThanOrEqual(2);
     expect(bridgeSteps.every((s) => s.status === "pending")).toBe(true);
 
-    // Verify attestation step has partial dependency
+    // Verify attestation step has inputs from multiple bridges
     const attestationStep = plan.find((s) => s.type === "attestation");
-    expect(attestationStep?.partialDependency).toBe(true);
-    expect(attestationStep?.dependsOn.length).toBeGreaterThanOrEqual(2);
+    expect(attestationStep?.inputTokens.length).toBeGreaterThanOrEqual(2);
 
     // Verify claim step
     const claimStep = plan.find((s) => s.type === "claim");
     expect(claimStep).toBeDefined();
     expect(claimStep?.chainId).toBe(1); // Ethereum
-    expect(claimStep?.partialDependency).toBe(true);
 
     // Verify final swap to WBTC
     const finalSwap = plan.find(
@@ -241,14 +239,18 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
     // In our mock, actual = estimated, but in real scenario they might differ
     expect(actualAmount).toBeGreaterThan(0n);
 
-    // Verify subsequent steps use actual amount, not estimated
-    if (plan.length > 1) {
-      const dependentStep = plan.find((s) => s.dependsOn.includes(swapStep!.id));
-      if (dependentStep) {
-        const updatedDependentStep = executedState.plan.find((s) => s.id === dependentStep.id);
-        expect(updatedDependentStep?.inputTokens[0].amount).toBe(actualAmount);
-      }
-    }
+    // Verify subsequent steps use actual amount, not estimated (via provenance)
+    const dependentStep = plan.find((s) => 
+      s.inputTokens.some(token => token.provenance === swapStep!.id)
+    );
+    expect(dependentStep).toBeDefined(); // Assert provenance chain exists
+
+    const updatedDependentStep = executedState.plan.find((s) => s.id === dependentStep!.id);
+    expect(updatedDependentStep).toBeDefined();
+
+    const inputFromSwap = updatedDependentStep!.inputTokens.find(t => t.provenance === swapStep!.id);
+    expect(inputFromSwap).toBeDefined(); // Assert provenance-tagged token exists
+    expect(inputFromSwap!.amount).toBe(actualAmount);
   });
 
   test("verify transaction cards show correct states during execution", async () => {

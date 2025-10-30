@@ -87,7 +87,6 @@ Generates a dynamic transaction plan to consolidate multiple source tokens into 
     chainId: 137, // Polygon
     inputTokens: [{ token: ETH_ADDRESS, amount: 0.2e18, ... }],
     outputToken: { token: USDC_ADDRESS, amount: 800e6, ... }, // estimated
-    dependsOn: [],
     partialDependency: false
   },
   {
@@ -96,7 +95,6 @@ Generates a dynamic transaction plan to consolidate multiple source tokens into 
     chainId: 10, // Optimism
     inputTokens: [{ token: USDC_ADDRESS, amount: 1e6, ... }],
     outputToken: { token: USDC_ADDRESS, amount: 1e6, chainId: 1, ... }, // Ethereum
-    dependsOn: [],
     partialDependency: false
   },
   {
@@ -105,7 +103,6 @@ Generates a dynamic transaction plan to consolidate multiple source tokens into 
     chainId: 137, // Polygon
     inputTokens: [{ token: USDC_ADDRESS, amount: 800e6, ... }],
     outputToken: { token: USDC_ADDRESS, amount: 800e6, chainId: 1, ... }, // Ethereum
-    dependsOn: ["step-1"], // Depends on swap completing
     partialDependency: false
   },
   {
@@ -114,7 +111,6 @@ Generates a dynamic transaction plan to consolidate multiple source tokens into 
     chainId: 1, // Ethereum (destination)
     inputTokens: [],
     outputToken: { token: USDC_ADDRESS, amount: 0n, ... },
-    dependsOn: ["step-2", "step-3"], // Wait for both bridges
     partialDependency: true // CAN execute with subset of dependencies
   },
   {
@@ -123,7 +119,6 @@ Generates a dynamic transaction plan to consolidate multiple source tokens into 
     chainId: 1, // Ethereum
     inputTokens: [],
     outputToken: { token: USDC_ADDRESS, amount: 801e6, ... }, // Combined
-    dependsOn: ["step-4"],
     partialDependency: true // CAN claim subset of bridges
   },
   {
@@ -132,7 +127,6 @@ Generates a dynamic transaction plan to consolidate multiple source tokens into 
     chainId: 1, // Ethereum
     inputTokens: [{ token: USDC_ADDRESS, amount: 801e6, ... }],
     outputToken: { token: WBTC_ADDRESS, amount: 0.008e8, ... }, // estimated
-    dependsOn: ["step-5"],
     partialDependency: false
   }
 ]
@@ -151,7 +145,6 @@ When consolidating multiple tokens on the same chain and wallet:
       { token: USDC_ADDRESS, amount: 1000e6, ... }
     ], // Multiple input tokens batched together
     outputToken: { token: WBTC_ADDRESS, amount: 0.008e8, ... },
-    dependsOn: [],
     partialDependency: false
   }
 ]
@@ -174,7 +167,6 @@ When consolidating 8 tokens on the same chain (exceeds 6-token limit):
       { token: TOKEN5_ADDRESS, amount: 600e18, ... }
     ], // First batch: 6 tokens
     outputToken: { token: WBTC_ADDRESS, amount: 0.005e8, ... },
-    dependsOn: [],
     partialDependency: false
   },
   {
@@ -186,25 +178,24 @@ When consolidating 8 tokens on the same chain (exceeds 6-token limit):
       { token: TOKEN7_ADDRESS, amount: 800e18, ... }
     ], // Second batch: remaining 2 tokens
     outputToken: { token: WBTC_ADDRESS, amount: 0.003e8, ... },
-    dependsOn: [],
     partialDependency: false
   }
 ]
 ```
 
-#### Example 4: Partial Dependency Adaptation (User's Scenario)
+#### Example 4: Provenance-Based Partial Success (User's Scenario)
 If Step 1 succeeds but Step 2 fails during execution:
 - Step 3 (bridge from Polygon) executes successfully
-- Step 4 (bridge from Optimism) is skipped (depends on failed Step 2)
-- **Step 5 (attestation) ADAPTS**: 
-  - Originally `dependsOn: ["step-3", "step-4"]`
-  - Adapts to `dependsOn: ["step-3"]` (only successful bridge)
-  - `adaptedFrom: ["step-3", "step-4"]` (for display)
-  - Still executes (waits only for Step 3's attestation)
-- **Step 6 (claim) ADAPTS**:
-  - Claims only USDC from Step 3
-  - Recalculates amount to ~800 USDC (not 801)
-- Step 7 continues with adapted amount
+- Step 4 (bridge from Optimism) is skipped (input has provenance from failed Step 2)
+- **Step 5 (attestation) CONTINUES**: 
+  - Has two input tokens: one from Step 3 (success), one from Step 4 (skipped)
+  - Since at least one input has successful provenance (Step 3), attestation continues
+  - Only processes attestation for the successful bridge
+- **Step 6 (claim) CONTINUES**:
+  - Has input token from Step 3 via attestation provenance
+  - Claims only USDC from successful bridge
+  - Amount is ~800 USDC (not 801)
+- Step 7 continues with actual amount from claim
 
 ## Error Cases
 

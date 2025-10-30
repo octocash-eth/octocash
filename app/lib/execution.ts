@@ -74,13 +74,8 @@ export async function* executeConsolidationPlan(
       continue;
     }
 
-    // Adapt step for partial dependencies (T015)
-    const adaptedStep = adaptStepForPartialDependencies(step, workingState.results);
-    workingState.plan = [...workingState.plan];
-    workingState.plan[i] = adaptedStep;
-
     // Execute step - create new step reference with executing status
-    const executingStep = { ...adaptedStep, status: "executing" as const };
+    const executingStep = { ...step, status: "executing" as const };
     workingState.plan = [...workingState.plan];
     workingState.plan[i] = executingStep;
     workingState.updatedAt = Date.now();
@@ -272,8 +267,9 @@ async function executeStep(
     }
 
     case "attestation": {
-      // Collect transaction hashes from successful bridge steps
-      const bridgeTxs = step.dependsOn
+      // Collect transaction hashes from successful bridge steps using input token provenance
+      const bridgeStepIds = getProvenanceSteps(step);
+      const bridgeTxs = Array.from(bridgeStepIds)
         .map((stepId) => {
           const depResult = state.results[stepId];
           if (!depResult?.transactionHash) return null;
@@ -395,78 +391,45 @@ async function executeStep(
 }
 
 /**
+ * Get unique step IDs from input token provenance
+ * @param step - Transaction step
+ * @returns Set of step IDs that produced the input tokens
+ */
+function getProvenanceSteps(step: TransactionStep): Set<string> {
+  return new Set(step.inputTokens.map((t) => t.provenance).filter((p): p is string => p !== undefined));
+}
+
+/**
  * Check if a step should be skipped due to failed dependencies (T015)
+ * Uses input token provenance to determine dependencies
  * @param step - Transaction step
  * @param results - Map of step results
  * @returns True if step should be skipped
  */
 export function shouldSkipStep(step: TransactionStep, results: Record<string, StepResult>): boolean {
-  // Steps with no dependencies should never be skipped
-  if (step.dependsOn.length === 0) {
-    return false;
-  }
+  const provenanceSteps = getProvenanceSteps(step);
 
-  // Partial dependency steps can execute with subset of dependencies
-  if (step.partialDependency) {
-    // Check if at least one dependency succeeded
-    const hasAnySuccess = step.dependsOn.some((depId) => {
-      const depResult = results[depId];
-      return depResult?.status === "success";
-    });
-    return !hasAnySuccess; // Skip only if ALL dependencies failed/skipped
-  }
+  if (provenanceSteps.size === 0) return false; // No dependencies
 
-  // Regular steps require ALL dependencies to succeed
-  for (const depId of step.dependsOn) {
-    const depResult = results[depId];
-    if (depResult?.status === "failed" || depResult?.status === "skipped") {
-      return true; // Skip if ANY dependency failed or was skipped
-    }
-  }
-
-  return false;
-}
-
-/**
- * Adapt step to execute with partial dependencies (T015)
- * @param step - Transaction step
- * @param results - Map of step results
- * @returns Adapted step
- */
-export function adaptStepForPartialDependencies(
-  step: TransactionStep,
-  results: Record<string, StepResult>,
-): TransactionStep {
-  if (!step.partialDependency) {
-    return step; // No adaptation needed
-  }
-
-  // Filter dependencies to only successful ones
-  const successfulDeps = step.dependsOn.filter((depId) => {
-    const depResult = results[depId];
-    return depResult?.status === "success";
+  // Skip if ALL provenance steps failed/skipped
+  return Array.from(provenanceSteps).every((stepId) => {
+    const result = results[stepId];
+    return result?.status === "failed" || result?.status === "skipped";
   });
-
-  if (successfulDeps.length === step.dependsOn.length) {
-    return step; // All dependencies succeeded, no adaptation needed
-  }
-
-  return {
-    ...step,
-    dependsOn: successfulDeps,
-    adaptedFrom: step.adaptedFrom || step.dependsOn, // Keep original for display
-  };
 }
 
 /**
  * Get skip reason for a step
+ * Uses input token provenance to identify failed dependencies
  * @param step - Transaction step
  * @param results - Map of step results
  * @returns Skip reason message
  */
 function getSkipReason(step: TransactionStep, results: Record<string, StepResult>): string {
-  const failedDeps = step.dependsOn.filter((depId) => {
-    const depResult = results[depId];
+  const provenanceSteps = getProvenanceSteps(step);
+
+  const failedDeps = Array.from(provenanceSteps).filter((stepId) => {
+    const depResult = results[stepId];
     return depResult?.status === "failed";
   });
 
@@ -474,8 +437,8 @@ function getSkipReason(step: TransactionStep, results: Record<string, StepResult
     return `Depends on failed step ${failedDeps[0]}`;
   }
 
-  const skippedDeps = step.dependsOn.filter((depId) => {
-    const depResult = results[depId];
+  const skippedDeps = Array.from(provenanceSteps).filter((stepId) => {
+    const depResult = results[stepId];
     return depResult?.status === "skipped";
   });
 
@@ -562,8 +525,10 @@ async function recalculatePlan(
   for (let i = completedStepIndex + 1; i < updatedPlan.length; i++) {
     const step = updatedPlan[i];
 
-    // Check if this step depends on any changed outputs
-    const dependenciesChanged = step.dependsOn.some((depId) => changedOutputs.has(depId));
+    // Check if this step depends on any changed outputs using input token provenance
+    const dependenciesChanged = step.inputTokens.some(
+      (input) => input.provenance && changedOutputs.has(input.provenance),
+    );
 
     if (!dependenciesChanged) {
       continue; // Skip, no updates needed

@@ -60,7 +60,6 @@ describe("planConsolidation", () => {
     expect(result).toHaveLength(1);
     expect(result[0].type).toBe("swap");
     expect(result[0].chainId).toBe(1);
-    expect(result[0].dependsOn).toEqual([]);
   });
 
   test("multi-chain consolidation - should include swaps, bridges, attestation, claim, final swap", async () => {
@@ -124,14 +123,6 @@ describe("planConsolidation", () => {
     expect(types).toContain("bridge");
     expect(types).toContain("attestation");
     expect(types).toContain("claim");
-
-    // Attestation should have partialDependency=true
-    const attestation = result.find((s: TransactionStep) => s.type === "attestation");
-    expect(attestation?.partialDependency).toBe(true);
-
-    // Claim should have partialDependency=true
-    const claim = result.find((s: TransactionStep) => s.type === "claim");
-    expect(claim?.partialDependency).toBe(true);
   });
 
   test("token already USDC - should skip initial swap", async () => {
@@ -650,17 +641,12 @@ describe("planConsolidation", () => {
     expect(wallet3BridgeStep?.outputToken.amount).toBe(3000000n);
     expect(wallet3BridgeStep?.chainId).toBe(10);
 
-    // Verify all bridge steps have no dependencies (no swaps on this chain)
-    for (const bridgeStep of bridgeSteps) {
-      expect(bridgeStep.dependsOn).toEqual([]);
-    }
-
-    // Verify attestation depends on all 3 bridge steps
+    // Verify attestation has inputs from all 3 bridge steps (via provenance)
     const attestationStep = result.find((s: TransactionStep) => s.type === "attestation");
-    expect(attestationStep?.dependsOn.length).toBe(3);
-    expect(attestationStep?.dependsOn).toContain(wallet1BridgeStep?.id);
-    expect(attestationStep?.dependsOn).toContain(wallet2BridgeStep?.id);
-    expect(attestationStep?.dependsOn).toContain(wallet3BridgeStep?.id);
+    expect(attestationStep?.inputTokens.length).toBe(3);
+    expect(attestationStep?.inputTokens[0].provenance).toBe(wallet1BridgeStep?.id);
+    expect(attestationStep?.inputTokens[1].provenance).toBe(wallet2BridgeStep?.id);
+    expect(attestationStep?.inputTokens[2].provenance).toBe(wallet3BridgeStep?.id);
   });
 
   test("provenance tracking - swap outputs should have provenance set", async () => {
@@ -1129,10 +1115,6 @@ describe("planConsolidation", () => {
     expect(transferStep.outputToken.token).toBe(WBTC_ADDRESS);
     expect(transferStep.outputToken.amount).toBe(10000000n);
 
-    // Transfer should have no dependencies since no bridges
-    expect(transferStep.dependsOn).toEqual([]);
-    expect(transferStep.partialDependency).toBe(false);
-
     // No swap calls should be made
     expect(getSwapQuote).not.toHaveBeenCalled();
   });
@@ -1347,8 +1329,10 @@ describe("planConsolidation", () => {
     expect(claimStep).toBeDefined();
     expect(swapSteps.length).toBeGreaterThan(0);
 
-    // Find swap that depends on claim
-    const finalSwap = swapSteps.find((s: TransactionStep) => s.dependsOn.includes(claimStep?.id || ""));
+    // Find swap that has input with provenance from claim
+    const finalSwap = swapSteps.find((s: TransactionStep) =>
+      s.inputTokens.some((token) => token.provenance === claimStep?.id),
+    );
     expect(finalSwap).toBeDefined();
 
     // CRITICAL: Verify final swap output goes to DESTINATION wallet
@@ -1399,7 +1383,8 @@ describe("planConsolidation", () => {
     expect(bridgeStep.outputToken.walletAddress).toBe(WALLET);
     expect(claimStep.outputToken.walletAddress).toBe(WALLET);
     expect(transferStep.inputTokens[0].walletAddress).toBe(WALLET);
-    expect(transferStep.dependsOn).toContain(claimStep.id);
+    // Transfer input should have provenance from claim step
+    expect(transferStep.inputTokens[0].provenance).toBe(claimStep.id);
   });
 
   test("swap before bridge - should output to SOURCE wallet (not destination wallet)", async () => {
@@ -1532,7 +1517,7 @@ describe("planConsolidation", () => {
     if (transferStep) {
       expect(transferStep.inputTokens[0].walletAddress).toBe(WALLET);
       expect(transferStep.outputToken.walletAddress).toBe(NON_CONNECTED_WALLET);
-      expect(transferStep.dependsOn).toContain(swapStep.id);
+      expect(transferStep.inputTokens[0].provenance).toBe(swapStep.id);
     }
   });
 
@@ -1696,7 +1681,7 @@ describe("planConsolidation", () => {
     expect(swapStep.inputTokens[0].symbol).toBe("USDC");
     expect(swapStep.outputToken.token).toBe(WBTC_ADDRESS);
     expect(swapStep.outputToken.walletAddress).toBe(WALLET_2); // Swap outputs to intermediate wallet (first source wallet)
-    expect(swapStep.dependsOn).toContain(claimStep.id); // Swap depends on claim
+    expect(swapStep.inputTokens[0].provenance).toBe(claimStep.id); // Swap input comes from claim
 
     // Find the transfer steps
     const wallet3Transfer = transferSteps.find((s: TransactionStep) => s.inputTokens[0].walletAddress === WALLET_3);
@@ -1710,7 +1695,8 @@ describe("planConsolidation", () => {
       expect(wallet3Transfer.inputTokens[0].token).toBe(WBTC_ADDRESS);
       expect(wallet3Transfer.inputTokens[0].amount).toBe(5000000n);
       expect(wallet3Transfer.outputToken.walletAddress).toBe(WALLET_2);
-      expect(wallet3Transfer.dependsOn).toContain(claimStep.id); // Transfer depends on claim
+      // Transfer input should NOT have provenance - it's an existing source token, not from claim
+      expect(wallet3Transfer.inputTokens[0].provenance).toBeUndefined();
     }
 
     // Verify final transfer to non-connected wallet
@@ -1719,8 +1705,8 @@ describe("planConsolidation", () => {
       expect(finalTransfer.inputTokens[0].walletAddress).toBe(WALLET_2);
       expect(finalTransfer.inputTokens[0].token).toBe(WBTC_ADDRESS);
       expect(finalTransfer.outputToken.walletAddress).toBe(NON_CONNECTED_WALLET);
-      // Final transfer depends on previous steps
-      expect(finalTransfer.dependsOn.length).toBeGreaterThan(0);
+      // Final transfer input should have provenance (token comes from a previous step)
+      expect(finalTransfer.inputTokens[0].provenance).toBeDefined();
     }
   });
 });

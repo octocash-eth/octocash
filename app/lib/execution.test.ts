@@ -1,6 +1,6 @@
 import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { consumeGenerator, makeStep, makeToken, WALLET } from "../../test/helpers";
+import { consumeGenerator, makeToken, WALLET } from "../../test/helpers";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
 
 // Mock dependencies BEFORE imports
@@ -9,7 +9,7 @@ vi.mock("./cctp");
 vi.mock("./send-calls");
 
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
-import { adaptStepForPartialDependencies, executeConsolidationPlan, shouldSkipStep } from "./execution";
+import { executeConsolidationPlan, shouldSkipStep } from "./execution";
 import { executeOdosSwapOrTransfer, getSwapQuote } from "./odos";
 import { prepareSendCalls } from "./send-calls";
 
@@ -76,8 +76,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     mockState.plan = [step1];
@@ -99,8 +97,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const step2: TransactionStep = {
@@ -110,8 +106,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
-      dependsOn: ["step-1"],
-      partialDependency: false,
     };
 
     mockState.plan = [step1, step2];
@@ -133,8 +127,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const step2: TransactionStep = {
@@ -142,10 +134,8 @@ describe("executeConsolidationPlan", () => {
       type: "bridge",
       status: "pending",
       chainId: 1,
-      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1, { provenance: "step-1" })], // Input from step-1
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
-      dependsOn: ["step-1"], // Depends on failed step
-      partialDependency: false,
     };
 
     mockState.plan = [step1, step2];
@@ -169,8 +159,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1), // Estimated 1 USDC
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const step2: TransactionStep = {
@@ -180,8 +168,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1, { provenance: "step-1" })], // Based on step-1 estimate
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
-      dependsOn: ["step-1"],
-      partialDependency: false,
     };
 
     mockState.plan = [step1, step2];
@@ -207,8 +193,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(WETH_ADDRESS, 1000000000000000000n, 1)], // 1 WETH
       outputToken: makeToken(USDC_ADDRESS, 3000000000n, 1), // Estimated 3000 USDC
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const step2: TransactionStep = {
@@ -218,8 +202,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 3000000000n, 1, { provenance: "step-1" })],
       outputToken: makeToken(DAI_ADDRESS, 3000000000000000000000n, 1), // Estimated 3000 DAI
-      dependsOn: ["step-1"],
-      partialDependency: false,
     };
 
     mockState.plan = [step1, step2];
@@ -284,8 +266,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(WETH_ADDRESS, 1000000000000000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 2000000000n, 1, { provenance: "step-1" }),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const step2: TransactionStep = {
@@ -295,8 +275,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(DAI_ADDRESS, 1000000000000000000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 1000000000n, 1, { provenance: "step-2" }),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const step3: TransactionStep = {
@@ -309,8 +287,6 @@ describe("executeConsolidationPlan", () => {
         makeToken(USDC_ADDRESS, 1000000000n, 1, { provenance: "step-2" }),
       ],
       outputToken: makeToken(WBTC_ADDRESS, 10000000n, 1),
-      dependsOn: ["step-1", "step-2"],
-      partialDependency: false,
     };
 
     mockState.plan = [step1, step2, step3];
@@ -378,8 +354,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const step2: TransactionStep = {
@@ -389,8 +363,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1, { provenance: "step-1" })],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 10),
-      dependsOn: ["step-1"],
-      partialDependency: false,
     };
 
     mockState.plan = [step1, step2];
@@ -437,9 +409,7 @@ describe("executeConsolidationPlan", () => {
       status: "pending",
       chainId: 137,
       inputTokens: [makeToken(USDC_ADDRESS, 500000n, 137)],
-      outputToken: makeToken(USDC_ADDRESS, 500000n, 1),
-      dependsOn: [],
-      partialDependency: false,
+      outputToken: makeToken(USDC_ADDRESS, 500000n, 1, { provenance: "bridge-1" }),
     };
 
     const bridge2: TransactionStep = {
@@ -448,9 +418,7 @@ describe("executeConsolidationPlan", () => {
       status: "pending",
       chainId: 10,
       inputTokens: [makeToken(USDC_ADDRESS, 500000n, 10)],
-      outputToken: makeToken(USDC_ADDRESS, 500000n, 1),
-      dependsOn: [],
-      partialDependency: false,
+      outputToken: makeToken(USDC_ADDRESS, 500000n, 1, { provenance: "bridge-2" }),
     };
 
     const attestation: TransactionStep = {
@@ -460,8 +428,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [bridge1.outputToken, bridge2.outputToken],
       outputToken: makeToken(USDC_ADDRESS, 0n, 1),
-      dependsOn: ["bridge-1", "bridge-2"], // Depends on both bridges
-      partialDependency: true, // Can adapt to partial dependencies
     };
 
     mockState.plan = [bridge1, bridge2, attestation];
@@ -475,9 +441,7 @@ describe("executeConsolidationPlan", () => {
 
     expect(finalState.results["bridge-1"].status).toBe("success");
     expect(finalState.results["bridge-2"].status).toBe("failed");
-    expect(finalState.results["attestation-1"].status).toBe("success"); // Adapted, not skipped
-    expect(finalState.plan[2].dependsOn).toEqual(["bridge-1"]); // Adapted to only successful dependency
-    expect(finalState.plan[2].adaptedFrom).toEqual(["bridge-1", "bridge-2"]); // Tracks original
+    expect(finalState.results["attestation-1"].status).toBe("success"); // Not skipped - at least one input token has successful provenance
   });
 
   test("transfer step - should transfer tokens from one wallet to another", async () => {
@@ -490,8 +454,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 500000n, 1)],
       outputToken: { ...makeToken(USDC_ADDRESS, 500000n, 1), walletAddress: WALLET_2 },
-      dependsOn: [],
-      partialDependency: false,
     };
 
     mockState.plan = [transferStep];
@@ -528,8 +490,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 0n, 1),
-      dependsOn: ["bridge-1"],
-      partialDependency: false,
     };
 
     mockState.plan = [attestationStep];
@@ -554,8 +514,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const stateWithoutAttestations: ConsolidationState = {
@@ -589,8 +547,6 @@ describe("executeConsolidationPlan", () => {
         makeToken(DAI_ADDRESS, 2000000n, 1, { walletAddress: WALLET, symbol: "DAI", decimals: 18 }), // Second input - invalid!
       ],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     mockState.plan = [invalidTransferStep];
@@ -613,8 +569,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)], // Chain 1
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 137), // Chain 137 - mismatch!
-      dependsOn: [],
-      partialDependency: false,
     };
 
     mockState.plan = [invalidTransferStep];
@@ -638,8 +592,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)] as [TokenAmount, ...TokenAmount[]],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     mockState.plan = [invalidStep];
@@ -662,8 +614,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 500000n, 1),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const step2: TransactionStep = {
@@ -673,8 +623,6 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 500000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 250000n, 1),
-      dependsOn: ["step-1"],
-      partialDependency: false,
     };
 
     mockState.plan = [step1, step2];
@@ -716,7 +664,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
   const createStep = (
     id: string,
     type: TransactionStep["type"],
-    dependsOn: string[],
     inputTokens: [TokenAmount, ...TokenAmount[]],
     outputToken: TokenAmount,
   ): TransactionStep => ({
@@ -726,8 +673,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     chainId: inputTokens[0].chainId,
     inputTokens,
     outputToken,
-    dependsOn,
-    partialDependency: false,
   });
 
   beforeEach(() => {
@@ -763,7 +708,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step1: TransactionStep = createStep(
       "step-1",
       "swap",
-      [],
       [makeToken(WETH_ADDRESS, 1000000n, 1)],
       makeToken(USDC_ADDRESS, 2000000n, 1),
     );
@@ -771,7 +715,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step2: TransactionStep = createStep(
       "step-2",
       "bridge",
-      ["step-1"],
       [makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-1" })],
       makeToken(USDC_ADDRESS, 2000000n, 10),
     );
@@ -779,7 +722,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step3: TransactionStep = createStep(
       "step-3",
       "claim",
-      ["step-2"],
       [makeToken(USDC_ADDRESS, 2000000n, 10, { provenance: "step-2" })],
       makeToken(USDC_ADDRESS, 2000000n, 10),
     );
@@ -787,7 +729,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step4: TransactionStep = createStep(
       "step-4",
       "swap",
-      ["step-3"],
       [makeToken(USDC_ADDRESS, 2000000n, 10, { provenance: "step-3" })],
       makeToken(DAI_ADDRESS, 2000000n, 10),
     );
@@ -836,7 +777,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step1: TransactionStep = createStep(
       "step-1",
       "swap",
-      [],
       [makeToken(WETH_ADDRESS, 1000000n, 1)],
       makeToken(USDC_ADDRESS, 2000000n, 1),
     );
@@ -844,7 +784,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step2: TransactionStep = createStep(
       "step-2",
       "swap",
-      ["step-1"],
       [
         makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-1" }), // Has provenance
         makeToken(USDT_ADDRESS, 3000000n, 1), // No provenance
@@ -892,7 +831,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step1: TransactionStep = createStep(
       "step-1",
       "swap",
-      [],
       [makeToken(WETH_ADDRESS, 1000000n, 1)],
       makeToken(USDC_ADDRESS, 2000000n, 1),
     );
@@ -900,7 +838,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step2: TransactionStep = createStep(
       "step-2",
       "transfer",
-      ["step-1"],
       [makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-1" })],
       {
         ...makeToken(USDC_ADDRESS, 2000000n, 1),
@@ -938,7 +875,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step1: TransactionStep = createStep(
       "step-1",
       "swap",
-      [],
       [makeToken(WETH_ADDRESS, 1000000n, 1)],
       makeToken(USDC_ADDRESS, 2000000n, 1),
     );
@@ -946,7 +882,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step2: TransactionStep = createStep(
       "step-2",
       "swap",
-      [],
       [makeToken(DAI_ADDRESS, 3000000n, 1)],
       makeToken(USDC_ADDRESS, 3000000n, 1),
     );
@@ -954,7 +889,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step3: TransactionStep = createStep(
       "step-3",
       "bridge",
-      ["step-1"],
       [makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-1" })],
       makeToken(USDC_ADDRESS, 2000000n, 10),
     );
@@ -993,7 +927,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step1: TransactionStep = createStep(
       "step-1",
       "bridge",
-      [],
       [makeToken(USDC_ADDRESS, 2000000n, 1)],
       makeToken(USDC_ADDRESS, 2000000n, 10),
     );
@@ -1001,7 +934,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step2: TransactionStep = createStep(
       "step-2",
       "attestation",
-      ["step-1"],
       [makeToken(USDC_ADDRESS, 2000000n, 10)],
       makeToken(USDC_ADDRESS, 0n, 10),
     );
@@ -1048,7 +980,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step1: TransactionStep = createStep(
       "step-1",
       "swap",
-      [],
       [makeToken(WETH_ADDRESS, 1000000n, 1)],
       makeToken(USDC_ADDRESS, 2000000n, 1),
     );
@@ -1056,7 +987,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step2: TransactionStep = createStep(
       "step-2",
       "swap",
-      ["step-1"],
       [makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-1" }), makeToken(USDT_ADDRESS, 5000000n, 1)],
       makeToken(DAI_ADDRESS, 7000000n, 1),
     );
@@ -1095,7 +1025,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step1: TransactionStep = createStep(
       "step-1",
       "swap",
-      [],
       [makeToken(WETH_ADDRESS, 1000000n, 1)],
       makeToken(USDC_ADDRESS, 2000000n, 1),
     );
@@ -1103,7 +1032,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step2: TransactionStep = createStep(
       "step-2",
       "swap",
-      ["step-1"],
       [
         makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-1" }),
         makeToken(USDC_ADDRESS, 1000000n, 1, { walletAddress: WALLET_2 }),
@@ -1145,7 +1073,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step1: TransactionStep = createStep(
       "step-1",
       "swap",
-      [],
       [makeToken(WETH_ADDRESS, 1000000n, 1)],
       makeToken(USDC_ADDRESS, 1000000n, 1),
     );
@@ -1153,7 +1080,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step2: TransactionStep = createStep(
       "step-2",
       "bridge",
-      ["step-1"],
       [makeToken(USDC_ADDRESS, 1000000n, 1, { provenance: "step-1" })],
       makeToken(USDC_ADDRESS, 1000000n, 10),
     );
@@ -1161,7 +1087,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step3: TransactionStep = createStep(
       "step-3",
       "claim",
-      ["step-2"],
       [makeToken(USDC_ADDRESS, 1000000n, 10, { provenance: "step-2" })],
       makeToken(USDC_ADDRESS, 1000000n, 10),
     );
@@ -1169,7 +1094,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step4: TransactionStep = createStep(
       "step-4",
       "transfer",
-      ["step-3"],
       [makeToken(USDC_ADDRESS, 1000000n, 10, { provenance: "step-3" })],
       makeToken(USDC_ADDRESS, 1000000n, 10),
     );
@@ -1219,7 +1143,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const swap1: TransactionStep = createStep(
       "step-1",
       "swap",
-      [],
       [makeToken(WETH_ADDRESS, 1000000n, 10)],
       makeToken(USDC_ADDRESS, 784000000n, 10, { provenance: "step-1" }), // Has provenance
     );
@@ -1227,7 +1150,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const swap2: TransactionStep = createStep(
       "step-2",
       "swap",
-      [],
       [makeToken(DAI_ADDRESS, 500000n, 10)],
       makeToken(USDC_ADDRESS, 201000000n, 10, { provenance: "step-2" }), // Has provenance
     );
@@ -1235,7 +1157,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const bridge: TransactionStep = createStep(
       "step-3",
       "bridge",
-      ["step-1", "step-2"], // Depends on both swaps for skip management
       [
         makeToken(USDC_ADDRESS, 784000000n, 10, { provenance: "step-1" }), // Has provenance from step-1
         makeToken(USDC_ADDRESS, 201000000n, 10, { provenance: "step-2" }), // Has provenance from step-2
@@ -1300,7 +1221,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step1: TransactionStep = createStep(
       "step-1",
       "swap",
-      [],
       [
         makeToken(WETH_ADDRESS, 1000000n, 1), // Non-zero
         makeToken(USDC_ADDRESS, 0n, 1), // Zero - should be filtered
@@ -1352,7 +1272,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step1: TransactionStep = createStep(
       "step-1",
       "swap",
-      [],
       [
         makeToken(WETH_ADDRESS, 0n, 1), // Zero
         makeToken(USDC_ADDRESS, 0n, 1), // Zero
@@ -1391,7 +1310,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step1: TransactionStep = createStep(
       "step-1",
       "bridge",
-      [],
       [
         makeToken(USDC_ADDRESS, 1000000n, 1), // Non-zero
         makeToken(USDC_ADDRESS, 0n, 1), // Zero - should be filtered
@@ -1432,7 +1350,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
     const step1: TransactionStep = createStep(
       "step-1",
       "bridge",
-      [],
       [
         makeToken(USDC_ADDRESS, 0n, 1), // Zero
         makeToken(USDC_ADDRESS, 0n, 1), // Zero
@@ -1469,30 +1386,29 @@ describe("recalculatePlan - comprehensive coverage", () => {
 });
 
 describe("shouldSkipStep", () => {
-  const makeStep = (id: string, dependsOn: string[] = [], partialDependency = false): TransactionStep => ({
-    id,
-    type: "swap",
-    status: "pending",
-    chainId: 1,
-    inputTokens: [makeToken("0x789" as Address, 500n, 1)],
-    outputToken: makeToken("0x123" as Address, 1000n, 1, {
-      walletAddress: "0x456" as Address,
-      symbol: "USDC",
-      decimals: 6,
-    }),
-    dependsOn,
-    partialDependency,
-  });
-
-  test("step with no dependencies should not skip", () => {
-    const step = makeStep("step-1");
+  test("step with no input token provenance should not skip", () => {
+    const step: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken("0x789" as Address, 500n, 1)], // No provenance
+      outputToken: makeToken("0x123" as Address, 1000n, 1),
+    };
     const results: Record<string, StepResult> = {};
 
     expect(shouldSkipStep(step, results)).toBe(false);
   });
 
-  test("step with all successful dependencies should not skip", () => {
-    const step = makeStep("step-2", ["step-1"]);
+  test("step with all successful provenance steps should not skip", () => {
+    const step: TransactionStep = {
+      id: "step-2",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken("0x789" as Address, 500n, 1, { provenance: "step-1" })],
+      outputToken: makeToken("0x123" as Address, 1000n, 1),
+    };
     const results: Record<string, StepResult> = {
       "step-1": { stepId: "step-1", status: "success", chainId: 1 },
     };
@@ -1500,8 +1416,15 @@ describe("shouldSkipStep", () => {
     expect(shouldSkipStep(step, results)).toBe(false);
   });
 
-  test("step with failed dependency should skip", () => {
-    const step = makeStep("step-2", ["step-1"]);
+  test("step with all failed provenance steps should skip", () => {
+    const step: TransactionStep = {
+      id: "step-2",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken("0x789" as Address, 500n, 1, { provenance: "step-1" })],
+      outputToken: makeToken("0x123" as Address, 1000n, 1),
+    };
     const results: Record<string, StepResult> = {
       "step-1": { stepId: "step-1", status: "failed", chainId: 1 },
     };
@@ -1509,8 +1432,15 @@ describe("shouldSkipStep", () => {
     expect(shouldSkipStep(step, results)).toBe(true);
   });
 
-  test("step with skipped dependency should skip", () => {
-    const step = makeStep("step-2", ["step-1"]);
+  test("step with all skipped provenance steps should skip", () => {
+    const step: TransactionStep = {
+      id: "step-2",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken("0x789" as Address, 500n, 1, { provenance: "step-1" })],
+      outputToken: makeToken("0x123" as Address, 1000n, 1),
+    };
     const results: Record<string, StepResult> = {
       "step-1": { stepId: "step-1", status: "skipped", chainId: 1 },
     };
@@ -1518,8 +1448,18 @@ describe("shouldSkipStep", () => {
     expect(shouldSkipStep(step, results)).toBe(true);
   });
 
-  test("partial dependency step with at least one success should not skip", () => {
-    const step = makeStep("step-3", ["step-1", "step-2"], true);
+  test("step with at least one successful provenance should not skip", () => {
+    const step: TransactionStep = {
+      id: "step-3",
+      type: "claim",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken("0x789" as Address, 500n, 1, { provenance: "step-1" }),
+        makeToken("0x789" as Address, 300n, 1, { provenance: "step-2" }),
+      ],
+      outputToken: makeToken("0x123" as Address, 800n, 1),
+    };
     const results: Record<string, StepResult> = {
       "step-1": { stepId: "step-1", status: "success", chainId: 1 },
       "step-2": { stepId: "step-2", status: "failed", chainId: 1 },
@@ -1528,63 +1468,24 @@ describe("shouldSkipStep", () => {
     expect(shouldSkipStep(step, results)).toBe(false);
   });
 
-  test("partial dependency step with all failed should skip", () => {
-    const step = makeStep("step-3", ["step-1", "step-2"], true);
+  test("step with all provenance steps failed should skip", () => {
+    const step: TransactionStep = {
+      id: "step-3",
+      type: "claim",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken("0x789" as Address, 500n, 1, { provenance: "step-1" }),
+        makeToken("0x789" as Address, 300n, 1, { provenance: "step-2" }),
+      ],
+      outputToken: makeToken("0x123" as Address, 800n, 1),
+    };
     const results: Record<string, StepResult> = {
       "step-1": { stepId: "step-1", status: "failed", chainId: 1 },
       "step-2": { stepId: "step-2", status: "failed", chainId: 1 },
     };
 
     expect(shouldSkipStep(step, results)).toBe(true);
-  });
-});
-
-describe("adaptStepForPartialDependencies", () => {
-  test("non-partial dependency step should not be adapted", () => {
-    const step = makeStep("step-1", ["dep-1", "dep-2"], false);
-    const results: Record<string, StepResult> = {
-      "dep-1": { stepId: "dep-1", status: "success", chainId: 1 },
-      "dep-2": { stepId: "dep-2", status: "failed", chainId: 1 },
-    };
-
-    const adapted = adaptStepForPartialDependencies(step, results);
-    expect(adapted).toBe(step); // Same reference
-  });
-
-  test("partial dependency step with all successful deps should not be adapted", () => {
-    const step = makeStep("step-1", ["dep-1", "dep-2"], true);
-    const results: Record<string, StepResult> = {
-      "dep-1": { stepId: "dep-1", status: "success", chainId: 1 },
-      "dep-2": { stepId: "dep-2", status: "success", chainId: 1 },
-    };
-
-    const adapted = adaptStepForPartialDependencies(step, results);
-    expect(adapted).toBe(step); // Same reference
-  });
-
-  test("partial dependency step should filter to only successful deps", () => {
-    const step = makeStep("step-1", ["dep-1", "dep-2", "dep-3"], true);
-    const results: Record<string, StepResult> = {
-      "dep-1": { stepId: "dep-1", status: "success", chainId: 1 },
-      "dep-2": { stepId: "dep-2", status: "failed", chainId: 1 },
-      "dep-3": { stepId: "dep-3", status: "success", chainId: 1 },
-    };
-
-    const adapted = adaptStepForPartialDependencies(step, results);
-    expect(adapted.dependsOn).toEqual(["dep-1", "dep-3"]);
-    expect(adapted.adaptedFrom).toEqual(["dep-1", "dep-2", "dep-3"]);
-  });
-
-  test("partial dependency step should preserve original in adaptedFrom", () => {
-    const step = makeStep("step-1", ["dep-1", "dep-2"], true);
-    const results: Record<string, StepResult> = {
-      "dep-1": { stepId: "dep-1", status: "success", chainId: 1 },
-      "dep-2": { stepId: "dep-2", status: "skipped", chainId: 1 },
-    };
-
-    const adapted = adaptStepForPartialDependencies(step, results);
-    expect(adapted.dependsOn).toEqual(["dep-1"]);
-    expect(adapted.adaptedFrom).toEqual(["dep-1", "dep-2"]);
   });
 });
 
@@ -1634,8 +1535,6 @@ describe("Additional edge cases for complete coverage", () => {
         makeToken(DAI_ADDRESS, 2000000n, 1), // Different token!
       ],
       outputToken: makeToken(USDC_ADDRESS, 3000000n, 10),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const state: ConsolidationState = {
@@ -1672,8 +1571,6 @@ describe("Additional edge cases for complete coverage", () => {
         makeToken(USDC_ADDRESS, 2000000n, 137), // Different chain!
       ],
       outputToken: makeToken(USDC_ADDRESS, 3000000n, 10),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const state: ConsolidationState = {
@@ -1712,8 +1609,6 @@ describe("Additional edge cases for complete coverage", () => {
         makeToken(USDC_ADDRESS, 2000000n, 1, { walletAddress: WALLET_2 }), // Different wallet!
       ],
       outputToken: makeToken(USDC_ADDRESS, 3000000n, 10),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const state: ConsolidationState = {
@@ -1747,8 +1642,6 @@ describe("Additional edge cases for complete coverage", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const state: ConsolidationState = {
@@ -1778,8 +1671,6 @@ describe("Additional edge cases for complete coverage", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
-      dependsOn: [],
-      partialDependency: false,
       transactionHash: "0xhash1",
     };
 
@@ -1790,8 +1681,6 @@ describe("Additional edge cases for complete coverage", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 900000n, 1, { provenance: "step-1" })],
       outputToken: makeToken(USDC_ADDRESS, 900000n, 10),
-      dependsOn: ["step-1"],
-      partialDependency: false,
     };
 
     const state: ConsolidationState = {
@@ -1832,8 +1721,6 @@ describe("Additional edge cases for complete coverage", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const step2: TransactionStep = {
@@ -1843,8 +1730,6 @@ describe("Additional edge cases for complete coverage", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1, { provenance: "step-1" })],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 10),
-      dependsOn: ["step-1"],
-      partialDependency: false,
     };
 
     const step3: TransactionStep = {
@@ -1854,8 +1739,6 @@ describe("Additional edge cases for complete coverage", () => {
       chainId: 10,
       inputTokens: [makeToken(DAI_ADDRESS, 500000n, 10)],
       outputToken: makeToken(USDC_ADDRESS, 450000n, 10),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const state: ConsolidationState = {
@@ -1895,8 +1778,6 @@ describe("Additional edge cases for complete coverage", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
-      dependsOn: [],
-      partialDependency: false,
       transactionHash: "0xhash1",
       executedAt: Date.now(),
     };
@@ -1908,8 +1789,6 @@ describe("Additional edge cases for complete coverage", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 900000n, 1, { provenance: "step-1" })],
       outputToken: makeToken(USDC_ADDRESS, 900000n, 10),
-      dependsOn: ["step-1"],
-      partialDependency: false,
     };
 
     const state: ConsolidationState = {
@@ -1955,8 +1834,6 @@ describe("Additional edge cases for complete coverage", () => {
       chainId: 1,
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const step2: TransactionStep = {
@@ -1966,8 +1843,6 @@ describe("Additional edge cases for complete coverage", () => {
       chainId: 1,
       inputTokens: [makeToken(DAI_ADDRESS, 500000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 450000n, 1),
-      dependsOn: [],
-      partialDependency: false,
     };
 
     const state: ConsolidationState = {

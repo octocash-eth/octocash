@@ -11,8 +11,8 @@ import type { Attestation } from "./cctp";
 export type TransactionType =
   | "swap" // Token swap using Odos
   | "bridge" // USDC bridge using CCTP
-  | "attestation" // Wait for bridge attestation(s) - can adapt to partial dependencies
-  | "claim" // Claim bridged tokens - can adapt to partial dependencies
+  | "attestation" // Wait for bridge attestation(s)
+  | "claim" // Claim bridged tokens
   | "transfer"; // Simple transfer (same token, same chain)
 
 /**
@@ -61,15 +61,10 @@ export interface TransactionStep {
   inputTokens: [TokenAmount, ...TokenAmount[]]; // Tokens consumed by this step (minimum one)
   outputToken: TokenAmount; // Token produced (estimated pre-exec, actual post-exec)
 
-  // Dependencies
-  dependsOn: string[]; // IDs of steps this depends on
-  partialDependency: boolean; // If true, can execute with subset of dependencies
-
   // Execution details
   transactionHash?: string; // Blockchain tx hash (after execution)
   error?: TransactionError; // Error details if failed
   executedAt?: number; // Timestamp of execution
-  adaptedFrom?: string[]; // Original dependsOn before adaptation (for display)
 }
 
 // ============================================================================

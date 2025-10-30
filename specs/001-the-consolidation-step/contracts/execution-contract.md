@@ -103,50 +103,29 @@ When user chooses continue (called separately):
 4. Find next independent step
 5. Resume execution from that step
 
-### Dependency Skipping Logic
+### Provenance-Based Skipping Logic
 ```typescript
 function shouldSkipStep(step: TransactionStep, results: Record<string, StepResult>): boolean {
-  // Partial dependency steps can execute with subset of dependencies
-  if (step.partialDependency) {
-    // Check if at least one dependency succeeded
-    const hasAnySuccess = step.dependsOn.some(depId => {
-      const depResult = results[depId];
-      return depResult?.status === 'success';
-    });
-    return !hasAnySuccess; // Skip only if ALL dependencies failed/skipped
-  }
+  // Get unique provenance step IDs from input tokens
+  const provenanceSteps = new Set(
+    step.inputTokens.map(t => t.provenance).filter((p): p is string => p !== undefined)
+  );
   
-  // Regular steps require ALL dependencies to succeed
-  for (const depId of step.dependsOn) {
-    const depResult = results[depId];
-    if (depResult?.status === 'failed' || depResult?.status === 'skipped') {
-      return true; // Skip if ANY dependency failed or was skipped
-    }
-  }
-  return false;
-}
-
-function adaptStepForPartialDependencies(
-  step: TransactionStep, 
-  results: Record<string, StepResult>
-): TransactionStep {
-  if (!step.partialDependency) {
-    return step; // No adaptation needed
-  }
+  if (provenanceSteps.size === 0) return false; // No dependencies
   
-  // Filter dependencies to only successful ones
-  const successfulDeps = step.dependsOn.filter(depId => {
-    const depResult = results[depId];
-    return depResult?.status === 'success';
+  // Skip if ALL provenance steps failed/skipped
+  return Array.from(provenanceSteps).every(stepId => {
+    const result = results[stepId];
+    return result?.status === 'failed' || result?.status === 'skipped';
   });
-  
-  return {
-    ...step,
-    dependsOn: successfulDeps,
-    adaptedFrom: step.dependsOn, // Keep original for display
-  };
 }
 ```
+
+**Key Points**:
+- Dependencies are derived from input token `provenance` fields
+- A step skips only when ALL input tokens come from failed/skipped steps
+- A step continues if at least ONE input token has successful provenance
+- No special flags needed - the logic naturally handles partial success
 
 ## Error Cases
 

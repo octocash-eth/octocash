@@ -38,19 +38,13 @@ export const makeToken = (
 /**
  * Helper to create test TransactionStep
  */
-export const makeStep = (
-  id: string,
-  dependsOn: string[] = [],
-  partialDependency = false,
-): TransactionStep => ({
+export const makeStep = (id: string): TransactionStep => ({
   id,
   type: "swap",
   status: "pending",
   chainId: 1,
   inputTokens: [makeToken("0x123" as Address, 500n, 1)],
   outputToken: makeToken("0x456" as Address, 1000n, 1),
-  dependsOn,
-  partialDependency,
 });
 
 /**

@@ -42,18 +42,18 @@ This document consolidates research findings for implementing a dynamic transact
 - All-or-nothing dependencies → Rejected: Too rigid, would skip attestation even if some bridges succeeded
 
 **Implementation Approach**:
-- Each transaction step has `dependsOn` field referencing previous step IDs
-- New `partialDependency` boolean flag:
-  - `false` (default): Step requires ALL dependencies to succeed, skip if ANY fails
-  - `true` (attestation/claim only): Step can execute with subset of dependencies
-- On failure + continue:
-  - Regular steps: Skip if any dependency failed
-  - Partial dependency steps: Adapt to execute with only successful dependencies
-  - Track `adaptedFrom` to show user what was originally planned vs. what executed
+- Each token has optional `provenance` field indicating which step produced it
+- Dependencies are derived from input token provenance
+- Skip logic:
+  - Step skips only if ALL input tokens come from failed/skipped steps
+  - Step continues if at least ONE input token has successful provenance
+  - This naturally handles partial success without special flags
 
 **Example**: 
 - Bridge from Network 1 succeeds, Bridge from Network 2 fails
-- Attestation step adapts: waits only for Network 1 attestation (not skipped)
+- Attestation step has inputs from both bridges via provenance
+- Attestation continues since at least one input has successful provenance (Network 1)
+- Only tokens from successful bridges are processed
 - Claim step adapts: claims only USDC from Network 1 (not skipped)
 
 ### 3. State Persistence Strategy

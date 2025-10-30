@@ -166,7 +166,6 @@ async function createSwapSteps(
   tokensToSwap: TokenAmount[],
   targetToken: Omit<TokenAmount, "amount">,
   steps: TransactionStep[],
-  dependencies: string[],
   log: (...args: unknown[]) => void,
 ): Promise<TokenAmount[]> {
   const outputTokens: TokenAmount[] = [];
@@ -194,8 +193,6 @@ async function createSwapSteps(
         chainId: targetToken.chainId,
         inputTokens: batch as [TokenAmount, ...TokenAmount[]],
         outputToken: outputTokenWithProvenance,
-        dependsOn: dependencies,
-        partialDependency: false,
       });
 
       outputTokens.push(outputTokenWithProvenance);
@@ -291,7 +288,7 @@ async function processChainWalletSwaps(
         decimals: 6,
       };
 
-      const swapOutputs = await createSwapSteps(tokensToSwapToUSDC, chainUSDCToken, steps, [], log);
+      const swapOutputs = await createSwapSteps(tokensToSwapToUSDC, chainUSDCToken, steps, log);
       swappedTokens.push(...swapOutputs);
     }
   }
@@ -376,8 +373,6 @@ async function createBridgeSteps(
       chainId,
       inputTokens: inputTokens as [TokenAmount, ...TokenAmount[]],
       outputToken: bridgeOutput,
-      dependsOn: deps,
-      partialDependency: false,
     });
 
     bridgedTokens.push(bridgeOutput);
@@ -421,7 +416,6 @@ function createAttestationAndClaimSteps(
   }
 
   const destChainUSDC = USDC_ADDRESSES[destinationToken.chainId as keyof typeof USDC_ADDRESSES] as Address;
-  const bridgeStepIds = bridgeSteps.map((s) => s.id);
 
   // Create attestation step
   const attestationStepId = `step-${steps.length + 1}`;
@@ -440,8 +434,6 @@ function createAttestationAndClaimSteps(
       decimals: 6,
       provenance: attestationStepId,
     },
-    dependsOn: bridgeStepIds,
-    partialDependency: true,
   });
 
   // Create claim step
@@ -465,8 +457,6 @@ function createAttestationAndClaimSteps(
     chainId: destinationToken.chainId,
     inputTokens: bridgeSteps.map((s) => s.outputToken) as [TokenAmount, ...TokenAmount[]],
     outputToken: claimOutput,
-    dependsOn: [...bridgeStepIds, attestationStepId],
-    partialDependency: true,
   });
 
   // Filter out bridged tokens (they're now claimed) and add the claim output
@@ -561,7 +551,6 @@ async function createFinalSwaps(
         tokensToSwap,
         destinationToken, // Output to destination wallet
         steps,
-        dependencies,
         log,
       );
 
@@ -604,8 +593,6 @@ async function createFinalSwaps(
       chainId: destinationToken.chainId,
       inputTokens: [token],
       outputToken: transferOutput,
-      dependsOn: dependencies,
-      partialDependency: false,
     });
 
     transferOutputs.push(transferOutput);
@@ -644,7 +631,6 @@ async function createFinalTransfer(
 
   const token = consolidatedTokens[0][0];
   const stepId = `step-${steps.length + 1}`;
-  const previousStepId = steps.length > 0 ? steps[steps.length - 1].id : undefined;
 
   const transferOutput: TokenAmount = {
     ...token,
@@ -659,8 +645,6 @@ async function createFinalTransfer(
     chainId: destinationToken.chainId,
     inputTokens: [token],
     outputToken: transferOutput,
-    dependsOn: previousStepId ? [previousStepId] : [],
-    partialDependency: false,
   });
 
   log(
@@ -753,9 +737,12 @@ export async function planConsolidation(
       id: s.id,
       type: s.type,
       chainId: s.chainId,
-      inputTokens: s.inputTokens.map((t) => ({ symbol: t.symbol, amount: t.amount.toString() })),
+      inputTokens: s.inputTokens.map((t) => ({
+        symbol: t.symbol,
+        amount: t.amount.toString(),
+        provenance: t.provenance,
+      })),
       outputToken: s.outputToken ? { symbol: s.outputToken.symbol, amount: s.outputToken.amount?.toString() } : null,
-      dependsOn: s.dependsOn,
     })),
   );
 

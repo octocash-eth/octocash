@@ -89,8 +89,6 @@ describe("PlanCard", () => {
       symbol: "WETH",
       decimals: 18,
     },
-    dependsOn: [],
-    partialDependency: false,
   };
 
   test("renders error message when step has failed status", () => {

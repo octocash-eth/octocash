@@ -23,15 +23,10 @@ interface TransactionStep {
   inputTokens: TokenAmount[];    // Tokens consumed by this step
   outputToken: TokenAmount;      // Token produced (estimated pre-exec, actual post-exec)
   
-  // Dependencies
-  dependsOn: string[];           // IDs of steps this depends on
-  partialDependency: boolean;    // If true, can execute with subset of dependencies
-  
   // Execution details
   transactionHash?: string;      // Blockchain tx hash (after execution)
   error?: TransactionError;      // Error details if failed
   executedAt?: number;           // Timestamp of execution
-  adaptedFrom?: string[];        // Original dependsOn before adaptation (for display)
 }
 ```
 
@@ -41,8 +36,8 @@ interface TransactionStep {
 type TransactionType = 
   | 'swap'           // Token swap using Odos
   | 'bridge'         // USDC bridge using CCTP
-  | 'attestation'    // Wait for bridge attestation(s) - can adapt to partial dependencies
-  | 'claim'          // Claim bridged tokens - can adapt to partial dependencies
+  | 'attestation'    // Wait for bridge attestation(s)
+  | 'claim'          // Claim bridged tokens
   | 'transfer';      // Simple transfer (same token, same chain)
 ```
 
@@ -147,11 +142,9 @@ interface TransactionError {
 
 ### TransactionStep
 - `id` must be unique within a plan
-- `dependsOn` must reference valid step IDs earlier in the plan
+- `inputTokens` with `provenance` must reference valid step IDs earlier in the plan
 - `chainId` must be in supported chains (Ethereum, Arbitrum, Optimism, Base, Polygon, Unichain, Avalanche, Linea)
 - `outputToken.amount` starts as estimate, updated to actual after execution
-- `partialDependency=true` only for 'attestation' and 'claim' steps (can adapt to subset of dependencies)
-- `partialDependency=false` for 'swap', 'bridge', 'transfer' steps (require all dependencies or skip)
 
 ### ConsolidationState
 - `plan` array order determines execution sequence
@@ -163,11 +156,10 @@ interface TransactionError {
 ### StepStatus Transitions
 Valid state transitions:
 - `pending` → `executing` → `success` | `failed`
-- `pending` → `skipped` (if all required dependencies fail/skip)
+- `pending` → `skipped` (if all input token provenance steps fail/skip)
 - `failed` → `executing` (retry, only if no subsequent execution)
-- Special case for `partialDependency=true` steps:
-  - Executes even if some (but not all) dependencies fail
-  - Adapts behavior based on which dependencies succeeded
+- Steps skip only when ALL input tokens come from failed/skipped steps
+- Steps continue if at least ONE input token has successful provenance
 
 ## State Transitions
 
