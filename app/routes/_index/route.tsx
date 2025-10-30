@@ -41,7 +41,7 @@ export default function Home() {
 
         {/* Content Container - Centered in available space */}
         <div className="relative z-10 flex-1 flex flex-col items-center justify-center gap-2 sm:gap-3 md:gap-4 lg:gap-6 text-center max-w-6xl mx-auto w-full">
-          <h1 className="font-grotesque text-5xl md:text-8xl font-bold leading-none text-secondary px-4">
+          <h1 className="font-grotesque text-5xl md:text-8xl font-bold leading-none text-secondary px-4 dark:text-primary">
             {HERO_CONTENT.title}
           </h1>
           <p className="font-grotesque text-3xl md:text-4xl font-normal leading-tight text-foreground max-w-6xl px-4">

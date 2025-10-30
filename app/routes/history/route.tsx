@@ -8,6 +8,7 @@ import { SiteHeader } from "~/components/site-header";
 import { TransactionPlanViewer } from "~/components/transaction-plan";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/ui/address-display";
 import { Button } from "~/components/ui/button";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -164,88 +165,86 @@ function ConsolidationCard({ consolidation, expanded, onToggle, onDelete, getSta
 
   return (
     <>
-      <div className="bg-card/70 rounded-lg border border-border overflow-hidden hover:border-border/80 transition-colors">
-        {/* Header */}
-        <div className="p-4 flex items-center justify-between">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-3 mb-2">
-              <h3 className="font-semibold text-lg">
-                {date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
-              </h3>
-              <span className={`px-2.5 py-1 rounded-md text-xs font-medium ${getStatusColor(consolidation.status)}`}>
-                {consolidation.status}
-              </span>
-            </div>
-            <div className="flex items-center gap-3 text-sm text-muted-foreground">
-              <span>
-                {consolidation.sourceTokens.length} token{consolidation.sourceTokens.length !== 1 ? "s" : ""} across{" "}
-                {sourceChains.length} chain{sourceChains.length !== 1 ? "s" : ""}
-              </span>
-              <span className="text-muted-foreground/50">•</span>
-              <span>
-                {completedSteps}/{totalSteps} steps completed
-              </span>
-            </div>
-            <div className="text-xs text-muted-foreground/70 mt-1">ID: {consolidation.id}</div>
+      <Card
+        className={`bg-card/70 border-secondary/30 hover:border-secondary/60 transition-colors gap-0 py-0 ${expanded ? "border-secondary/60" : ""}`}
+      >
+        <CardHeader className="py-4">
+          <div className="flex items-center gap-3 mb-2">
+            <CardTitle className="text-lg">
+              {date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+            </CardTitle>
+            <span className={`px-2.5 py-1 rounded-md text-xs font-medium ${getStatusColor(consolidation.status)}`}>
+              {consolidation.status}
+            </span>
           </div>
-
-          <div className="flex items-center gap-1 ml-4">
-            <Button variant="ghost" size="icon" onClick={onToggle} aria-label={expanded ? "Collapse" : "Expand"}>
-              {expanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setShowDeleteConfirm(true)}
-              className="text-destructive hover:text-destructive hover:bg-destructive/10"
-              aria-label="Delete consolidation"
-            >
-              <Trash2 className="w-5 h-5" />
-            </Button>
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <span>
+              {consolidation.sourceTokens.length} token{consolidation.sourceTokens.length !== 1 ? "s" : ""} across{" "}
+              {sourceChains.length} chain{sourceChains.length !== 1 ? "s" : ""}
+            </span>
+            <span className="text-muted-foreground/50">•</span>
+            <span>
+              {completedSteps}/{totalSteps} steps completed
+            </span>
           </div>
-        </div>
+          <div className="text-xs text-muted-foreground/70 mt-1">ID: {consolidation.id}</div>
 
-        {/* Expanded Content */}
+          <CardAction>
+            <div className="flex items-center gap-1">
+              <Button variant="link" size="icon" onClick={onToggle} aria-label={expanded ? "Collapse" : "Expand"}>
+                {expanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+              </Button>
+              <Button
+                variant="link"
+                size="icon"
+                onClick={() => setShowDeleteConfirm(true)}
+                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                aria-label="Delete consolidation"
+              >
+                <Trash2 className="w-5 h-5" />
+              </Button>
+            </div>
+          </CardAction>
+        </CardHeader>
+
         {expanded && (
-          <div className="border-t border-border bg-muted/30">
-            <div className="p-5 space-y-6">
-              {/* Source & Destination Tokens */}
-              <div className="grid md:grid-cols-2 gap-4">
-                {/* Source Tokens */}
-                <div>
-                  <h4 className="text-sm font-medium mb-3 text-muted-foreground">Source Tokens</h4>
-                  <div className="space-y-2">
-                    {consolidation.sourceTokens.map((token, idx) => (
-                      <TokenCard key={`${token.token}-${token.chainId}-${idx}`} token={token} />
-                    ))}
-                  </div>
-                </div>
-
-                {/* Destination Token */}
-                <div>
-                  <h4 className="text-sm font-medium mb-3 text-muted-foreground">Destination</h4>
-                  <TokenCard
-                    token={{
-                      ...consolidation.destinationToken,
-                      amount: 0n,
-                      symbol: "USDC",
-                      decimals: 6,
-                    }}
-                  />
+          <CardContent className="border-t border-border bg-muted/30 py-5 space-y-6">
+            {/* Source & Destination Tokens */}
+            <div className="grid md:grid-cols-2 gap-4">
+              {/* Source Tokens */}
+              <div>
+                <h4 className="text-sm font-medium mb-3 text-muted-foreground">Source Tokens</h4>
+                <div className="space-y-2">
+                  {consolidation.sourceTokens.map((token, idx) => (
+                    <TokenCard key={`${token.token}-${token.chainId}-${idx}`} token={token} />
+                  ))}
                 </div>
               </div>
 
-              {/* Transaction Steps */}
+              {/* Destination Token */}
               <div>
-                <h4 className="text-sm font-medium mb-3 text-muted-foreground">Transaction Steps</h4>
-                <div className="bg-background rounded-lg border border-border p-3">
-                  <TransactionPlanViewer state={consolidation} showActions={false} />
-                </div>
+                <h4 className="text-sm font-medium mb-3 text-muted-foreground">Destination</h4>
+                <TokenCard
+                  token={{
+                    ...consolidation.destinationToken,
+                    amount: 0n,
+                    symbol: "USDC",
+                    decimals: 6,
+                  }}
+                />
               </div>
             </div>
-          </div>
+
+            {/* Transaction Steps */}
+            <div>
+              <h4 className="text-sm font-medium mb-3 text-muted-foreground">Transaction Steps</h4>
+              <div className="bg-background rounded-lg border border-border p-3">
+                <TransactionPlanViewer state={consolidation} showActions={false} />
+              </div>
+            </div>
+          </CardContent>
         )}
-      </div>
+      </Card>
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
