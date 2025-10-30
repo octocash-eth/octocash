@@ -98,9 +98,9 @@ export default function History() {
               <Inbox className="w-16 h-16 mx-auto mb-4 text-muted-foreground/50" />
               <p className="text-lg font-medium mb-2">No consolidations yet</p>
               <p className="text-muted-foreground text-sm mb-6">Run a consolidation to see it here.</p>
-              <Button variant="default" asChild>
-                <Link to="/">Start Consolidating</Link>
-              </Button>
+              <Link to="/dashboard">
+                <Button variant="default">Start Consolidating</Button>
+              </Link>
             </div>
           ) : (
             <div className="space-y-3">
@@ -167,6 +167,7 @@ function ConsolidationCard({ consolidation, expanded, onToggle, onDelete, getSta
     <>
       <Card
         className={`bg-card/70 border-secondary/30 hover:border-secondary/60 transition-colors gap-0 py-0 ${expanded ? "border-secondary/60" : ""}`}
+        onClick={onToggle}
       >
         <CardHeader className="py-4">
           <div className="flex items-center gap-3 mb-2">
