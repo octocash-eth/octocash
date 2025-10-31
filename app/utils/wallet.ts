@@ -19,5 +19,5 @@ export const WALLETCONNECT_CONFIG: Config = import.meta.env.VITE_E2E
       projectId: WALLETCONNECT_PROJECT_ID || "dummy",
       chains: Object.values(chains) as unknown as readonly [Chain, ...Chain[]],
       transports,
-      ssr: false,
+      ssr: true,
     });

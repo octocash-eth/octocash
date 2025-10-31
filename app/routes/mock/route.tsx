@@ -3,9 +3,12 @@ import type { Address } from "viem";
 import { SiteHeader } from "~/components/site-header";
 import { TransactionPlanViewer } from "~/components/transaction-plan";
 import type { ConsolidationState, TransactionStep } from "~/lib/types";
+import { generateMeta } from "~/utils/meta";
 
 export function meta() {
-  return [{ title: "Mock Transaction Plans - OctoCash" }];
+  return generateMeta({
+    noIndex: true,
+  });
 }
 
 // Mock data based on test cases

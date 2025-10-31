@@ -23,14 +23,19 @@ import {
   TokenDisplayRoot,
   TokenDisplaySymbol,
 } from "~/components/ui/token-display";
-import { SITE_DESCRIPTION, SITE_NAME } from "~/data/site";
 import { chains } from "~/data/supported-chains";
 import { useConsolidationRecords } from "~/hooks/use-consolidation-records";
 import type { ConsolidationState, TokenAmount } from "~/lib/types";
+import { generateMeta } from "~/utils/meta";
 import ManualClaimDialog from "./manual-claim-dialog";
 
 export function meta() {
-  return [{ title: `History — ${SITE_NAME}` }, { name: "description", content: SITE_DESCRIPTION }];
+  return generateMeta({
+    title: "History",
+    description: "View your consolidation transaction history",
+    url: "/history",
+    noIndex: true,
+  });
 }
 
 export default function History() {
