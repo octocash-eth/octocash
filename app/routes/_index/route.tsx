@@ -29,7 +29,6 @@ export default function Home() {
       <SiteHeader />
 
       {/* Hero Section */}
-      {/* biome-ignore lint/correctness/useUniqueElementIds: Static IDs are intentional for navigation anchors on homepage */}
       <section
         id="hero"
         className="relative flex flex-col px-4 sm:px-6 lg:px-8 pt-4 sm:pt-8 md:pt-12 lg:pt-16 pb-0 overflow-hidden min-h-[calc(100dvh-60px)]"
@@ -78,7 +77,6 @@ export default function Home() {
         </div>
 
         {/* How It Works Section */}
-        {/* biome-ignore lint/correctness/useUniqueElementIds: Static IDs are intentional for navigation anchors on homepage */}
         <section id="how-it-works" className="relative px-4 sm:px-6 lg:px-8 py-20 md:py-32">
           <div className="max-w-7xl mx-auto">
             <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-24 lg:w-1/2">
@@ -117,7 +115,6 @@ export default function Home() {
         </section>
 
         {/* Key Features Section */}
-        {/* biome-ignore lint/correctness/useUniqueElementIds: Static IDs are intentional for navigation anchors on homepage */}
         <section id="features" className="relative px-4 sm:px-6 lg:px-8 py-20 md:py-32 overflow-hidden">
           <div className="max-w-7xl mx-auto">
             {/* Section Header */}
@@ -177,7 +174,6 @@ export default function Home() {
         </section>
 
         {/* Support Section */}
-        {/* biome-ignore lint/correctness/useUniqueElementIds: Static IDs are intentional for navigation anchors on homepage */}
         <section id="join" className="relative px-4 sm:px-6 lg:px-8 py-20 md:py-32">
           <div className="max-w-7xl mx-auto">
             <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-24">
@@ -223,7 +219,6 @@ export default function Home() {
         </section>
 
         {/* FAQ Section */}
-        {/* biome-ignore lint/correctness/useUniqueElementIds: Static IDs are intentional for navigation anchors on homepage */}
         <section id="faq" className="relative px-4 sm:px-6 lg:px-8 py-20 md:py-32">
           <div className="max-w-7xl mx-auto">
             <img
