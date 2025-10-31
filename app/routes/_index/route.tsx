@@ -14,12 +14,12 @@ import {
   HOW_IT_WORKS_CONTENT,
   SUPPORT_CONTENT,
 } from "~/data/homepage";
-import { SITE_DESCRIPTION, SITE_NAME } from "~/data/site";
 import { HeroBg } from "~/images/hero-bg";
+import { generateMeta } from "~/utils/meta";
 import { SupportedChains } from "./supported-chains";
 
 export function meta() {
-  return [{ title: SITE_NAME }, { name: "description", content: SITE_DESCRIPTION }];
+  return generateMeta();
 }
 
 export default function Home() {

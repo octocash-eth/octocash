@@ -29,23 +29,28 @@ export function ThemeProvider({
   ...props
 }: ThemeProviderProps) {
   const [theme, setThemeState] = useState<Theme>(() => {
-    if (typeof window === "undefined" || typeof localStorage === "undefined") return defaultTheme;
+    if (typeof globalThis === "undefined" || typeof localStorage === "undefined") return defaultTheme;
     return (localStorage.getItem(storageKey) as Theme) || defaultTheme;
   });
   const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">(() => {
-    if (typeof window === "undefined") return theme === "dark" ? "dark" : "light";
+    if (typeof globalThis === "undefined" || typeof globalThis.matchMedia === "undefined") {
+      return theme === "dark" ? "dark" : "light";
+    }
     if (theme === "system") {
-      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      return globalThis.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     }
     return theme === "dark" ? "dark" : "light";
   });
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const root = window.document.documentElement;
+    if (typeof globalThis === "undefined" || typeof globalThis.document === "undefined") return;
+    const root = globalThis.document.documentElement;
     root.classList.remove("light", "dark");
 
-    const systemTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    const systemTheme =
+      typeof globalThis.matchMedia !== "undefined" && globalThis.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
 
     const applied = theme === "system" ? systemTheme : theme;
     root.classList.add(applied);
@@ -53,8 +58,10 @@ export function ThemeProvider({
   }, [theme]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || theme !== "system") return;
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    if (typeof globalThis === "undefined" || typeof globalThis.matchMedia === "undefined" || theme !== "system") {
+      return;
+    }
+    const media = globalThis.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = (event: MediaQueryListEvent) => {
       setResolvedTheme(event.matches ? "dark" : "light");
     };
@@ -63,7 +70,7 @@ export function ThemeProvider({
   }, [theme]);
 
   const setTheme = (t: Theme) => {
-    if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+    if (typeof globalThis !== "undefined" && typeof localStorage !== "undefined") {
       localStorage.setItem(storageKey, t);
     }
     setThemeState(t);

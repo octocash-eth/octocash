@@ -8,8 +8,8 @@ export const HERO_CONTENT = {
 export const HOW_IT_WORKS_CONTENT = {
   title: "How it works",
   paragraphs: [
-    "I'm Octo, and I love treasure hunting. I'll show you your tokens across chains, let you choose what to consolidate, and then I'll dive in to gather them.",
-    "With a few clicks, I'll bring your treasures home, consolidated into one wallet, one token, one chain.",
+    "I'm Octo, your cross-chain treasure hunter. I'll show you where your tokens are hiding, help you pick what to keep, and then I'll fetch them for you.",
+    "In a few clicks, your scattered loot becomes one wallet, one token, one chain.",
   ],
 };
 

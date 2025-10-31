@@ -3,18 +3,23 @@ import { GatedConnectButton } from "~/components/gated-connect-button";
 import { SiteHeader } from "~/components/site-header";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "~/components/ui/empty";
 import { WalletTable } from "~/components/wallet-table";
-import { SITE_DESCRIPTION, SITE_NAME } from "~/data/site";
 import { useConnectedAddresses } from "~/hooks/use-connected-addresses";
+import { generateMeta } from "~/utils/meta";
 
 export function meta() {
-  return [{ title: `Dashboard — ${SITE_NAME}` }, { name: "description", content: SITE_DESCRIPTION }];
+  return generateMeta({
+    title: "Dashboard",
+    description: "View and manage your tokens across multiple chains",
+    url: "/dashboard",
+    noIndex: true,
+  });
 }
 
 export default function Dashboard() {
   const connectedAddresses = useConnectedAddresses();
 
   return (
-    <div className="flex flex-col min-h-svh bg-gradient-to-br from-background to-accent/10">
+    <div className="flex flex-col min-h-svh bg-linear-to-br from-background to-accent/10">
       <SiteHeader />
 
       {connectedAddresses.length > 0 ? (

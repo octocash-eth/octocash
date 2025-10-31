@@ -12,15 +12,15 @@ const gradientStops = {
   dark: ["#221c29", "#341054", "#461ea9"],
 } as const;
 
-const transition = { duration: 0.3, ease: "easeInOut" } as const;
+const transition = { duration: 0.5, ease: "easeInOut" } as const;
 
 const sunVariants = {
   light: { opacity: 1, y: 0 },
-  dark: { opacity: 0.5, y: 260 },
+  dark: { opacity: 0.5, y: 360 },
 } as const;
 
 const moonVariants = {
-  light: { opacity: 0.5, y: -260 },
+  light: { opacity: 0.5, y: -360 },
   dark: { opacity: 1, y: 0 },
 } as const;
 
