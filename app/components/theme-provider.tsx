@@ -1,92 +1,86 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-type Theme = "dark" | "light" | "system";
-
-type ThemeProviderProps = {
-  children: React.ReactNode;
-  defaultTheme?: Theme;
-  storageKey?: string;
-};
-
-type ThemeProviderState = {
-  theme: Theme;
-  resolvedTheme: "dark" | "light";
-  setTheme: (theme: Theme) => void;
-};
-
-const initialState: ThemeProviderState = {
-  theme: "system",
-  resolvedTheme: "light",
-  setTheme: () => null,
-};
-
-const ThemeProviderContext = createContext<ThemeProviderState>(initialState);
-
-export function ThemeProvider({
-  children,
-  defaultTheme = "system",
-  storageKey = "vite-ui-theme",
-  ...props
-}: ThemeProviderProps) {
-  const [theme, setThemeState] = useState<Theme>(() => {
-    if (typeof globalThis === "undefined" || typeof localStorage === "undefined") return defaultTheme;
-    return (localStorage.getItem(storageKey) as Theme) || defaultTheme;
-  });
-  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">(() => {
-    if (typeof globalThis === "undefined" || typeof globalThis.matchMedia === "undefined") {
-      return theme === "dark" ? "dark" : "light";
-    }
-    if (theme === "system") {
-      return globalThis.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    }
-    return theme === "dark" ? "dark" : "light";
-  });
-
-  useEffect(() => {
-    if (typeof globalThis === "undefined" || typeof globalThis.document === "undefined") return;
-    const root = globalThis.document.documentElement;
-    root.classList.remove("light", "dark");
-
-    const systemTheme =
-      typeof globalThis.matchMedia !== "undefined" && globalThis.matchMedia("(prefers-color-scheme: dark)").matches
-        ? "dark"
-        : "light";
-
-    const applied = theme === "system" ? systemTheme : theme;
-    root.classList.add(applied);
-    setResolvedTheme(applied);
-  }, [theme]);
-
-  useEffect(() => {
-    if (typeof globalThis === "undefined" || typeof globalThis.matchMedia === "undefined" || theme !== "system") {
-      return;
-    }
-    const media = globalThis.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = (event: MediaQueryListEvent) => {
-      setResolvedTheme(event.matches ? "dark" : "light");
-    };
-    media.addEventListener("change", handleChange);
-    return () => media.removeEventListener("change", handleChange);
-  }, [theme]);
-
-  const setTheme = (t: Theme) => {
-    if (typeof globalThis !== "undefined" && typeof localStorage !== "undefined") {
-      localStorage.setItem(storageKey, t);
-    }
-    setThemeState(t);
-  };
-
-  const value = { theme, resolvedTheme, setTheme };
-
+export function ThemeMeta() {
   return (
-    <ThemeProviderContext.Provider {...props} value={value}>
-      {children}
-    </ThemeProviderContext.Provider>
+    <>
+      <meta name="color-scheme" content="light dark" />
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `
+        (function () {
+          var k = "theme"; // "light" | "dark"
+          var root = document.documentElement;
+          var mql = window.matchMedia("(prefers-color-scheme: dark)");
+          var persisted = localStorage.getItem(k);
+          var t = (persisted === "light" || persisted === "dark")
+            ? persisted
+            : (mql.matches ? "dark" : "light");
+          root.classList.toggle("dark", t === "dark");
+          root.setAttribute("data-theme", t);
+          // Optional: avoid first-frame transitions
+          root.classList.add("no-theme-transition");
+          requestAnimationFrame(() => root.classList.remove("no-theme-transition"));
+        })();`,
+        }}
+      />
+      <style dangerouslySetInnerHTML={{ __html: `.no-theme-transition * { transition: none !important; }` }} />
+    </>
   );
 }
 
-export const useTheme = () => {
-  const context = useContext(ThemeProviderContext);
-  if (context === undefined) throw new Error("useTheme must be used within a ThemeProvider");
-  return context;
-};
+type Theme = "light" | "dark" | "system";
+type Ctx = { theme: Theme; resolvedTheme: "light" | "dark"; setTheme: (t: Theme) => void };
+export const ThemeContext = createContext<Ctx>({ theme: "system", resolvedTheme: "light", setTheme: () => {} });
+
+const STORAGE_KEY = "theme";
+
+function getInitial(): { theme: Theme; resolved: "light" | "dark" } {
+  if (typeof document !== "undefined") {
+    const attr = document.documentElement.getAttribute("data-theme");
+    if (attr === "light" || attr === "dark") {
+      // This was set by the head script before paint
+      return { theme: (localStorage.getItem(STORAGE_KEY) as Theme) ?? "system", resolved: attr };
+    }
+  }
+  // Fallback (should rarely run with the head script present)
+  const persisted = typeof localStorage !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
+  if (persisted === "light" || persisted === "dark") return { theme: persisted, resolved: persisted };
+  const prefersDark = typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  return { theme: "system", resolved: prefersDark ? "dark" : "light" };
+}
+
+export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const [{ theme, resolved }, setState] = useState(getInitial);
+
+  const mql = useMemo(
+    () => (typeof window !== "undefined" ? window.matchMedia("(prefers-color-scheme: dark)") : null),
+    [],
+  );
+
+  // Keep <html> and storage in sync whenever theme changes
+  useEffect(() => {
+    const root = document.documentElement;
+    const nextResolved = theme === "system" ? (mql?.matches ? "dark" : "light") : theme;
+    root.classList.toggle("dark", nextResolved === "dark");
+    root.setAttribute("data-theme", nextResolved);
+    if (theme === "system") localStorage.removeItem(STORAGE_KEY);
+    else localStorage.setItem(STORAGE_KEY, theme);
+    setState((s) => ({ ...s, resolved: nextResolved }));
+  }, [theme, mql]);
+
+  // React to OS changes while in "system"
+  useEffect(() => {
+    if (!mql) return;
+    const onChange = () => setState((s) => ({ ...s, resolved: mql.matches ? "dark" : "light" }));
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, [mql]);
+
+  const setTheme = useCallback((t: Theme) => setState((s) => ({ ...s, theme: t })), []);
+
+  return <ThemeContext.Provider value={{ theme, resolvedTheme: resolved, setTheme }}>{children}</ThemeContext.Provider>;
+}
+
+export function useTheme() {
+  return useContext(ThemeContext);
+}

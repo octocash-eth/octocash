@@ -22,7 +22,8 @@ export function generateMeta(options: MetaOptions = {}) {
     noIndex = false,
   } = options;
 
-  const fullTitle = title === SITE_NAME ? title : `${title} | ${SITE_NAME}`;
+  const fullTitle =
+    title.startsWith(`${SITE_NAME} |`) || title.endsWith(`| ${SITE_NAME}`) ? title : `${title} | ${SITE_NAME}`;
   const fullImageUrl = image.startsWith("http") ? image : `${SITE_URL}${image}`;
   const fullUrl = url.startsWith("http") ? url : `${SITE_URL}${url}`;
 
