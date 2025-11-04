@@ -3,10 +3,11 @@ import { useTheme } from "~/components/theme-provider";
 import { Button } from "~/components/ui/button";
 
 export function ThemeToggle({ variant = "outline" }: { variant?: "outline" | "ghost" }) {
-  const { theme, setTheme } = useTheme();
+  const { resolvedTheme, setTheme } = useTheme();
 
   const toggleTheme = () => {
-    setTheme(theme === "dark" ? "light" : "dark");
+    // Toggle based on what's actually displayed (resolvedTheme), not the theme setting
+    setTheme(resolvedTheme === "dark" ? "light" : "dark");
   };
 
   return (

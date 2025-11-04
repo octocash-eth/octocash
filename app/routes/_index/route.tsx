@@ -1,37 +1,43 @@
 import { Link } from "react-router";
-import { FeatureCard } from "~/components/feature-card";
+import { DeferredSection } from "~/components/deferred-section";
 import { SiteHeader } from "~/components/site-header";
-import { useTheme } from "~/components/theme-provider";
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "~/components/ui/accordion";
 import { Button } from "~/components/ui/button";
-import { Card, CardContent, CardDescription, CardTitle } from "~/components/ui/card";
-import {
-  FAQ_CONTENT,
-  FAQ_ITEMS,
-  FEATURES_CONTENT,
-  FOOTER_CONTENT,
-  HERO_CONTENT,
-  HOW_IT_WORKS_CONTENT,
-  SUPPORT_CONTENT,
-} from "~/data/homepage";
+import { HERO_CONTENT } from "~/data/homepage";
 import { HeroBg } from "~/images/hero-bg";
 import { generateMeta } from "~/utils/meta";
-import { SupportedChains } from "./supported-chains";
+import FAQSection from "./sections/faq";
+import FeaturesSection from "./sections/features";
+import FooterSection from "./sections/footer";
+// Import sections directly for SSR/SSG
+import HowItWorksSection from "./sections/how-it-works";
+import SupportSection from "./sections/support";
 
 export function meta() {
   return generateMeta();
 }
 
+// Preload critical above-the-fold resources
+export function links() {
+  return [
+    // Preload hero image
+    {
+      rel: "preload",
+      href: "/decorations/octo-header.svg",
+      as: "image",
+      fetchPriority: "high",
+    },
+  ];
+}
+
 export default function Home() {
-  const { resolvedTheme } = useTheme();
   return (
     <div className="relative flex flex-col min-h-screen">
       <SiteHeader />
 
-      {/* Hero Section */}
+      {/* Hero Section - Above the fold, loads immediately */}
       <section
         id="hero"
-        className="relative flex flex-col px-4 sm:px-6 lg:px-8 pt-4 sm:pt-8 md:pt-12 lg:pt-16 pb-0 overflow-hidden min-h-[calc(100dvh-60px)]"
+        className="relative flex flex-col px-4 sm:px-6 lg:px-8 pt-4 sm:pt-8 md:pt-12 lg:pt-16 pb-0 overflow-hidden min-h-[calc(100svh-60px)]"
       >
         {/* Background Decorations */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
@@ -59,6 +65,7 @@ export default function Home() {
             width={567}
             height={430}
             className="w-full h-auto"
+            fetchPriority="high"
           />
         </div>
       </section>
@@ -68,208 +75,45 @@ export default function Home() {
         {/* Background Ocean - Starts After Hero */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           <img
-            src={`/decorations/background-ocean-${resolvedTheme}.svg`}
+            src="/decorations/background-ocean-light.svg"
             alt=""
             width={1728}
             height={4895}
-            className="w-full h-full object-top object-cover"
+            className="w-full h-full object-top object-cover dark:hidden"
+            loading="lazy"
+            decoding="async"
+          />
+          <img
+            src="/decorations/background-ocean-dark.svg"
+            alt=""
+            width={1728}
+            height={4895}
+            className="w-full h-full object-top object-cover hidden dark:block"
+            loading="lazy"
+            decoding="async"
           />
         </div>
 
-        {/* How It Works Section */}
-        <section id="how-it-works" className="relative px-4 sm:px-6 lg:px-8 py-20 md:py-32">
-          <div className="max-w-7xl mx-auto">
-            <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-24 lg:w-1/2">
-              {/* Text Content */}
-              <div className="flex-1 space-y-8">
-                <div>
-                  <h2 className="font-grotesque text-4xl md:text-5xl font-bold mb-8 text-primary">
-                    {HOW_IT_WORKS_CONTENT.title}
-                  </h2>
-                  <p className="font-grotesque text-3xl md:text-4xl text-foreground leading-tight">
-                    {HOW_IT_WORKS_CONTENT.paragraphs[0]}
-                  </p>
-                  <p className="font-grotesque text-3xl md:text-4xl text-foreground leading-tight mt-4">
-                    {HOW_IT_WORKS_CONTENT.paragraphs[1]}
-                  </p>
-                </div>
+        {/* Below-the-fold sections - Rendered on server, deferred hydration on client */}
+        <DeferredSection>
+          <HowItWorksSection />
+        </DeferredSection>
 
-                {/* Chain Icons */}
-                <div className="pt-8">
-                  <SupportedChains />
-                </div>
-              </div>
+        <DeferredSection>
+          <FeaturesSection />
+        </DeferredSection>
 
-              {/* Illustration */}
-              <div className="lg:absolute lg:top-0 right-0 ml-auto translate-x-4 lg:translate-x-0">
-                <img
-                  src="/decorations/how-it-works-illustration.svg"
-                  alt="How it works illustration"
-                  width={694}
-                  height={903}
-                  className="w-full max-w-md h-auto"
-                />
-              </div>
-            </div>
-          </div>
-        </section>
+        <DeferredSection>
+          <SupportSection />
+        </DeferredSection>
 
-        {/* Key Features Section */}
-        <section id="features" className="relative px-4 sm:px-6 lg:px-8 py-20 md:py-32 overflow-hidden">
-          <div className="max-w-7xl mx-auto">
-            {/* Section Header */}
-            <div className="text-center mb-16 max-w-4xl mx-auto">
-              <h2 className="font-grotesque text-4xl md:text-5xl font-bold mb-6 text-primary leading-none">
-                {FEATURES_CONTENT.title}
-              </h2>
-              <p className="text-3xl md:text-4xl text-foreground leading-tight">{FEATURES_CONTENT.subtitle}</p>
-            </div>
+        <DeferredSection>
+          <FAQSection />
+        </DeferredSection>
 
-            {/* Feature Cards Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-              {FEATURES_CONTENT.cards.map((card) => (
-                <FeatureCard
-                  key={card.title}
-                  title={card.title}
-                  description={card.description}
-                  imageSrc={card.imageSrc(resolvedTheme)}
-                  imageAlt={card.imageAlt}
-                  imageWidth={card.imageWidth}
-                  imageHeight={card.imageHeight}
-                  className="shadow-md"
-                />
-              ))}
-            </div>
-
-            {/* Trusted Technologies Card */}
-            <Card className="shadow-md">
-              <CardContent className="p-8 flex flex-col items-center justify-center space-y-6">
-                <div className="md:text-center space-y-4">
-                  <CardTitle className="font-grotesque text-3xl md:text-4xl font-bold text-secondary">
-                    {FEATURES_CONTENT.trustedTech.title}
-                  </CardTitle>
-                  <CardDescription className="text-2xl md:text-3xl text-foreground">
-                    {FEATURES_CONTENT.trustedTech.description}
-                  </CardDescription>
-                </div>
-                <img
-                  src={`/decorations/trusted-tech-${resolvedTheme}.svg`}
-                  alt="Circle CCTP and Odos logos"
-                  width={716}
-                  height={107}
-                  className="w-full max-w-2xl h-auto"
-                />
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Coral Decoration */}
-          <img
-            src="/decorations/coral-1.svg"
-            alt=""
-            width={251}
-            height={329}
-            className="absolute top-0 left-0 h-50 w-auto hidden lg:block xl:h-70"
-          />
-        </section>
-
-        {/* Support Section */}
-        <section id="join" className="relative px-4 sm:px-6 lg:px-8 py-20 md:py-32">
-          <div className="max-w-7xl mx-auto">
-            <div className="flex flex-col lg:flex-row items-center gap-12 lg:gap-24">
-              {/* Text and Buttons */}
-              <div className="flex-1 space-y-8">
-                <div>
-                  <h2 className="font-grotesque text-4xl md:text-5xl font-bold mb-8 text-primary leading-none">
-                    {SUPPORT_CONTENT.title}
-                  </h2>
-                  <p className="text-3xl md:text-4xl text-foreground max-w-2xl leading-tight">
-                    {SUPPORT_CONTENT.description}
-                  </p>
-                </div>
-
-                <div className="flex flex-row gap-4">
-                  <a href={SUPPORT_CONTENT.ctaLink} target="_blank" rel="noopener noreferrer">
-                    <Button size="2xl">{SUPPORT_CONTENT.cta}</Button>
-                  </a>
-                </div>
-              </div>
-
-              {/* Illustration */}
-              <div className="shrink-0">
-                <img
-                  src="/decorations/support-illustration.svg"
-                  alt="Support illustration"
-                  width={441}
-                  height={450}
-                  className="w-full max-w-md h-auto"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Coral Decoration */}
-          <img
-            src={`/decorations/coral-3-${resolvedTheme}.svg`}
-            alt=""
-            width={188}
-            height={152}
-            className="absolute top-0 left-0 h-50 w-auto hidden xl:block"
-          />
-        </section>
-
-        {/* FAQ Section */}
-        <section id="faq" className="relative px-4 sm:px-6 lg:px-8 py-20 md:py-32">
-          <div className="max-w-7xl mx-auto">
-            <img
-              src="/decorations/coral-2.svg"
-              alt=""
-              width={269}
-              height={338}
-              className="absolute top-0 right-0 h-80 w-auto hidden lg:block"
-            />
-
-            {/* Section Header */}
-            <div className="mb-12">
-              <h2 className="font-grotesque text-4xl md:text-5xl font-bold mb-6 text-primary leading-none">
-                {FAQ_CONTENT.title}
-              </h2>
-              <p className="font-grotesque text-3xl md:text-4xl text-foreground lg:w-2/3 leading-tight">
-                {FAQ_CONTENT.subtitle}
-              </p>
-            </div>
-
-            {/* Accordion */}
-            <Accordion type="single" collapsible className="space-y-4">
-              {FAQ_ITEMS.map((item, index) => (
-                <AccordionItem key={`item-${index + 1}`} value={`item-${index + 1}`} className="border rounded-xl px-4">
-                  <AccordionTrigger className="font-grotesque text-3xl md:text-4xl font-bold text-primary hover:no-underline leading-tight">
-                    {item.question}
-                  </AccordionTrigger>
-                  <AccordionContent className="text-2xl md:text-3xl text-foreground leading-tight">
-                    {item.answer}
-                  </AccordionContent>
-                </AccordionItem>
-              ))}
-            </Accordion>
-          </div>
-        </section>
-
-        {/* Footer */}
-        <footer className="relative">
-          <img
-            src={`/decorations/background-footer-${resolvedTheme}.svg`}
-            alt=""
-            width={1728}
-            height={750}
-            className="w-full h-full object-cover opacity-100"
-          />
-          <div className="relative px-4 sm:px-6 lg:px-8 pb-12 z-10 text-center bg-[#ecdfc1] dark:bg-[#624e20]">
-            <p className="text-2xl md:text-3xl font-medium text-orange-900 dark:text-white">
-              {FOOTER_CONTENT.copyright}
-            </p>
-          </div>
-        </footer>
+        <DeferredSection>
+          <FooterSection />
+        </DeferredSection>
       </div>
     </div>
   );

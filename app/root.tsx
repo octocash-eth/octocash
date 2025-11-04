@@ -2,19 +2,20 @@ import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration }
 
 import type { Route } from "./+types/root";
 import "./app.css";
-import { ThemeProvider } from "./components/theme-provider";
+import { ThemeMeta, ThemeProvider } from "./components/theme-provider";
 import { WalletProvider } from "./context/wallet-provider";
 
 export const links: Route.LinksFunction = () => [];
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
+        <ThemeMeta />
       </head>
       <body>
         {children}
@@ -27,7 +28,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <ThemeProvider storageKey="theme" defaultTheme="system">
+    <ThemeProvider>
       <WalletProvider>
         <Outlet />
       </WalletProvider>
@@ -38,7 +39,7 @@ export default function App() {
 // HydrateFallback for SEO - shows static content while JavaScript loads
 export function HydrateFallback() {
   return (
-    <ThemeProvider storageKey="theme" defaultTheme="light">
+    <ThemeProvider>
       <WalletProvider>
         <Outlet />
       </WalletProvider>

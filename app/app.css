@@ -185,6 +185,17 @@ body {
   --button-link-active-foreground: var(--color-pink-700);
   --accordion: var(--color-white);
   --accordion-foreground: var(--color-violet-500);
+
+  --hero-bg-gradient-1: #ffffff;
+  --hero-bg-gradient-2: #ffc1bc;
+  --hero-bg-gradient-3: #7342ed;
+  --hero-sun-opacity: 1;
+  --hero-sun-y: 0;
+  --hero-moon-opacity: 0.5;
+  --hero-moon-y: -360px;
+  --hero-cloud-opacity-1: 1;
+  --hero-cloud-opacity-2: 1;
+  --hero-cloud-opacity-3: 0.3;
 }
 
 .dark {
@@ -236,6 +247,17 @@ body {
   --button-link-active-foreground: var(--color-pink-400);
   --accordion: var(--color-violet-800);
   --accordion-foreground: var(--color-white);
+
+  --hero-bg-gradient-1: #221c29;
+  --hero-bg-gradient-2: #341054;
+  --hero-bg-gradient-3: #461ea9;
+  --hero-sun-opacity: 0.5;
+  --hero-sun-y: 360px;
+  --hero-moon-opacity: 1;
+  --hero-moon-y: 0;
+  --hero-cloud-opacity-1: 0.3;
+  --hero-cloud-opacity-2: 0.3;
+  --hero-cloud-opacity-3: 0.2;
 }
 
 @layer base {

@@ -1,51 +1,12 @@
-import { motion } from "motion/react";
 import { useId } from "react";
-import { useTheme } from "~/components/theme-provider";
-
-const MotionSvg = motion.svg;
-const MotionStop = motion("stop");
-const MotionGroup = motion.g;
-const MotionPath = motion.path;
-
-const gradientStops = {
-  light: ["#ffffff", "#ffc1bc", "#7342ed"],
-  dark: ["#221c29", "#341054", "#461ea9"],
-} as const;
-
-const transition = { duration: 0.5, ease: "easeInOut" } as const;
-
-const sunVariants = {
-  light: { opacity: 1, y: 0 },
-  dark: { opacity: 0.5, y: 360 },
-} as const;
-
-const moonVariants = {
-  light: { opacity: 0.5, y: -360 },
-  dark: { opacity: 1, y: 0 },
-} as const;
-
-const cloudOpacityVariants = {
-  cloud1: {
-    light: { opacity: 1 },
-    dark: { opacity: 0.3 },
-  },
-  cloud2: {
-    light: { opacity: 1 },
-    dark: { opacity: 0.3 },
-  },
-  cloud3: {
-    light: { opacity: 0.3 },
-    dark: { opacity: 0.2 },
-  },
-} as const;
 
 type HeroBgProps = {
   className?: string;
 };
 
 export function HeroBg({ className }: HeroBgProps) {
-  const { resolvedTheme } = useTheme();
   const uniqueId = useId();
+
   const ids = {
     mask: `${uniqueId}-mask`,
     filters: {
@@ -66,18 +27,24 @@ export function HeroBg({ className }: HeroBgProps) {
     },
   } as const;
 
-  const gradient = gradientStops[resolvedTheme];
+  // Get gradient colors from CSS custom properties
+  const getGradientColor = (index: number) => `var(--hero-bg-gradient-${index})`;
 
   return (
-    <MotionSvg
+    <svg
       width="1728"
       height="989"
       viewBox="0 0 1728 989"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
-      initial={false}
       className={className}
       preserveAspectRatio="xMidYMid slice"
+      role="img"
+      aria-label="Hero background illustration with day and night theme"
+      style={{
+        // CSS transitions for smooth theme changes
+        transition: "opacity 0.5s ease-in-out",
+      }}
     >
       <mask
         id={ids.mask}
@@ -92,7 +59,15 @@ export function HeroBg({ className }: HeroBgProps) {
       </mask>
       <g mask={`url(#${ids.mask})`}>
         <path d="M1728 0H0V989H1728V0Z" fill={`url(#${ids.gradients.background})`} />
-        <MotionGroup variants={moonVariants} animate={resolvedTheme} initial={false} transition={transition}>
+        <g
+          style={{
+            opacity: "var(--hero-moon-opacity)",
+            transform: `translateY(var(--hero-moon-y))`,
+            transformOrigin: "50% 50%",
+            transformBox: "fill-box",
+            transition: "opacity 0.5s ease-in-out, transform 0.5s ease-in-out",
+          }}
+        >
           <g opacity="0.3">
             <path
               style={{ mixBlendMode: "screen" }}
@@ -195,31 +170,31 @@ export function HeroBg({ className }: HeroBgProps) {
               fill="#B8B8B8"
             />
           </g>
-        </MotionGroup>
-        <MotionPath
-          style={{ mixBlendMode: "screen" }}
-          variants={cloudOpacityVariants.cloud1}
-          animate={resolvedTheme}
-          initial={false}
-          transition={transition}
+        </g>
+        <path
+          style={{
+            mixBlendMode: "screen",
+            opacity: "var(--hero-cloud-opacity-1)",
+            transition: "opacity 0.5s ease-in-out",
+          }}
           d="M292.63 257.159C292.64 257.008 292.65 256.867 292.65 256.717C292.65 253.229 289.84 250.405 286.37 250.405C284.54 250.405 282.89 251.199 281.74 252.455C280.42 249.952 277.8 248.244 274.78 248.244C274.44 248.244 274.11 248.274 273.78 248.314C272.48 245.842 269.89 244.153 266.91 244.153C265.69 244.153 264.55 244.445 263.52 244.937C262.81 239.67 258.33 235.6 252.89 235.6C250.83 235.6 248.92 236.193 247.29 237.198C245.77 234.756 243.08 233.137 240.01 233.137C237.48 233.137 235.21 234.243 233.64 235.992C231.7 234.223 229.12 233.137 226.29 233.137C225.36 233.137 224.47 233.268 223.61 233.479C222.59 230.675 219.92 228.665 216.77 228.665C216.64 228.665 216.51 228.675 216.39 228.685C216.39 228.685 216.39 228.675 216.39 228.665C216.39 224.835 213.3 221.73 209.49 221.73C208.62 221.73 207.78 221.901 207.01 222.192C207.12 221.589 207.18 220.976 207.18 220.333C207.18 214.624 202.58 210 196.9 210C191.22 210 186.62 214.624 186.62 220.333C186.62 221.438 186.8 222.494 187.11 223.489C185.59 222.383 183.73 221.72 181.71 221.72C176.63 221.72 172.51 225.861 172.51 230.966C172.51 232.032 172.7 233.057 173.03 234.012C172 233.449 170.82 233.127 169.56 233.127C165.56 233.127 162.32 236.384 162.32 240.404C162.32 241.731 162.68 242.967 163.3 244.043C161.48 241.721 158.65 240.213 155.48 240.213C152.31 240.213 149.22 241.852 147.41 244.364C146.38 243.691 145.15 243.299 143.83 243.299C141.04 243.299 138.66 245.048 137.69 247.51C136.75 246.807 135.58 246.384 134.32 246.384C131.19 246.384 128.65 248.937 128.65 252.083C128.65 252.264 128.66 252.445 128.68 252.626C127.98 252.284 127.19 252.083 126.35 252.083C123.5 252.083 121.17 254.325 121 257.149H292.6L292.63 257.159Z"
           fill={`url(#${ids.gradients.cloud1})`}
         />
-        <MotionPath
-          style={{ mixBlendMode: "screen" }}
-          variants={cloudOpacityVariants.cloud2}
-          animate={resolvedTheme}
-          initial={false}
-          transition={transition}
+        <path
+          style={{
+            mixBlendMode: "screen",
+            opacity: "var(--hero-cloud-opacity-2)",
+            transition: "opacity 0.5s ease-in-out",
+          }}
           d="M1793.55 549.65C1793.34 537.67 1783.58 528.02 1771.54 528.02C1771.44 528.02 1771.34 528.03 1771.24 528.04C1769.39 514.87 1758.11 504.73 1744.43 504.73C1730.75 504.73 1719.62 514.74 1717.66 527.79C1713.43 525.25 1708.47 523.79 1703.18 523.79C1697.89 523.79 1693.43 525.11 1689.34 527.42C1689.02 518.11 1681.39 510.66 1672 510.66C1671.8 510.66 1671.61 510.68 1671.42 510.69C1671.42 510.42 1671.44 510.16 1671.44 509.89C1671.44 494.49 1658.95 482 1643.55 482C1632.26 482 1622.55 488.71 1618.16 498.35C1615.02 495.23 1610.69 493.3 1605.92 493.3C1599.58 493.3 1594.05 496.71 1591.02 501.79C1585.54 496.54 1578.11 493.3 1569.92 493.3C1554.13 493.3 1541.15 505.3 1539.58 520.67C1537.9 520.24 1536.15 519.99 1534.34 519.99C1523.37 519.99 1514.35 528.33 1513.27 539.02C1507.19 541.01 1503 545.2 1503 550.06C1503 556.84 1511.15 562.34 1521.21 562.34C1521.69 562.34 1522.17 562.32 1522.64 562.29C1525.68 565.2 1529.8 567 1534.34 567C1534.98 567 1535.6 566.96 1536.22 566.89C1539.14 572.73 1545.15 576.75 1552.13 576.75C1556.08 576.75 1559.71 575.45 1562.66 573.28C1567.15 576.52 1572.65 578.44 1578.6 578.44C1588.62 578.44 1597.35 573.03 1602.11 564.99C1605.44 569.3 1610.65 572.08 1616.51 572.08C1621.07 572.08 1625.23 570.39 1628.42 567.63C1630.37 571.95 1634.71 574.96 1639.76 574.96C1642.16 574.96 1644.39 574.27 1646.29 573.1C1650.82 576.44 1656.4 578.44 1662.46 578.44C1670.01 578.44 1676.85 575.37 1681.8 570.42C1686.97 576.42 1694.62 580.22 1703.17 580.22C1710.92 580.22 1717.94 577.09 1723.04 572.03C1726.53 576.48 1731.95 579.34 1738.04 579.34C1744.13 579.34 1749.51 576.49 1753.01 572.07C1756.03 575.94 1760.73 578.44 1766.02 578.44C1770.38 578.44 1774.33 576.74 1777.29 573.98C1779.76 575.87 1782.84 577.01 1786.19 577.01C1794.29 577.01 1800.86 570.44 1800.86 562.34C1800.86 556.92 1797.91 552.2 1793.54 549.66L1793.55 549.65Z"
           fill={`url(#${ids.gradients.cloud2})`}
         />
-        <MotionPath
-          style={{ mixBlendMode: "screen" }}
-          variants={cloudOpacityVariants.cloud3}
-          animate={resolvedTheme}
-          initial={false}
-          transition={transition}
+        <path
+          style={{
+            mixBlendMode: "screen",
+            opacity: "var(--hero-cloud-opacity-3)",
+            transition: "opacity 0.5s ease-in-out",
+          }}
           d="M383.868 665.183C383.594 650.104 371.382 637.956 356.307 637.956C356.179 637.956 356.07 637.956 355.942 637.974C353.627 621.392 339.501 608.639 322.366 608.639C305.232 608.639 291.288 621.245 288.845 637.662C283.541 634.474 277.343 632.624 270.708 632.624C264.073 632.624 258.495 634.291 253.373 637.186C252.972 625.459 243.421 616.078 231.664 616.078C231.427 616.078 231.172 616.115 230.935 616.115C230.935 615.785 230.953 615.437 230.953 615.107C230.953 595.721 215.313 580 196.028 580C181.901 580 169.725 588.447 164.238 600.577C160.301 596.637 154.887 594.219 148.909 594.219C140.961 594.219 134.035 598.506 130.243 604.901C123.371 598.286 114.075 594.219 103.812 594.219C84.035 594.219 67.7756 609.317 65.8252 628.666C63.729 628.134 61.5234 627.805 59.2632 627.805C45.5192 627.805 34.2179 638.304 32.869 651.753C25.2679 654.263 20 659.54 20 665.66C20 674.198 30.2077 681.124 42.8033 681.124C43.4048 681.124 44.0063 681.088 44.5896 681.069C48.3993 684.734 53.5578 686.988 59.2449 686.988C60.047 686.988 60.8308 686.933 61.5963 686.841C65.2602 694.189 72.7883 699.246 81.5196 699.246C86.4594 699.246 91.0164 697.615 94.6984 694.867C100.313 698.934 107.203 701.371 114.658 701.371C127.199 701.371 138.136 694.555 144.096 684.441C148.271 689.864 154.778 693.364 162.124 693.364C167.829 693.364 173.042 691.239 177.034 687.757C179.477 693.199 184.909 696.992 191.234 696.992C194.242 696.992 197.031 696.131 199.418 694.647C205.087 698.843 212.087 701.371 219.67 701.371C229.13 701.371 237.697 697.505 243.895 691.275C250.366 698.824 259.954 703.625 270.654 703.625C280.369 703.625 289.155 699.686 295.535 693.309C299.909 698.916 306.69 702.526 314.328 702.526C321.965 702.526 328.692 698.934 333.066 693.382C336.858 698.256 342.745 701.39 349.362 701.39C354.831 701.39 359.77 699.246 363.471 695.783C366.569 698.165 370.415 699.594 374.626 699.594C384.761 699.594 393 691.33 393 681.124C393 674.308 389.3 668.353 383.831 665.165L383.868 665.183Z"
           fill={`url(#${ids.gradients.cloud3})`}
         />
@@ -231,7 +206,15 @@ export function HeroBg({ className }: HeroBgProps) {
           d="M148.262 920.763C211.692 937.719 278.093 938.961 343.434 945.334C401.541 950.993 460.869 961.438 511.903 988.976H0V871.783C50.2272 884.184 98.0122 907.328 148.262 920.763Z"
           fill={`url(#${ids.gradients.leftMountain})`}
         />
-        <MotionGroup variants={sunVariants} animate={resolvedTheme} initial={false} transition={transition}>
+        <g
+          style={{
+            opacity: "var(--hero-sun-opacity)",
+            transform: `translateY(var(--hero-sun-y))`,
+            transformOrigin: "50% 50%",
+            transformBox: "fill-box",
+            transition: "opacity 0.5s ease-in-out, transform 0.5s ease-in-out",
+          }}
+        >
           <path
             style={{ mixBlendMode: "screen" }}
             d="M457 988.512C457 763.443 639.219 581 864.012 581C1088.81 581 1271.02 763.443 1271.02 988.512C1271.02 1213.58 1088.81 1396.02 864.012 1396.02C639.219 1396.02 457 1213.56 457 988.512Z"
@@ -243,7 +226,7 @@ export function HeroBg({ className }: HeroBgProps) {
               fill="white"
             />
           </g>
-        </MotionGroup>
+        </g>
       </g>
       <defs>
         <filter
@@ -320,19 +303,17 @@ export function HeroBg({ className }: HeroBgProps) {
           y2="1218.16"
           gradientUnits="userSpaceOnUse"
         >
-          <MotionStop
+          <stop
             offset="0.0288462"
-            stopColor={gradient[0]}
-            animate={{ stopColor: gradient[0] }}
-            transition={transition}
+            stopColor={getGradientColor(1)}
+            style={{ transition: "stop-color 0.5s ease-in-out" }}
           />
-          <MotionStop
+          <stop
             offset="0.307692"
-            stopColor={gradient[1]}
-            animate={{ stopColor: gradient[1] }}
-            transition={transition}
+            stopColor={getGradientColor(2)}
+            style={{ transition: "stop-color 0.5s ease-in-out" }}
           />
-          <MotionStop offset="1" stopColor={gradient[2]} animate={{ stopColor: gradient[2] }} transition={transition} />
+          <stop offset="1" stopColor={getGradientColor(3)} style={{ transition: "stop-color 0.5s ease-in-out" }} />
         </linearGradient>
         <linearGradient
           id={ids.gradients.cloud1}
@@ -444,6 +425,6 @@ export function HeroBg({ className }: HeroBgProps) {
           <stop offset="1" stopColor="white" stopOpacity="0" />
         </radialGradient>
       </defs>
-    </MotionSvg>
+    </svg>
   );
 }
