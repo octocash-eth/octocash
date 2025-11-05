@@ -5,6 +5,7 @@ import { Button } from "~/components/ui/button";
 import { HERO_CONTENT } from "~/data/homepage";
 import { HeroBg } from "~/images/hero-bg";
 import { generateMeta } from "~/utils/meta";
+import { generateHomepageStructuredData, structuredDataToMetaTags } from "~/utils/structured-data";
 import FAQSection from "./sections/faq";
 import FeaturesSection from "./sections/features";
 import FooterSection from "./sections/footer";
@@ -13,7 +14,11 @@ import HowItWorksSection from "./sections/how-it-works";
 import SupportSection from "./sections/support";
 
 export function meta() {
-  return generateMeta();
+  const metaTags = generateMeta();
+  const structuredData = generateHomepageStructuredData();
+  const structuredDataTags = structuredDataToMetaTags(structuredData);
+
+  return [...metaTags, ...structuredDataTags];
 }
 
 // Preload critical above-the-fold resources
