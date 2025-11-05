@@ -23,6 +23,17 @@ const APP_NAV: NavItem[] = [
   { to: "/history", label: "History" },
 ] as const;
 
+function MainButton({ isHomePage }: { isHomePage: boolean }) {
+  if (isHomePage) {
+    return (
+      <Link to="/dashboard">
+        <Button>Go to Dashboard</Button>
+      </Link>
+    );
+  }
+  return <GatedConnectButton />;
+}
+
 export function SiteHeader() {
   const location = useLocation();
   const isHomePage = location.pathname === "/";
@@ -30,7 +41,7 @@ export function SiteHeader() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <header className="w-full px-4 sm:px-6 lg:px-8 py-3 md:py-4">
+    <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 px-4 py-3 backdrop-blur supports-backdrop-filter:bg-background/60 sm:px-6 lg:px-8 md:py-4">
       <div className="mx-auto flex w-full max-w-7xl items-center justify-between">
         <div className="flex items-center gap-4">
           <Link to="/" className="flex items-center gap-2" aria-label={SITE_NAME}>
@@ -50,7 +61,7 @@ export function SiteHeader() {
               </NavLink>
             ))}
             <ThemeToggle />
-            <GatedConnectButton />
+            <MainButton isHomePage={isHomePage} />
           </div>
 
           {/* Mobile Menu Button */}
@@ -82,7 +93,7 @@ export function SiteHeader() {
             ))}
           </nav>
           <div className="flex items-center gap-2 mt-4 px-3">
-            <GatedConnectButton />
+            <MainButton isHomePage={isHomePage} />
           </div>
         </div>
       )}

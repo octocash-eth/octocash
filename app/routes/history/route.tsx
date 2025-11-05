@@ -78,12 +78,12 @@ export default function History() {
   };
 
   return (
-    <div className="flex flex-col min-h-svh bg-gradient-to-br from-background to-accent/10">
+    <div className="flex flex-col min-h-svh bg-linear-to-br from-background to-accent/10">
       <SiteHeader />
       <main className="flex-1 p-4">
         <div className="w-full max-w-7xl mx-auto">
           <div className="mb-6 flex items-center justify-between">
-            <h2 className="text-3xl font-semibold tracking-[0.01em]">Consolidation History</h2>
+            <h2 className="font-grotesque text-3xl font-semibold tracking-[0.01em]">Consolidation History</h2>
             <div className="flex items-center gap-2">
               <ManualClaimDialog>
                 <Button variant="outline" size="sm">
