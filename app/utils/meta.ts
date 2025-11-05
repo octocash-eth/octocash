@@ -46,7 +46,7 @@ export function generateMeta(options: MetaOptions = {}) {
     { tagName: "link", rel: "manifest", href: "/site.webmanifest" },
 
     // Canonical URL
-    { tagName: "link", rel: "canonical", href: fullUrl, content: "" },
+    { tagName: "link", rel: "canonical", href: fullUrl },
 
     // Basic meta
     { name: "description", content: description },

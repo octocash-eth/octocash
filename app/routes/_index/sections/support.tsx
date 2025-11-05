@@ -18,9 +18,11 @@ export default function SupportSection() {
             </div>
 
             <div className="flex flex-row gap-4">
-              <a href={SUPPORT_CONTENT.ctaLink} target="_blank" rel="noopener noreferrer">
-                <Button size="2xl">{SUPPORT_CONTENT.cta}</Button>
-              </a>
+              <Button size="2xl" asChild>
+                <a href={SUPPORT_CONTENT.ctaLink} target="_blank" rel="noopener noreferrer">
+                  {SUPPORT_CONTENT.cta}
+                </a>
+              </Button>
             </div>
           </div>
 

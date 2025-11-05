@@ -17,13 +17,28 @@ export function ThemeMeta() {
             : (mql.matches ? "dark" : "light");
           root.classList.toggle("dark", t === "dark");
           root.setAttribute("data-theme", t);
-          // Optional: avoid first-frame transitions
+          // Avoid first-frame transitions
           root.classList.add("no-theme-transition");
           requestAnimationFrame(() => root.classList.remove("no-theme-transition"));
         })();`,
         }}
       />
       <style dangerouslySetInnerHTML={{ __html: `.no-theme-transition * { transition: none !important; }` }} />
+      {/* Fallback for users with JavaScript disabled - defaults to light theme */}
+      <noscript>
+        <style
+          dangerouslySetInnerHTML={{
+            __html: `
+            :root {
+              color-scheme: light;
+            }
+            html.dark {
+              color-scheme: light;
+            }
+          `,
+          }}
+        />
+      </noscript>
     </>
   );
 }
