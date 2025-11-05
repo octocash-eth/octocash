@@ -92,6 +92,16 @@ function Button({
           ...(onClick && { onClick }),
         };
 
+  // When using asChild, Slot requires exactly one child element
+  const content = asChild ? (
+    children
+  ) : (
+    <>
+      {isLoading && <Loader2 className="animate-spin" />}
+      {children}
+    </>
+  );
+
   return (
     <Comp
       data-slot="button"
@@ -100,8 +110,7 @@ function Button({
       {...props}
       {...enhancedProps}
     >
-      {isLoading && <Loader2 className="animate-spin" />}
-      {children}
+      {content}
     </Comp>
   );
 }

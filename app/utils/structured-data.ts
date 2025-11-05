@@ -61,11 +61,6 @@ export function generateWebApplicationSchema(): WithContext<Thing> {
     applicationCategory: "FinanceApplication",
     operatingSystem: "Any",
     browserRequirements: "Requires JavaScript. Requires Web3 wallet (e.g., MetaMask, WalletConnect).",
-    offers: {
-      "@type": "Offer",
-      price: "0",
-      priceCurrency: "USD",
-    },
     featureList: [
       `Multi-chain token consolidation across ${chainNames.length} blockchains`,
       "Cross-chain token transfers",
