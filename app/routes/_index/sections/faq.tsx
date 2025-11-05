@@ -26,13 +26,13 @@ export default function FAQSection() {
         </div>
 
         {/* Accordion */}
-        <Accordion type="single" collapsible className="space-y-4">
+        <Accordion type="multiple" className="space-y-4">
           {FAQ_ITEMS.map((item, index) => (
             <AccordionItem key={`item-${index + 1}`} value={`item-${index + 1}`} className="border rounded-xl px-4">
-              <AccordionTrigger className="font-grotesque text-3xl md:text-4xl font-bold text-primary hover:no-underline leading-tight">
+              <AccordionTrigger className="font-grotesque text-2xl sm:text-3xl md:text-4xl font-bold text-primary hover:no-underline leading-tight">
                 {item.question}
               </AccordionTrigger>
-              <AccordionContent className="text-2xl md:text-3xl text-foreground leading-tight">
+              <AccordionContent className="text-xl sm:text-2xl md:text-3xl text-foreground leading-tight">
                 {item.answer}
               </AccordionContent>
             </AccordionItem>

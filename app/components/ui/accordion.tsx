@@ -1,6 +1,6 @@
 import * as AccordionPrimitive from "@radix-ui/react-accordion";
 import { ChevronDownIcon } from "lucide-react";
-import type * as React from "react";
+import * as React from "react";
 
 import { cn } from "~/lib/utils";
 
@@ -37,10 +37,18 @@ function AccordionTrigger({ className, children, ...props }: React.ComponentProp
 }
 
 function AccordionContent({ className, children, ...props }: React.ComponentProps<typeof AccordionPrimitive.Content>) {
+  const [forceMount, setForceMount] = React.useState<true | undefined>(true);
+  React.useEffect(() => {
+    setForceMount(undefined);
+  }, []);
   return (
     <AccordionPrimitive.Content
       data-slot="accordion-content"
-      className="data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down overflow-hidden text-sm"
+      className={cn(
+        "data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down overflow-hidden text-sm",
+        forceMount ? "data-[state=closed]:h-0" : "",
+      )}
+      forceMount={forceMount}
       {...props}
     >
       <div className={cn("pt-0 pb-4", className)}>{children}</div>

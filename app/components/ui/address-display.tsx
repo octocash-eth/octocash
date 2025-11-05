@@ -115,11 +115,11 @@ interface AddressDisplayTextProps extends React.ComponentProps<"span"> {}
 
 const AddressDisplayText = React.forwardRef<HTMLSpanElement, AddressDisplayTextProps>(
   ({ className, ...props }, ref) => {
-    const { ensName, formattedAddress } = useAddressDisplay();
+    const { ensName, formattedAddress, address } = useAddressDisplay();
     const displayText = ensName || formattedAddress;
 
     return (
-      <span ref={ref} className={cn("truncate text-nowrap", className)} title={displayText} {...props}>
+      <span ref={ref} className={cn("truncate text-nowrap", className)} title={address} {...props}>
         {displayText}
       </span>
     );
