@@ -1,9 +1,10 @@
-import { type AvatarComponent, lightTheme, RainbowKitProvider } from "@rainbow-me/rainbowkit";
+import { type AvatarComponent, darkTheme, lightTheme, RainbowKitProvider } from "@rainbow-me/rainbowkit";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PropsWithChildren } from "react";
 import colors from "tailwindcss/colors";
 import { type State, WagmiProvider } from "wagmi";
 import { E2EAutoConnect } from "~/components/mock-wallet";
+import { useTheme } from "~/components/theme-provider";
 import AddressAvatar from "../components/address-avatar";
 import { WALLETCONNECT_CONFIG } from "../utils/wallet";
 
@@ -17,24 +18,42 @@ const CustomAvatar: AvatarComponent = ({ address }: { address: string }) => {
   return <AddressAvatar addressOrEns={address} className="size-4" />;
 };
 
+function RainbowKitThemeWrapper({ children }: PropsWithChildren) {
+  const { resolvedTheme } = useTheme();
+
+  const theme =
+    resolvedTheme === "dark"
+      ? darkTheme({
+          accentColor: colors.pink[500],
+          accentColorForeground: colors.white,
+          borderRadius: "small",
+          fontStack: "system",
+          overlayBlur: "small",
+        })
+      : lightTheme({
+          accentColor: colors.pink[500],
+          accentColorForeground: colors.white,
+          borderRadius: "small",
+          fontStack: "system",
+          overlayBlur: "small",
+        });
+  theme.fonts.body = "var(--font-sans)";
+
+  return (
+    <RainbowKitProvider modalSize="compact" avatar={CustomAvatar} theme={theme}>
+      {children}
+    </RainbowKitProvider>
+  );
+}
+
 export function WalletProvider(props: Props) {
   return (
     <WagmiProvider config={WALLETCONNECT_CONFIG} initialState={props.initialState}>
       <QueryClientProvider client={queryClient}>
-        <RainbowKitProvider
-          modalSize="compact"
-          avatar={CustomAvatar}
-          theme={lightTheme({
-            accentColor: colors.red[600],
-            accentColorForeground: colors.amber[900],
-            borderRadius: "small",
-            fontStack: "system",
-            overlayBlur: "small",
-          })}
-        >
+        <RainbowKitThemeWrapper>
           <E2EAutoConnect />
           {props.children}
-        </RainbowKitProvider>
+        </RainbowKitThemeWrapper>
       </QueryClientProvider>
     </WagmiProvider>
   );
