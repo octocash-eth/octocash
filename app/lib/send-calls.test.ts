@@ -1,6 +1,6 @@
 import type { Account, Address, Chain, Hex, HttpTransport, WalletClient } from "viem";
 import type { WaitForTransactionReceiptReturnType } from "viem/actions";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, type Mock, test, vi } from "vitest";
 import { prepareSendCalls, switchChain } from "./send-calls";
 
 // Mock wallet client helper
@@ -69,7 +69,7 @@ describe("sendCalls", () => {
 
   describe("prepareSendCalls", () => {
     let mockClient: WalletClient<HttpTransport, Chain, Account>;
-    let mockWaitForReceipt: ReturnType<typeof vi.fn>;
+    let mockWaitForReceipt: Mock;
 
     beforeEach(() => {
       mockClient = createMockWalletClient();
