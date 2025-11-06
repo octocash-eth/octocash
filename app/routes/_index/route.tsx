@@ -1,5 +1,5 @@
 import { Link } from "react-router";
-import { DeferredSection } from "~/components/deferred-section";
+import { DeferredContent } from "~/components/deferred-content";
 import { SiteHeader } from "~/components/site-header";
 import { Button } from "~/components/ui/button";
 import { HERO_CONTENT } from "~/data/homepage";
@@ -78,7 +78,7 @@ export default function Home() {
         </section>
 
         {/* Rest of page with ocean background */}
-        <div className="relative">
+        <div className="relative bg-[#ddf6fe] dark:bg-[#385bab]">
           {/* Background Ocean - Starts After Hero */}
           <div className="absolute inset-0 pointer-events-none overflow-hidden">
             <img
@@ -86,7 +86,7 @@ export default function Home() {
               alt=""
               width={1728}
               height={4895}
-              className="w-full h-full object-top object-cover dark:hidden"
+              className="absolute left-1/2 -translate-x-1/2 min-w-[1200px] lg:w-full lg:left-0 lg:translate-x-0 h-auto object-top dark:hidden"
               loading="lazy"
               decoding="async"
             />
@@ -95,32 +95,20 @@ export default function Home() {
               alt=""
               width={1728}
               height={4895}
-              className="w-full h-full object-top object-cover hidden dark:block"
+              className="absolute left-1/2 -translate-x-1/2 min-w-[1200px] lg:w-full lg:left-0 lg:translate-x-0 h-auto object-top hidden dark:block"
               loading="lazy"
               decoding="async"
             />
           </div>
 
           {/* Below-the-fold sections - Rendered on server, deferred hydration on client */}
-          <DeferredSection>
+          <DeferredContent>
             <HowItWorksSection />
-          </DeferredSection>
-
-          <DeferredSection>
             <FeaturesSection />
-          </DeferredSection>
-
-          <DeferredSection>
             <SupportSection />
-          </DeferredSection>
-
-          <DeferredSection>
             <FAQSection />
-          </DeferredSection>
-
-          <DeferredSection>
             <FooterSection />
-          </DeferredSection>
+          </DeferredContent>
         </div>
       </main>
     </div>
