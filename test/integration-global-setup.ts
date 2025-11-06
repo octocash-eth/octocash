@@ -51,9 +51,9 @@ export default async function setup() {
   }
   
   console.log('📊 Fetching latest block numbers...');
-  const mainnetRpc = `https://lb.drpc.org/ethereum/${process.env.VITE_DRPC_API_KEY}`;
-  const optimismRpc = `https://lb.drpc.org/optimism/${process.env.VITE_DRPC_API_KEY}`;
-  const baseRpc = `https://lb.drpc.org/base/${process.env.VITE_DRPC_API_KEY}`;
+  const mainnetRpc = `https://lb.drpc.live/ethereum/${process.env.VITE_DRPC_API_KEY}`;
+  const optimismRpc = `https://lb.drpc.live/optimism/${process.env.VITE_DRPC_API_KEY}`;
+  const baseRpc = `https://lb.drpc.live/base/${process.env.VITE_DRPC_API_KEY}`;
   
   const [mainnetBlock, optimismBlock, baseBlock] = await Promise.all([
     getLatestBlockNumber(mainnetRpc),

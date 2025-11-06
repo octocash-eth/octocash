@@ -1,6 +1,6 @@
 import { type AvatarComponent, darkTheme, lightTheme, RainbowKitProvider } from "@rainbow-me/rainbowkit";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { PropsWithChildren } from "react";
+import { type PropsWithChildren, useEffect, useState } from "react";
 import colors from "tailwindcss/colors";
 import { type State, WagmiProvider } from "wagmi";
 import { E2EAutoConnect } from "~/components/mock-wallet";
@@ -20,9 +20,18 @@ const CustomAvatar: AvatarComponent = ({ address }: { address: string }) => {
 
 function RainbowKitThemeWrapper({ children }: PropsWithChildren) {
   const { resolvedTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  // Only apply theme after first client render to avoid hydration mismatch
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Use light theme as default for SSR and first render
+  const themeToUse = !mounted ? "light" : resolvedTheme;
 
   const theme =
-    resolvedTheme === "dark"
+    themeToUse === "dark"
       ? darkTheme({
           accentColor: colors.pink[500],
           accentColorForeground: colors.white,
