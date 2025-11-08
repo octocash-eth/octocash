@@ -1,4 +1,5 @@
 import * as React from "react";
+import { formatUnits, parseUnits, zeroAddress } from "viem";
 import { ChainIcon } from "~/components/chain-icon";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/ui/address-display";
 import {
@@ -9,6 +10,7 @@ import {
 } from "~/components/ui/token-amount-selector";
 import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "~/components/ui/token-display";
 import type { WalletData } from "~/components/wallet-table/columns";
+import { getGasThresholdForChain } from "~/data/gas-thresholds";
 
 interface TokenWithAmount extends WalletData {
   amountToConsolidate: string;
@@ -19,12 +21,51 @@ interface SelectAmountStageProps {
   onAmountsChange: (amounts: Record<string, string>) => void;
 }
 
+// Map chain name to ID
+// TODO: This is a workaround, ideally WalletData should extend TokenAmount
+const chainMap: Record<string, number> = {
+  Ethereum: 1,
+  "OP Mainnet": 10,
+  "Arbitrum One": 42161,
+  Base: 8453,
+  Polygon: 137,
+  "Linea Mainnet": 59144,
+  Unichain: 1301,
+};
+
+// Helper function to calculate maximum consolidatable amount
+// For native tokens, we need to reserve gas for transactions
+function calculateMaxConsolidatableAmount(token: TokenWithAmount, chainId: number, requestedAmount?: string): string {
+  const isNativeToken = token.tokenAddress === zeroAddress;
+
+  // For ERC-20 tokens, all amount is available (no gas reservation needed)
+  if (!isNativeToken) {
+    return requestedAmount ?? token.amount;
+  }
+
+  // For native tokens, subtract gas threshold using bigint arithmetic
+  const gasThreshold = getGasThresholdForChain(chainId);
+  const totalAmountWei = parseUnits(token.amount, token.decimals);
+  const gasReserveWei = parseUnits(gasThreshold, token.decimals);
+  const maxAvailableWei = totalAmountWei > gasReserveWei ? totalAmountWei - gasReserveWei : 0n;
+
+  // If a requested amount is provided, return the minimum of requested and available
+  if (requestedAmount) {
+    const requestedWei = parseUnits(requestedAmount, token.decimals);
+    const resultWei = requestedWei < maxAvailableWei ? requestedWei : maxAvailableWei;
+    return formatUnits(resultWei, token.decimals);
+  }
+
+  return formatUnits(maxAvailableWei, token.decimals);
+}
+
 export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStageProps) {
   const [amounts, setAmounts] = React.useState<Record<string, string>>(() => {
-    // Initialize with amounts from parent (amountToConsolidate) or fall back to full amounts
+    // Initialize with amounts from parent (amountToConsolidate) or fall back to max consolidatable amounts
     return tokens.reduce(
       (acc, token) => {
-        acc[token.id] = token.amountToConsolidate || token.amount;
+        const chainId = chainMap[token.chain] || 1;
+        acc[token.id] = calculateMaxConsolidatableAmount(token, chainId, token.amountToConsolidate);
         return acc;
       },
       {} as Record<string, string>,
@@ -56,7 +97,10 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
 
       <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
         {tokens.map((token) => {
-          const maxAmount = token.amount;
+          const chainId = chainMap[token.chain] || 1;
+
+          // Calculate max consolidatable amount (respecting gas threshold for native tokens)
+          const maxAmount = calculateMaxConsolidatableAmount(token, chainId);
           const amountValue = amounts[token.id] ?? "0";
           const currentUsdValue =
             Number.parseFloat(maxAmount) > 0
@@ -69,21 +113,7 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
               <div className="flex justify-between items-start">
                 <TokenDisplayRoot
                   tokenAddress={token.tokenAddress}
-                  chainId={(() => {
-                    const chain = token.chain;
-                    // Map chain name to ID
-                    // TODO: This is a workaround, ideally WalletData should extend TokenAmount
-                    const chainMap: Record<string, number> = {
-                      Ethereum: 1,
-                      "OP Mainnet": 10,
-                      "Arbitrum One": 42161,
-                      Base: 8453,
-                      Polygon: 137,
-                      "Linea Mainnet": 59144,
-                      Unichain: 1301,
-                    };
-                    return chainMap[chain] || 1;
-                  })()}
+                  chainId={chainId}
                   symbol={token.token}
                   className="gap-2"
                 >
@@ -125,6 +155,11 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
                       maximumFractionDigits: 2,
                     })}
                   </div>
+                  {token.tokenAddress === zeroAddress && (
+                    <div className="text-[10px] text-muted-foreground mt-1">
+                      {getGasThresholdForChain(chainId)} {token.token} reserved for gas
+                    </div>
+                  )}
                 </div>
               </div>
 
