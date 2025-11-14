@@ -1,12 +1,9 @@
 import { ChevronDown, ChevronUp, Inbox, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
-import { zeroAddress } from "viem";
-import { useToken } from "wagmi";
-import { ChainIcon } from "~/components/chain-icon";
+import { ConsolidationTokensSummary } from "~/components/consolidation-tokens-summary";
 import { SiteHeader } from "~/components/site-header";
 import { TransactionPlanViewer } from "~/components/transaction-plan";
-import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/ui/address-display";
 import { Button } from "~/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import {
@@ -17,15 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
-import {
-  TokenDisplayAmount,
-  TokenDisplayIcon,
-  TokenDisplayRoot,
-  TokenDisplaySymbol,
-} from "~/components/ui/token-display";
-import { chains } from "~/data/supported-chains";
 import { useConsolidationRecords } from "~/hooks/use-consolidation-records";
-import type { ConsolidationState, TokenAmount } from "~/lib/types";
+import type { ConsolidationState } from "~/lib/types";
 import { generateMeta } from "~/utils/meta";
 import ManualClaimDialog from "./manual-claim-dialog";
 
@@ -215,31 +205,8 @@ function ConsolidationCard({ consolidation, expanded, onToggle, onDelete, getSta
 
         {expanded && (
           <CardContent className="border-t border-border bg-muted/30 py-5 space-y-6">
-            {/* Source & Destination Tokens */}
-            <div className="grid md:grid-cols-2 gap-4">
-              {/* Source Tokens */}
-              <div>
-                <h4 className="text-sm font-medium mb-3 text-muted-foreground">Source Tokens</h4>
-                <div className="space-y-2">
-                  {consolidation.sourceTokens.map((token, idx) => (
-                    <TokenCard key={`${token.token}-${token.chainId}-${idx}`} token={token} />
-                  ))}
-                </div>
-              </div>
-
-              {/* Destination Token */}
-              <div>
-                <h4 className="text-sm font-medium mb-3 text-muted-foreground">Destination</h4>
-                <TokenCard
-                  token={{
-                    ...consolidation.destinationToken,
-                    amount: 0n,
-                    symbol: "USDC",
-                    decimals: 6,
-                  }}
-                />
-              </div>
-            </div>
+            {/* Source & Final Tokens */}
+            <ConsolidationTokensSummary state={consolidation} />
 
             {/* Transaction Steps */}
             <div>
@@ -272,53 +239,5 @@ function ConsolidationCard({ consolidation, expanded, onToggle, onDelete, getSta
         </DialogContent>
       </Dialog>
     </>
-  );
-}
-
-function TokenCard({ token }: { token: TokenAmount }) {
-  const { data: tokenData } = useToken({
-    address: token.token,
-    chainId: token.chainId,
-    query: {
-      enabled: token.token !== zeroAddress,
-    },
-  });
-
-  if (token.token !== zeroAddress && !tokenData) {
-    return null;
-  }
-
-  const chain = chains[token.chainId as keyof typeof chains];
-  const chainName = chain?.name || `Chain ${token.chainId}`;
-
-  return (
-    <div className="bg-background rounded-lg border border-border p-3 space-y-2">
-      {/* Token Info */}
-      <TokenDisplayRoot tokenAddress={token.token} chainId={token.chainId} symbol={token.symbol} className="gap-2">
-        <div className="flex items-center gap-2 flex-1">
-          <TokenDisplayIcon className="size-4" />
-          <TokenDisplaySymbol />
-          {token.amount > 0n && (
-            <span className="ml-auto font-semibold text-sm">
-              <TokenDisplayAmount amount={token.amount} />
-            </span>
-          )}
-        </div>
-      </TokenDisplayRoot>
-
-      {/* Chain & Wallet Info */}
-      <div className="flex items-center justify-between text-xs">
-        <div className="flex items-center gap-1.5 text-muted-foreground">
-          <ChainIcon chain={chainName} className="size-4" />
-          <span>{chainName}</span>
-        </div>
-        <div className="text-muted-foreground">
-          <AddressDisplayRoot address={token.walletAddress} className="gap-1.5">
-            <AddressDisplayAvatar className="size-3" />
-            <AddressDisplayText />
-          </AddressDisplayRoot>
-        </div>
-      </div>
-    </div>
   );
 }

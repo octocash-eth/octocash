@@ -23,6 +23,7 @@ import type { WalletData } from "~/components/wallet-table/columns";
 import { supportedChains } from "~/data/supported-chains";
 import { USDC } from "~/data/token-contracts";
 import type { ConsolidationState, DestinationToken, SourceToken } from "~/lib/types";
+import { CompletionStage } from "./consolidation-stages/completion-stage";
 import { ConfirmPlanStage } from "./consolidation-stages/confirm-plan-stage";
 import { SelectAmountStage } from "./consolidation-stages/select-amount-stage";
 import { type DestinationSelection, SelectDestinationStage } from "./consolidation-stages/select-destination-stage";
@@ -31,12 +32,14 @@ interface ConsolidateTokensModalProps {
   walletData: WalletData[];
   rowSelection?: Record<string, boolean>;
   selectedRows?: number;
+  onComplete?: () => void;
 }
 
 export function ConsolidateTokensModal({
   walletData,
   rowSelection = {},
   selectedRows = 0,
+  onComplete,
 }: ConsolidateTokensModalProps) {
   const [destination, setDestination] = React.useState({
     walletAddress: undefined,
@@ -47,6 +50,7 @@ export function ConsolidateTokensModal({
   const [currentStage, setCurrentStage] = React.useState(1);
   const [planId, setPlanId] = React.useState("");
   const [tokenAmounts, setTokenAmounts] = React.useState<Record<string, string>>({});
+  const [completedState, setCompletedState] = React.useState<ConsolidationState | null>(null);
 
   const consolidatedTokens = React.useMemo(() => {
     return Object.entries(rowSelection)
@@ -127,6 +131,9 @@ export function ConsolidateTokensModal({
   React.useEffect(() => {
     if (!open) {
       setCurrentStage(1);
+      setCompletedState(null);
+      // Reset token amounts when closing after completion
+      setTokenAmounts({});
     }
   }, [open]);
 
@@ -187,13 +194,11 @@ export function ConsolidateTokensModal({
     }
   }, [currentStage]);
 
-  const handleComplete = React.useCallback((completedState: ConsolidationState) => {
-    console.log("[Modal] handleComplete called with status:", completedState.status);
-    // Close modal on successful completion after a delay
-    if (completedState.status === "completed") {
-      setTimeout(() => {
-        setOpen(false);
-      }, 2000); // Give user time to see success
+  const handleComplete = React.useCallback((state: ConsolidationState) => {
+    console.log("[Modal] handleComplete called with status:", state.status);
+    // Show completion view for terminal states (completed or partial)
+    if (state.status === "completed" || state.status === "partial") {
+      setCompletedState(state);
     }
   }, []);
 
@@ -211,84 +216,107 @@ export function ConsolidateTokensModal({
       <DialogContent className="sm:max-w-5xl">
         <DialogHeader className="pb-4">
           <DialogTitle className="text-xl">
-            Consolidate{" "}
-            {actualTotalToConsolidate.toLocaleString("en-US", {
-              style: "currency",
-              currency: "USD",
-              minimumFractionDigits: 0,
-              maximumFractionDigits: 0,
-            })}
+            {completedState ? (
+              completedState.status === "completed" ? (
+                "Consolidation Complete"
+              ) : (
+                "Consolidation Partially Complete"
+              )
+            ) : (
+              <>
+                Consolidate{" "}
+                {actualTotalToConsolidate.toLocaleString("en-US", {
+                  style: "currency",
+                  currency: "USD",
+                  minimumFractionDigits: 0,
+                  maximumFractionDigits: 0,
+                })}
+              </>
+            )}
           </DialogTitle>
-          <DialogDescription>
-            {currentStage === 1 && `Adjust amounts for ${selectedRows} selected token${selectedRows !== 1 ? "s" : ""}.`}
-            {currentStage === 2 && "Select the destination wallet, chain, and token."}
-            {currentStage === 3 && "Review and execute the consolidation plan."}
-          </DialogDescription>
+          {!completedState && (
+            <DialogDescription>
+              {currentStage === 1 &&
+                `Adjust amounts for ${selectedRows} selected token${selectedRows !== 1 ? "s" : ""}.`}
+              {currentStage === 2 && "Select the destination wallet, chain, and token."}
+              {currentStage === 3 && "Review and execute the consolidation plan."}
+            </DialogDescription>
+          )}
         </DialogHeader>
 
-        <Stepper value={currentStage} onValueChange={setCurrentStage} className="space-y-6">
-          <StepperNav className="gap-3.5">
-            {[
-              { id: "select-amount", title: "Select Amount" },
-              { id: "select-destination", title: "Select Destination" },
-              { id: "confirm-plan", title: "Confirm Plan" },
-            ].map((stage, index) => {
-              const stageNumber = index + 1;
-              return (
-                <StepperItem
-                  key={stage.id}
-                  step={stageNumber}
-                  className="relative flex-1 items-start"
-                  disabled={!canNavigateToStage(stageNumber)}
-                >
-                  <StepperTrigger className="flex flex-col items-start justify-center gap-3.5 grow">
-                    <StepperIndicator className="bg-border rounded-full h-1 w-full data-[state=active]:bg-secondary/80 data-[state=completed]:bg-secondary/50" />
-                    <div className="flex flex-col items-start gap-1">
-                      <StepperTitle className="text-start font-semibold group-data-[state=inactive]/step:text-muted-foreground">
-                        {stage.title}
-                      </StepperTitle>
-                    </div>
-                  </StepperTrigger>
-                </StepperItem>
-              );
-            })}
-          </StepperNav>
+        {completedState ? (
+          <CompletionStage
+            state={completedState}
+            onClose={() => {
+              setOpen(false);
+              onComplete?.();
+            }}
+          />
+        ) : (
+          <Stepper value={currentStage} onValueChange={setCurrentStage} className="space-y-6">
+            <StepperNav className="gap-3.5">
+              {[
+                { id: "select-amount", title: "Select Amount" },
+                { id: "select-destination", title: "Select Destination" },
+                { id: "confirm-plan", title: "Confirm Plan" },
+              ].map((stage, index) => {
+                const stageNumber = index + 1;
+                return (
+                  <StepperItem
+                    key={stage.id}
+                    step={stageNumber}
+                    className="relative flex-1 items-start"
+                    disabled={!canNavigateToStage(stageNumber)}
+                  >
+                    <StepperTrigger className="flex flex-col items-start justify-center gap-3.5 grow">
+                      <StepperIndicator className="bg-border rounded-full h-1 w-full data-[state=active]:bg-secondary/80 data-[state=completed]:bg-secondary/50" />
+                      <div className="flex flex-col items-start gap-1">
+                        <StepperTitle className="text-start font-semibold group-data-[state=inactive]/step:text-muted-foreground">
+                          {stage.title}
+                        </StepperTitle>
+                      </div>
+                    </StepperTrigger>
+                  </StepperItem>
+                );
+              })}
+            </StepperNav>
 
-          <StepperPanel step={currentStage} className="text-sm">
-            <StepperContent value={1}>
-              <SelectAmountStage tokens={consolidatedTokens} onAmountsChange={setTokenAmounts} />
-              <div className="pt-4 flex gap-2">
-                <Button onClick={handleNext} disabled={!canNavigateToStage(2)} className="w-full">
-                  Next
-                </Button>
-              </div>
-            </StepperContent>
+            <StepperPanel step={currentStage} className="text-sm">
+              <StepperContent value={1}>
+                <SelectAmountStage tokens={consolidatedTokens} onAmountsChange={setTokenAmounts} />
+                <div className="pt-4 flex gap-2">
+                  <Button onClick={handleNext} disabled={!canNavigateToStage(2)} className="w-full">
+                    Next
+                  </Button>
+                </div>
+              </StepperContent>
 
-            <StepperContent value={2}>
-              <SelectDestinationStage value={destination} onChange={setDestination} />
-              <div className="pt-4 flex gap-2">
-                <Button onClick={handleBack} variant="outline" className="flex-1">
-                  Back
-                </Button>
-                <Button onClick={handleNext} disabled={!canNavigateToStage(3)} className="flex-1">
-                  Next
-                </Button>
-              </div>
-            </StepperContent>
+              <StepperContent value={2}>
+                <SelectDestinationStage value={destination} onChange={setDestination} />
+                <div className="pt-4 flex gap-2">
+                  <Button onClick={handleBack} variant="outline" className="flex-1">
+                    Back
+                  </Button>
+                  <Button onClick={handleNext} disabled={!canNavigateToStage(3)} className="flex-1">
+                    Next
+                  </Button>
+                </div>
+              </StepperContent>
 
-            <StepperContent value={3}>
-              {planId && destinationToken && (
-                <ConfirmPlanStage
-                  planId={planId}
-                  sourceTokens={sourceTokens}
-                  destinationToken={destinationToken}
-                  onComplete={handleComplete}
-                  onBack={handleBack}
-                />
-              )}
-            </StepperContent>
-          </StepperPanel>
-        </Stepper>
+              <StepperContent value={3}>
+                {planId && destinationToken && (
+                  <ConfirmPlanStage
+                    planId={planId}
+                    sourceTokens={sourceTokens}
+                    destinationToken={destinationToken}
+                    onComplete={handleComplete}
+                    onBack={handleBack}
+                  />
+                )}
+              </StepperContent>
+            </StepperPanel>
+          </Stepper>
+        )}
       </DialogContent>
     </Dialog>
   );

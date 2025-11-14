@@ -101,6 +101,10 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
               walletData={walletData}
               rowSelection={rowSelection}
               selectedRows={Object.keys(rowSelection).length}
+              onComplete={() => {
+                setRowSelection({});
+                void loadTokenBalances("refresh");
+              }}
             />
           </div>
         </>
