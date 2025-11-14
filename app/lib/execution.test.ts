@@ -6,10 +6,12 @@ import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } fro
 // Mock dependencies BEFORE imports
 vi.mock("./odos");
 vi.mock("./cctp");
+vi.mock("./send-calls");
 
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import { adaptStepForPartialDependencies, executeConsolidationPlan, shouldSkipStep } from "./execution";
 import { executeOdosSwapOrTransfer, getSwapQuote } from "./odos";
+import { prepareSendCalls } from "./send-calls";
 
 describe("executeConsolidationPlan", () => {
   const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
@@ -48,6 +50,9 @@ describe("executeConsolidationPlan", () => {
       },
     ]);
     vi.mocked(executeCCTPMint).mockResolvedValue(["0xmint", []]);
+
+    // Mock prepareSendCalls to return a function that returns success
+    vi.mocked(prepareSendCalls).mockReturnValue(vi.fn().mockResolvedValue(["0xtxhash", []]));
 
     mockState = {
       id: "test-consolidation",
@@ -491,15 +496,8 @@ describe("executeConsolidationPlan", () => {
 
     mockState.plan = [transferStep];
 
-    // Mock prepareSendCalls to return a mock function
-    const _mockSendCalls = vi.fn().mockResolvedValue(["0xtransfer123", []]);
-    // Override the wallet client to provide our mock
-    mockWalletClient.sendCalls = vi.fn().mockResolvedValue({ id: "test-id" });
-    mockWalletClient.waitForCallsStatus = vi.fn().mockResolvedValue({
-      status: "success",
-      receipts: [{ transactionHash: "0xtransfer123", logs: [] }],
-    });
-    mockWalletClient.switchChain = vi.fn();
+    // Mock prepareSendCalls for this specific test
+    vi.mocked(prepareSendCalls).mockReturnValue(vi.fn().mockResolvedValue(["0xtransfer123", []]));
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
 

@@ -62,7 +62,7 @@ export const prepareSendCalls = (
   waitForReceipt: typeof waitForTransactionReceipt = waitForTransactionReceipt,
   switchChainFn: typeof switchChain = switchChain,
 ): SendCallsFn => {
-  return async (txId, chainId, from, calls, mode = "atomic-batch") => {
+  return async (txId, chainId, from, calls, mode = "atomic-steps") => {
     if (!calls?.length) {
       return ["", []];
     }

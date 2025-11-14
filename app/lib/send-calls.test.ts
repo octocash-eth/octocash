@@ -128,6 +128,7 @@ describe("sendCalls", () => {
             1,
             "0x0000000000000000000000000000000000000000",
             [{ to: "0x0000000000000000000000000000000000000000", data: "0x" }],
+            "atomic-batch",
           );
 
           expect(mockClient.switchChain).toHaveBeenCalledWith({ id: 1 });
@@ -172,6 +173,7 @@ describe("sendCalls", () => {
             1,
             "0x0000000000000000000000000000000000000000",
             [{ to: "0x0000000000000000000000000000000000000000", data: "0x" }],
+            "atomic-batch",
           );
 
           expect(tx).toBe("0xdeadbeef");
@@ -193,9 +195,13 @@ describe("sendCalls", () => {
           } as unknown as Awaited<ReturnType<WalletClient["waitForCallsStatus"]>>);
 
           await expect(
-            prepareSendCalls(mockClient)("test", 1, "0x0000000000000000000000000000000000000000", [
-              { to: "0x0000000000000000000000000000000000000000", data: "0x" },
-            ]),
+            prepareSendCalls(mockClient)(
+              "test",
+              1,
+              "0x0000000000000000000000000000000000000000",
+              [{ to: "0x0000000000000000000000000000000000000000", data: "0x" }],
+              "atomic-batch",
+            ),
           ).rejects.toThrow("test transaction reverted");
         });
 
@@ -211,9 +217,13 @@ describe("sendCalls", () => {
           } as unknown as Awaited<ReturnType<WalletClient["waitForCallsStatus"]>>);
 
           await expect(
-            prepareSendCalls(mockClient)("test", 1, "0x0000000000000000000000000000000000000000", [
-              { to: "0x0000000000000000000000000000000000000000", data: "0x" },
-            ]),
+            prepareSendCalls(mockClient)(
+              "test",
+              1,
+              "0x0000000000000000000000000000000000000000",
+              [{ to: "0x0000000000000000000000000000000000000000", data: "0x" }],
+              "atomic-batch",
+            ),
           ).rejects.toThrow("test transaction reverted");
         });
 
@@ -232,9 +242,13 @@ describe("sendCalls", () => {
           } as unknown as Awaited<ReturnType<WalletClient["waitForCallsStatus"]>>);
 
           await expect(
-            prepareSendCalls(mockClient)("test", 1, "0x0000000000000000000000000000000000000000", [
-              { to: "0x0000000000000000000000000000000000000000", data: "0x" },
-            ]),
+            prepareSendCalls(mockClient)(
+              "test",
+              1,
+              "0x0000000000000000000000000000000000000000",
+              [{ to: "0x0000000000000000000000000000000000000000", data: "0x" }],
+              "atomic-batch",
+            ),
           ).rejects.toThrow("test transaction reverted");
         });
       });
