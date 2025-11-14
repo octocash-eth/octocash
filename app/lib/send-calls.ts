@@ -1,6 +1,6 @@
 import type { Account, Address, Call, Chain, Hex, HttpTransport, WalletClient } from "viem";
 import { encodeFunctionData, parseAbi } from "viem";
-import { waitForTransactionReceipt } from "viem/actions";
+import { estimateGas, waitForTransactionReceipt } from "viem/actions";
 import { chains } from "~/data/supported-chains";
 
 /**
@@ -20,6 +20,46 @@ export const switchChain = async (client: WalletClient<HttpTransport, Chain, Acc
       chain: chains[chainId as keyof typeof chains] as Chain,
     });
   }
+};
+
+/**
+ * Estimates gas for a transaction and sends it with a 20% buffer.
+ * If gas estimation fails, continues without explicit gas limit.
+ */
+const estimateAndSendTransaction = async (
+  client: WalletClient<HttpTransport, Chain, Account>,
+  params: {
+    account: Address;
+    to?: Address;
+    data?: Hex;
+    value?: bigint;
+    chain: Chain;
+  },
+): Promise<Hex> => {
+  // Estimate gas with 20% buffer
+  let gas: bigint | undefined;
+  try {
+    const estimatedGas = await estimateGas(client, {
+      account: params.account,
+      to: params.to,
+      data: params.data,
+      value: params.value,
+    });
+    gas = (estimatedGas * 120n) / 100n;
+  } catch {
+    // Continue without explicit gas limit if estimation fails
+    gas = undefined;
+  }
+
+  // Send transaction
+  return await client.sendTransaction({
+    account: params.account,
+    to: params.to,
+    data: params.data,
+    value: params.value,
+    gas,
+    chain: params.chain,
+  });
 };
 
 export type SendCallsMode =
@@ -78,8 +118,8 @@ export const prepareSendCalls = (
 
       for (let i = 0; i < calls.length; i++) {
         try {
-          // Send individual transaction
-          const hash = await client.sendTransaction({
+          // Estimate gas and send individual transaction
+          const hash = await estimateAndSendTransaction(client, {
             account: from,
             to: calls[i].to,
             data: calls[i].data,
@@ -138,8 +178,8 @@ export const prepareSendCalls = (
         args: [call3Array],
       });
 
-      // Send transaction to Multicall3
-      const hash = await client.sendTransaction({
+      // Estimate gas and send transaction to Multicall3
+      const hash = await estimateAndSendTransaction(client, {
         account: from,
         to: MULTICALL3_ADDRESS,
         data: callData,

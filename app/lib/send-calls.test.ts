@@ -3,6 +3,18 @@ import type { WaitForTransactionReceiptReturnType } from "viem/actions";
 import { beforeEach, describe, expect, type Mock, test, vi } from "vitest";
 import { prepareSendCalls, switchChain } from "./send-calls";
 
+// Mock the estimateGas function
+vi.mock("viem/actions", async () => {
+  const actual = await vi.importActual("viem/actions");
+  return {
+    ...actual,
+    estimateGas: vi.fn(),
+  };
+});
+
+// Import mocked estimateGas
+import { estimateGas } from "viem/actions";
+
 // Mock wallet client helper
 const createMockWalletClient = () => {
   return {
@@ -74,6 +86,8 @@ describe("sendCalls", () => {
     beforeEach(() => {
       mockClient = createMockWalletClient();
       mockWaitForReceipt = vi.fn();
+      vi.mocked(estimateGas).mockReset();
+      vi.mocked(estimateGas).mockResolvedValue(100000n);
     });
 
     describe("empty calls", () => {
@@ -468,6 +482,91 @@ describe("sendCalls", () => {
             }),
           );
         });
+
+        test("estimates gas and applies 20% buffer", async () => {
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xfirst");
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+          vi.mocked(estimateGas).mockResolvedValueOnce(100000n);
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [{ to: "0x1111111111111111111111111111111111111111", data: "0xabcd" }],
+            "atomic-steps",
+          );
+
+          expect(estimateGas).toHaveBeenCalledWith(mockClient, {
+            account: "0x0000000000000000000000000000000000000000",
+            to: "0x1111111111111111111111111111111111111111",
+            data: "0xabcd",
+            value: undefined,
+          });
+
+          expect(mockClient.sendTransaction).toHaveBeenCalledWith(
+            expect.objectContaining({
+              gas: 120000n, // 100000 * 1.2
+            }),
+          );
+        });
+
+        test("estimates gas for each call separately", async () => {
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xfirst").mockResolvedValueOnce("0xsecond");
+          mockWaitForReceipt
+            .mockResolvedValueOnce(createMockReceipt("success", []))
+            .mockResolvedValueOnce(createMockReceipt("success", []));
+          vi.mocked(estimateGas).mockResolvedValueOnce(100000n).mockResolvedValueOnce(200000n);
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [
+              { to: "0x1111111111111111111111111111111111111111", data: "0xabcd" },
+              { to: "0x2222222222222222222222222222222222222222", data: "0xdef0" },
+            ],
+            "atomic-steps",
+          );
+
+          expect(estimateGas).toHaveBeenCalledTimes(2);
+          expect(mockClient.sendTransaction).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({
+              gas: 120000n, // 100000 * 1.2
+            }),
+          );
+          expect(mockClient.sendTransaction).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({
+              gas: 240000n, // 200000 * 1.2
+            }),
+          );
+        });
+
+        test("continues without gas limit if estimation fails", async () => {
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xfirst");
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+          vi.mocked(estimateGas).mockRejectedValueOnce(new Error("Gas estimation failed"));
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [{ to: "0x1111111111111111111111111111111111111111", data: "0xabcd" }],
+            "atomic-steps",
+          );
+
+          expect(estimateGas).toHaveBeenCalled();
+          expect(mockClient.sendTransaction).toHaveBeenCalledWith(
+            expect.objectContaining({
+              to: "0x1111111111111111111111111111111111111111",
+              data: "0xabcd",
+            }),
+          );
+          // gas should not be set or be undefined
+          const callArgs = vi.mocked(mockClient.sendTransaction).mock.calls[0][0];
+          expect(callArgs.gas).toBeUndefined();
+        });
       });
 
       describe("non-atomic-steps", () => {
@@ -585,6 +684,72 @@ describe("sendCalls", () => {
           expect(tx).toBe("0xsecond");
           expect(logs).toEqual([[], []]);
         });
+
+        test("estimates gas with 20% buffer for each call", async () => {
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xfirst").mockResolvedValueOnce("0xsecond");
+          mockWaitForReceipt
+            .mockResolvedValueOnce(createMockReceipt("success", []))
+            .mockResolvedValueOnce(createMockReceipt("success", []));
+          vi.mocked(estimateGas).mockResolvedValueOnce(150000n).mockResolvedValueOnce(250000n);
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [
+              { to: "0x1111111111111111111111111111111111111111", data: "0xabcd" },
+              { to: "0x2222222222222222222222222222222222222222", data: "0xdef0" },
+            ],
+            "non-atomic-steps",
+          );
+
+          expect(estimateGas).toHaveBeenCalledTimes(2);
+          expect(mockClient.sendTransaction).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({
+              gas: 180000n, // 150000 * 1.2
+            }),
+          );
+          expect(mockClient.sendTransaction).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({
+              gas: 300000n, // 250000 * 1.2
+            }),
+          );
+        });
+
+        test("continues execution even when gas estimation fails", async () => {
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xfirst").mockResolvedValueOnce("0xsecond");
+          mockWaitForReceipt
+            .mockResolvedValueOnce(createMockReceipt("success", []))
+            .mockResolvedValueOnce(createMockReceipt("success", []));
+          vi.mocked(estimateGas)
+            .mockRejectedValueOnce(new Error("Gas estimation failed"))
+            .mockResolvedValueOnce(200000n);
+
+          const [tx] = await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [
+              { to: "0x1111111111111111111111111111111111111111", data: "0xabcd" },
+              { to: "0x2222222222222222222222222222222222222222", data: "0xdef0" },
+            ],
+            "non-atomic-steps",
+          );
+
+          expect(estimateGas).toHaveBeenCalledTimes(2);
+          expect(mockClient.sendTransaction).toHaveBeenCalledTimes(2);
+          expect(tx).toBe("0xsecond");
+
+          // First call should not have gas set
+          const firstCallArgs = vi.mocked(mockClient.sendTransaction).mock.calls[0][0];
+          expect(firstCallArgs.gas).toBeUndefined();
+
+          // Second call should have gas with buffer
+          const secondCallArgs = vi.mocked(mockClient.sendTransaction).mock.calls[1][0];
+          expect(secondCallArgs.gas).toBe(240000n); // 200000 * 1.2
+        });
       });
     });
 
@@ -660,6 +825,64 @@ describe("sendCalls", () => {
 
           expect(mockClient.switchChain).toHaveBeenCalledWith({ id: 10 });
         });
+
+        test("estimates gas with 20% buffer for multicall transaction", async () => {
+          mockWaitForReceipt.mockResolvedValue(createMockReceipt("success", []));
+          vi.mocked(estimateGas).mockResolvedValueOnce(300000n);
+
+          const sendCalls = prepareSendCalls(mockClient, mockWaitForReceipt);
+
+          const calls = [
+            { to: "0x1111111111111111111111111111111111111111" as Address, data: "0xcalldata1" as Hex },
+            { to: "0x2222222222222222222222222222222222222222" as Address, data: "0xcalldata2" as Hex },
+          ];
+
+          await sendCalls(
+            "test-tx",
+            1,
+            "0x3333333333333333333333333333333333333333" as Address,
+            calls,
+            "atomic-multicall",
+          );
+
+          expect(estimateGas).toHaveBeenCalledWith(
+            mockClient,
+            expect.objectContaining({
+              account: "0x3333333333333333333333333333333333333333",
+              to: "0xcA11bde05977b3631167028862bE2a173976CA11",
+              data: expect.any(String),
+            }),
+          );
+
+          expect(mockClient.sendTransaction).toHaveBeenCalledWith(
+            expect.objectContaining({
+              gas: 360000n, // 300000 * 1.2
+            }),
+          );
+        });
+
+        test("continues without gas limit if estimation fails", async () => {
+          mockWaitForReceipt.mockResolvedValue(createMockReceipt("success", []));
+          vi.mocked(estimateGas).mockRejectedValueOnce(new Error("Gas estimation failed"));
+
+          const sendCalls = prepareSendCalls(mockClient, mockWaitForReceipt);
+
+          const calls = [{ to: "0x1111111111111111111111111111111111111111" as Address, data: "0xcalldata1" as Hex }];
+
+          await sendCalls(
+            "test-tx",
+            1,
+            "0x3333333333333333333333333333333333333333" as Address,
+            calls,
+            "atomic-multicall",
+          );
+
+          expect(estimateGas).toHaveBeenCalled();
+          expect(mockClient.sendTransaction).toHaveBeenCalled();
+
+          const callArgs = vi.mocked(mockClient.sendTransaction).mock.calls[0][0];
+          expect(callArgs.gas).toBeUndefined();
+        });
       });
 
       describe("non-atomic-multicall", () => {
@@ -732,6 +955,64 @@ describe("sendCalls", () => {
               "non-atomic-multicall",
             ),
           ).rejects.toThrow("test-tx transaction reverted");
+        });
+
+        test("estimates gas with 20% buffer for multicall transaction", async () => {
+          mockWaitForReceipt.mockResolvedValue(createMockReceipt("success", []));
+          vi.mocked(estimateGas).mockResolvedValueOnce(400000n);
+
+          const sendCalls = prepareSendCalls(mockClient, mockWaitForReceipt);
+
+          const calls = [
+            { to: "0x1111111111111111111111111111111111111111" as Address, data: "0xcalldata1" as Hex },
+            { to: "0x2222222222222222222222222222222222222222" as Address, data: "0xcalldata2" as Hex },
+          ];
+
+          await sendCalls(
+            "test-tx",
+            1,
+            "0x3333333333333333333333333333333333333333" as Address,
+            calls,
+            "non-atomic-multicall",
+          );
+
+          expect(estimateGas).toHaveBeenCalledWith(
+            mockClient,
+            expect.objectContaining({
+              account: "0x3333333333333333333333333333333333333333",
+              to: "0xcA11bde05977b3631167028862bE2a173976CA11",
+              data: expect.any(String),
+            }),
+          );
+
+          expect(mockClient.sendTransaction).toHaveBeenCalledWith(
+            expect.objectContaining({
+              gas: 480000n, // 400000 * 1.2
+            }),
+          );
+        });
+
+        test("continues without gas limit if estimation fails", async () => {
+          mockWaitForReceipt.mockResolvedValue(createMockReceipt("success", []));
+          vi.mocked(estimateGas).mockRejectedValueOnce(new Error("Gas estimation failed"));
+
+          const sendCalls = prepareSendCalls(mockClient, mockWaitForReceipt);
+
+          const calls = [{ to: "0x1111111111111111111111111111111111111111" as Address, data: "0xcalldata1" as Hex }];
+
+          await sendCalls(
+            "test-tx",
+            1,
+            "0x3333333333333333333333333333333333333333" as Address,
+            calls,
+            "non-atomic-multicall",
+          );
+
+          expect(estimateGas).toHaveBeenCalled();
+          expect(mockClient.sendTransaction).toHaveBeenCalled();
+
+          const callArgs = vi.mocked(mockClient.sendTransaction).mock.calls[0][0];
+          expect(callArgs.gas).toBeUndefined();
         });
       });
     });
