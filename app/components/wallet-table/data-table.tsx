@@ -1,6 +1,7 @@
 import type {
   ColumnDef,
   ColumnFiltersState,
+  OnChangeFn,
   RowSelectionState,
   SortingState,
   VisibilityState,
@@ -31,7 +32,8 @@ interface DataTableProps<TData extends object, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
   connectedAddresses?: readonly string[];
-  onRowSelectionChange?: (value: RowSelectionState) => void;
+  rowSelection: RowSelectionState;
+  onRowSelectionChange: OnChangeFn<RowSelectionState>;
   onRefresh?: () => void;
   isRefreshing?: boolean;
 }
@@ -82,6 +84,7 @@ function RenderedChainCell({ chain }: { chain: string }) {
 export function DataTable<TData extends object, TValue>({
   columns,
   data,
+  rowSelection,
   onRowSelectionChange,
   onRefresh,
   isRefreshing = false,
@@ -89,7 +92,6 @@ export function DataTable<TData extends object, TValue>({
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
-  const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
 
   // Unique wallets
   const wallets = React.useMemo(() => {
@@ -140,13 +142,6 @@ export function DataTable<TData extends object, TValue>({
     [chains, tokens, wallets],
   );
 
-  // Update parent component when row selection changes
-  React.useEffect(() => {
-    if (onRowSelectionChange) {
-      onRowSelectionChange(rowSelection);
-    }
-  }, [rowSelection, onRowSelectionChange]);
-
   const table = useReactTable({
     data,
     columns,
@@ -157,7 +152,7 @@ export function DataTable<TData extends object, TValue>({
     onColumnFiltersChange: setColumnFilters,
     getFilteredRowModel: getFilteredRowModel(),
     onColumnVisibilityChange: setColumnVisibility,
-    onRowSelectionChange: setRowSelection,
+    onRowSelectionChange,
     enableRowSelection: true,
     state: {
       sorting,

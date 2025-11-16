@@ -90,8 +90,10 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
             columns={columns}
             data={walletData}
             connectedAddresses={connectedAddresses}
+            rowSelection={rowSelection}
             onRowSelectionChange={setRowSelection}
             onRefresh={() => {
+              setRowSelection({});
               void loadTokenBalances("refresh");
             }}
             isRefreshing={isRefreshing || isLoading}
