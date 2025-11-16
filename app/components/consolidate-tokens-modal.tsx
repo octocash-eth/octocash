@@ -51,6 +51,7 @@ export function ConsolidateTokensModal({
   const [planId, setPlanId] = React.useState("");
   const [tokenAmounts, setTokenAmounts] = React.useState<Record<string, string>>({});
   const [completedState, setCompletedState] = React.useState<ConsolidationState | null>(null);
+  const [isExecuting, setIsExecuting] = React.useState(false);
 
   const consolidatedTokens = React.useMemo(() => {
     return Object.entries(rowSelection)
@@ -155,6 +156,9 @@ export function ConsolidateTokensModal({
   // Validation function for navigation
   const canNavigateToStage = React.useCallback(
     (stageNumber: number) => {
+      // Cannot navigate to any stage while executing
+      if (isExecuting && stageNumber !== currentStage) return false;
+
       // Can always navigate backwards
       if (stageNumber < currentStage) return true;
 
@@ -177,7 +181,7 @@ export function ConsolidateTokensModal({
 
       return true;
     },
-    [currentStage, consolidatedTokens, destination],
+    [currentStage, consolidatedTokens, destination, isExecuting],
   );
 
   const handleNext = React.useCallback(() => {
@@ -202,8 +206,24 @@ export function ConsolidateTokensModal({
     }
   }, []);
 
+  const handleOpenChange = React.useCallback(
+    (newOpen: boolean) => {
+      // Prevent closing while executing
+      if (!newOpen && isExecuting) {
+        return;
+      }
+
+      // If closing the modal while in completion state, trigger onComplete
+      if (!newOpen && completedState) {
+        onComplete?.();
+      }
+      setOpen(newOpen);
+    },
+    [completedState, onComplete, isExecuting],
+  );
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button
           size="lg"
@@ -213,7 +233,7 @@ export function ConsolidateTokensModal({
           {selectedRows === 0 ? "Consolidate Tokens" : <>Consolidate tokens</>}
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-5xl">
+      <DialogContent className="sm:max-w-5xl" showCloseButton={!isExecuting}>
         <DialogHeader className="pb-4">
           <DialogTitle className="text-xl">
             {completedState ? (
@@ -245,13 +265,7 @@ export function ConsolidateTokensModal({
         </DialogHeader>
 
         {completedState ? (
-          <CompletionStage
-            state={completedState}
-            onClose={() => {
-              setOpen(false);
-              onComplete?.();
-            }}
-          />
+          <CompletionStage state={completedState} onClose={() => handleOpenChange(false)} />
         ) : (
           <Stepper value={currentStage} onValueChange={setCurrentStage} className="space-y-6">
             <StepperNav className="gap-3.5">
@@ -311,6 +325,7 @@ export function ConsolidateTokensModal({
                     destinationToken={destinationToken}
                     onComplete={handleComplete}
                     onBack={handleBack}
+                    onExecutionStateChange={setIsExecuting}
                   />
                 )}
               </StepperContent>

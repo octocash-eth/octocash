@@ -1,3 +1,4 @@
+import * as React from "react";
 import { useConsolidationExecution } from "~/hooks/use-consolidation-execution";
 import { useConsolidationPlanning } from "~/hooks/use-consolidation-planning";
 import { ExecutionActions } from "./actions/execution-actions";
@@ -19,6 +20,7 @@ export function TransactionPlanExecutor({
   onBack,
   showActions = false,
   planId,
+  onExecutionStateChange,
 }: ExecutorProps) {
   // Step 1: Generate the plan
   const {
@@ -36,6 +38,11 @@ export function TransactionPlanExecutor({
     state: plannedState,
     onComplete,
   });
+
+  // Notify parent when execution state changes
+  React.useEffect(() => {
+    onExecutionStateChange?.(isExecuting);
+  }, [isExecuting, onExecutionStateChange]);
 
   // Show loading state while planning
   if (isPlanning) {

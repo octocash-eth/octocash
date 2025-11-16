@@ -7,6 +7,7 @@ interface ConfirmPlanStageProps {
   destinationToken: DestinationToken;
   onComplete: (state: ConsolidationState) => void;
   onBack: () => void;
+  onExecutionStateChange?: (isExecuting: boolean) => void;
 }
 
 export function ConfirmPlanStage({
@@ -15,6 +16,7 @@ export function ConfirmPlanStage({
   destinationToken,
   onComplete,
   onBack,
+  onExecutionStateChange,
 }: ConfirmPlanStageProps) {
   return (
     <div className="space-y-4">
@@ -30,6 +32,7 @@ export function ConfirmPlanStage({
         onComplete={onComplete}
         onBack={onBack}
         showActions={true}
+        onExecutionStateChange={onExecutionStateChange}
       />
     </div>
   );

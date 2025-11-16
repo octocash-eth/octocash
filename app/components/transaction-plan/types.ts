@@ -3,6 +3,7 @@ import type { ConsolidationState, DestinationToken, SourceToken } from "~/lib/ty
 export interface BaseTransactionPlanProps {
   onComplete?: (state: ConsolidationState) => void;
   onBack?: () => void;
+  onExecutionStateChange?: (isExecuting: boolean) => void;
 }
 
 export interface ExecutorProps extends BaseTransactionPlanProps {

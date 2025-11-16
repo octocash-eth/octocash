@@ -8,7 +8,7 @@ export const defaultGasThreshold = "0.0005"; // 0.0005 native token
 export const gasThresholds: Record<number, string> = {
   // Add chain-specific overrides here if needed.
   [mainnet.id]: "0.002", // Ethereum Mainnet
-  [polygon.id]: "0.02", // Polygon
+  [polygon.id]: "0.05", // Polygon
   [base.id]: "0.001", // Base
 };
 
