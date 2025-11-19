@@ -53,3 +53,14 @@ export const blockExplorers = {
   [unichain.id]: "https://unichain.blockscout.com",
   [linea.id]: "https://explorer.linea.build",
 };
+
+// Mapping of chain IDs to Zerion chain identifiers
+export const chainIdToZerionId: Record<number, string> = {
+  1: "ethereum",
+  10: "optimism",
+  42161: "arbitrum",
+  8453: "base",
+  137: "polygon",
+  1301: "unichain",
+  59144: "linea",
+};
