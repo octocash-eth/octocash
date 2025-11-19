@@ -203,6 +203,7 @@ export function ConsolidateTokensModal({
     // Show completion view for terminal states (completed or partial)
     if (state.status === "completed" || state.status === "partial") {
       setCompletedState(state);
+      setIsExecuting(false);
     }
   }, []);
 
