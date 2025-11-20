@@ -9,7 +9,7 @@ vi.mock("../../app/lib/cctp");
 
 import { planConsolidation } from "../../app/lib/planning";
 import { executeConsolidationPlan } from "../../app/lib/execution";
-import { getSwapQuote, executeOdosSwapOrTransfer } from "../../app/lib/odos";
+import { getSwapQuote, executeOdosSwap } from "../../app/lib/odos";
 import { getBridgeFee, executeCCTPBurn, retrieveAttestations, executeCCTPMint } from "../../app/lib/cctp";
 
 /**
@@ -44,7 +44,7 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     vi.mocked(getBridgeFee).mockResolvedValue(0n);
     
     // Setup default mocks for execution
-    vi.mocked(executeOdosSwapOrTransfer).mockImplementation(async (tokensIn, tokenOut, _sendCalls) => {
+    vi.mocked(executeOdosSwap).mockImplementation(async (tokensIn, tokenOut, _sendCalls) => {
       const totalAmount = tokensIn.reduce((sum, token) => sum + token.amount, 0n);
       return { amount: totalAmount / 2n, transactionHash: `0x${Math.random().toString(16).substring(2)}` }; // Mock 50% conversion
     });
@@ -121,22 +121,22 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     // Mock swaps based on which is first in the execution order
     if (firstSwap.chainId === 137) {
       // DAI swap is first - make it fail
-      vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async () => {
+      vi.mocked(executeOdosSwap).mockImplementationOnce(async () => {
         throw new Error("Swap failed: Insufficient liquidity");
       });
       // USDT swap is second - make it succeed
-      vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async (tokensIn, _tokenOut, _sendCalls) => {
+      vi.mocked(executeOdosSwap).mockImplementationOnce(async (tokensIn, _tokenOut, _sendCalls) => {
         const totalAmount = tokensIn.reduce((sum, token) => sum + token.amount, 0n);
         return { amount: totalAmount / 2n, transactionHash: `0x${Math.random().toString(16).substring(2)}` };
       });
     } else {
       // USDT swap is first - make it succeed
-      vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async (tokensIn, _tokenOut, _sendCalls) => {
+      vi.mocked(executeOdosSwap).mockImplementationOnce(async (tokensIn, _tokenOut, _sendCalls) => {
         const totalAmount = tokensIn.reduce((sum, token) => sum + token.amount, 0n);
         return { amount: totalAmount / 2n, transactionHash: `0x${Math.random().toString(16).substring(2)}` };
       });
       // DAI swap is second - make it fail
-      vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async () => {
+      vi.mocked(executeOdosSwap).mockImplementationOnce(async () => {
         throw new Error("Swap failed: Insufficient liquidity");
       });
     }
@@ -211,7 +211,7 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
     // Force the first swap (USDT on Optimism) to fail
-    vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async () => {
+    vi.mocked(executeOdosSwap).mockImplementationOnce(async () => {
       throw new Error("Swap failed: Network timeout");
     });
 
@@ -338,7 +338,7 @@ describe("Scenario 3: Continue Past Failure with Partial Dependency Adaptation",
     const bridgeStep = plan.find((s) => s.type === "bridge");
 
     // Force the swap to fail
-    vi.mocked(executeOdosSwapOrTransfer).mockImplementationOnce(async () => {
+    vi.mocked(executeOdosSwap).mockImplementationOnce(async () => {
       throw new Error("Swap failed: Price impact too high");
     });
 

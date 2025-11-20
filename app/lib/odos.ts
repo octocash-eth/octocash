@@ -59,22 +59,6 @@ async function fetchJson<T>(url: string, body: unknown): Promise<T> {
 }
 
 /**
- * Builds the transfer call for the given token.
- * @param token - The token to transfer.
- * @param to - The address to transfer to.
- * @returns The transfer call.
- */
-function buildTransferCall(token: TokenAmount, to: Address): Call {
-  return {
-    to: token.token,
-    data: encodeFunctionData({
-      abi: parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]),
-      args: [to, token.amount],
-    }),
-  };
-}
-
-/**
  * Fetches a swap quote from Odos.
  * @param inputTokens - The tokens to swap.
  * @param outputToken - The output token.
@@ -204,17 +188,17 @@ export async function buildOdosCalls(tokensToSwap: TokenAmount[], tokenOut: Toke
 }
 
 /**
- * Executes the Odos swap.
- * @param tokensIn - The tokens to swap.
+ * Executes an Odos swap to convert tokens to a different token on the same chain.
+ * @param tokensIn - The tokens to swap (must be different from tokenOut).
  * @param tokenOut - The token to swap to.
  * @param sendCalls - The function to send the calls.
- * @returns Object containing the amount of output token and transaction hash (if transaction was sent).
+ * @returns Object containing the amount of output token and transaction hash.
  */
-export async function executeOdosSwapOrTransfer(
+export async function executeOdosSwap(
   tokensIn: TokenAmount[],
   tokenOut: TokenAmount,
   sendCalls: SendCallsFn,
-): Promise<{ amount: bigint; transactionHash?: string }> {
+): Promise<{ amount: bigint; transactionHash: string }> {
   const chainId = tokensIn[0].chainId;
   const wallet = tokensIn[0].walletAddress;
 
@@ -230,28 +214,8 @@ export async function executeOdosSwapOrTransfer(
     throw new Error("Swap destination chain must be the same as the source chain");
   }
 
-  const tokensToSwap = tokensIn.filter((token) => token.token !== tokenOut.token);
-  const tokenToTransfer = tokensIn.find(
-    (token) => token.token === tokenOut.token && token.walletAddress !== tokenOut.walletAddress,
-  );
-  const tokenThatStays = tokensIn.find(
-    (token) => token.token === tokenOut.token && token.walletAddress === tokenOut.walletAddress,
-  );
-
-  const calls: Call[] = [];
-
-  if (tokensToSwap.length > 0) {
-    calls.push(...(await buildOdosCalls(tokensToSwap, tokenOut)));
-  }
-
-  if (tokenToTransfer) {
-    calls.push(buildTransferCall(tokenToTransfer, tokenOut.walletAddress));
-  }
-
-  if (calls.length === 0) {
-    return { amount: tokenThatStays?.amount || 0n };
-  }
-
+  // Build and execute swap calls
+  const calls = await buildOdosCalls(tokensIn, tokenOut);
   const [transactionHash, logs] = await sendCalls("swap", chainId, wallet, calls, "atomic-steps");
   const flattenedLogs = logs.flat();
 
@@ -267,10 +231,7 @@ export async function executeOdosSwapOrTransfer(
     logs: flattenedLogs as Log[],
   });
 
-  const amount =
-    (tokenToTransfer?.amount || 0n) +
-    (tokenThatStays?.amount || 0n) +
-    (singleSwapLogs[0]?.args?.amountOut || multiSwapLogs[0]?.args?.amountsOut?.[0] || 0n);
+  const amount = singleSwapLogs[0]?.args?.amountOut || multiSwapLogs[0]?.args?.amountsOut?.[0] || 0n;
 
   if (!amount) {
     throw new Error("No output token amount found");

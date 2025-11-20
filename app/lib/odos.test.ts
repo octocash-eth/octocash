@@ -10,7 +10,7 @@ import {
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { buildOdosCalls, executeOdosSwapOrTransfer, getSwapQuote } from "./odos";
+import { buildOdosCalls, executeOdosSwap, getSwapQuote } from "./odos";
 import type { TokenAmount } from "./types";
 
 type SendCallsReturn = [Hex, Log[][]];
@@ -379,7 +379,7 @@ describe("odos", () => {
     });
   });
 
-  describe("executeOdosSwapOrTransfer", () => {
+  describe("executeOdosSwap", () => {
     let mockPublicClient: { readContract: Mock };
 
     beforeEach(async () => {
@@ -470,7 +470,7 @@ describe("odos", () => {
         ],
       ]) as unknown as SendCallsFn;
 
-      const result = await executeOdosSwapOrTransfer([mockTokenUSDC], mockTokenUSDT, mockSendCalls);
+      const result = await executeOdosSwap([mockTokenUSDC], mockTokenUSDT, mockSendCalls);
 
       expect(result.amount).toBe(3000000n);
       expect(result.transactionHash).toBe("0xtxhash");
@@ -493,6 +493,16 @@ describe("odos", () => {
         eventName: "SwapMulti",
       });
 
+      // Create a third token (DAI) for multi-token swap
+      const mockTokenDAI: TokenAmount = {
+        token: "0x6B175474E89094C44Da98b954EedeAC495271d0F" as Address,
+        amount: 2000000n,
+        chainId: 1,
+        walletAddress: mockTokenUSDC.walletAddress,
+        symbol: "DAI",
+        decimals: 18,
+      };
+
       // Encode event data properly
       const data = encodeAbiParameters(
         parseAbiParameters(
@@ -501,8 +511,8 @@ describe("odos", () => {
         [
           mockTokenUSDC.walletAddress, // sender
           [1000000n, 2000000n], // amountsIn
-          [mockTokenUSDC.token, mockTokenUSDT.token], // tokensIn
-          [3000000n], // amountsOut - first element is what we're testing for
+          [mockTokenUSDC.token, mockTokenDAI.token], // tokensIn
+          [5000000n], // amountsOut - swapping USDC+DAI to USDT
           [mockTokenUSDT.token], // tokensOut
           [0n], // slippage
           0n, // referralCode
@@ -524,109 +534,18 @@ describe("odos", () => {
         ],
       ]) as unknown as SendCallsFn;
 
-      const result = await executeOdosSwapOrTransfer([mockTokenUSDC, mockTokenUSDT], mockTokenUSDT, mockSendCalls);
+      const result = await executeOdosSwap([mockTokenUSDC, mockTokenDAI], mockTokenUSDT, mockSendCalls);
 
-      // Should be swap output (3000000n) + mockTokenUSDT that stays (2000000n) = 5000000n
+      // Should return the swap output from the event
       expect(result.amount).toBe(5000000n);
       expect(result.transactionHash).toBe("0xtxhash");
-    });
-
-    test("executes transfer when token matches output token", async () => {
-      const tokenFromDifferentWallet = {
-        ...mockTokenUSDC,
-        walletAddress: "0x0000000000000000000000000000000000000003" as `0x${string}`,
-      };
-      const outputToken = {
-        ...mockTokenUSDC,
-        walletAddress: mockTokenUSDC.walletAddress,
-      };
-
-      const mockSendCalls = vi.fn(async () => ["0xtxhash" as Hex, [[]]]) as unknown as SendCallsFn;
-
-      const result = await executeOdosSwapOrTransfer([tokenFromDifferentWallet], outputToken, mockSendCalls);
-
-      expect(result.amount).toBe(tokenFromDifferentWallet.amount);
-      expect(result.transactionHash).toBe("0xtxhash");
-      expect(mockSendCalls).toHaveBeenCalled();
-
-      // Check that a transfer call was made
-      const calls = mockSendCalls.mock.calls[0][3] as Array<{ to: Address }>;
-      expect(calls).toHaveLength(1);
-      expect(calls[0].to).toBe(tokenFromDifferentWallet.token);
-    });
-
-    test("returns amount without transaction when token already at destination", async () => {
-      const result = await executeOdosSwapOrTransfer([mockTokenUSDC], mockTokenUSDC, vi.fn() as unknown as SendCallsFn);
-
-      expect(result.amount).toBe(mockTokenUSDC.amount);
-      expect(result.transactionHash).toBeUndefined();
-    });
-
-    test("executes swap with token that stays at destination", async () => {
-      // Scenario: Swap USDT to USDC, and already have some USDC at the same wallet
-      const tokenToSwap = { ...mockTokenUSDT };
-      const tokenThatStays = { ...mockTokenUSDC }; // Same wallet, same token as output
-      const outputToken = { ...mockTokenUSDC };
-
-      const swapAbi = parseAbi([
-        "event Swap(address sender, uint256 inputAmount, address inputToken, uint256 amountOut, address outputToken, int256 slippage, uint64 referralCode, uint64 referralFee, address referralFeeRecipient)",
-      ]);
-
-      const topics = encodeEventTopics({
-        abi: swapAbi,
-        eventName: "Swap",
-      });
-
-      // Encode event data properly
-      const data = encodeAbiParameters(
-        parseAbiParameters(
-          "address sender, uint256 inputAmount, address inputToken, uint256 amountOut, address outputToken, int256 slippage, uint64 referralCode, uint64 referralFee, address referralFeeRecipient",
-        ),
-        [
-          tokenToSwap.walletAddress, // sender
-          2000000n, // inputAmount (USDT)
-          tokenToSwap.token, // inputToken (USDT)
-          3000000n, // amountOut (USDC from swap)
-          outputToken.token, // outputToken (USDC)
-          0n, // slippage
-          0n, // referralCode
-          0n, // referralFee
-          zeroAddress, // referralFeeRecipient
-        ],
-      );
-
-      const mockSendCalls = vi.fn(async () => [
-        "0xtxhash" as Hex,
-        [
-          [
-            {
-              address: "0xSwapRouter" as Address,
-              topics: topics as Hex[],
-              data: data,
-            } as Log,
-          ],
-        ],
-      ]) as unknown as SendCallsFn;
-
-      const result = await executeOdosSwapOrTransfer([tokenToSwap, tokenThatStays], outputToken, mockSendCalls);
-
-      // Should include swap output + token that stays
-      expect(result.amount).toBe(3000000n + 1000000n); // swap output + tokenThatStays
-      expect(result.transactionHash).toBe("0xtxhash");
-
-      const calls = mockSendCalls.mock.calls[0][3] as unknown[];
-      expect(calls.length).toBeGreaterThan(0); // Should have approvals and swap
     });
 
     test("throws error when tokens are from different chains", async () => {
       const tokenOnDifferentChain = { ...mockTokenUSDC, chainId: 137 };
 
       await expect(
-        executeOdosSwapOrTransfer(
-          [mockTokenUSDC, tokenOnDifferentChain],
-          mockTokenUSDT,
-          vi.fn() as unknown as SendCallsFn,
-        ),
+        executeOdosSwap([mockTokenUSDC, tokenOnDifferentChain], mockTokenUSDT, vi.fn() as unknown as SendCallsFn),
       ).rejects.toThrow("Tokens are not on the same chain or do not come from the same wallet");
     });
 
@@ -637,11 +556,7 @@ describe("odos", () => {
       };
 
       await expect(
-        executeOdosSwapOrTransfer(
-          [mockTokenUSDC, tokenFromDifferentWallet],
-          mockTokenUSDT,
-          vi.fn() as unknown as SendCallsFn,
-        ),
+        executeOdosSwap([mockTokenUSDC, tokenFromDifferentWallet], mockTokenUSDT, vi.fn() as unknown as SendCallsFn),
       ).rejects.toThrow("Tokens are not on the same chain or do not come from the same wallet");
     });
 
@@ -649,14 +564,14 @@ describe("odos", () => {
       const outputOnDifferentChain = { ...mockTokenUSDT, chainId: 137 };
 
       await expect(
-        executeOdosSwapOrTransfer([mockTokenUSDC], outputOnDifferentChain, vi.fn() as unknown as SendCallsFn),
+        executeOdosSwap([mockTokenUSDC], outputOnDifferentChain, vi.fn() as unknown as SendCallsFn),
       ).rejects.toThrow("Swap destination chain must be the same as the source chain");
     });
 
     test("throws error when no output amount found in logs", async () => {
       const mockSendCalls = vi.fn(async () => ["0xtxhash" as Hex, [[]]]) as unknown as SendCallsFn;
 
-      await expect(executeOdosSwapOrTransfer([mockTokenUSDC], mockTokenUSDT, mockSendCalls)).rejects.toThrow(
+      await expect(executeOdosSwap([mockTokenUSDC], mockTokenUSDT, mockSendCalls)).rejects.toThrow(
         "No output token amount found",
       );
     });

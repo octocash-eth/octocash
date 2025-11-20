@@ -153,10 +153,9 @@ function validateInputs(
  * Batches tokens (max 6 per batch due to Odos limitation) and creates swap steps.
  * Each swap step will depend on the provided dependencies.
  *
- * @param tokensToSwap - Tokens to swap to target
+ * @param tokensToSwap - Tokens to swap to target (must be different tokens)
  * @param targetToken - Target token specification (without amount)
  * @param steps - Existing steps array to append to
- * @param dependencies - Step IDs that these swaps depend on
  * @param log - Logging function for debug output
  * @returns Array of output tokens from the swaps
  *
@@ -200,6 +199,76 @@ async function createSwapSteps(
       log(`🔍 [DEBUG] Added swap step ${stepId} for ${batch.length} tokens -> ${targetToken.symbol}`);
     } catch (error) {
       throw new Error(`ExternalAPIError: ${error instanceof Error ? error.message : "Swap quote failed"}`);
+    }
+  }
+
+  return outputTokens;
+}
+
+/**
+ * Creates swap and transfer steps to consolidate tokens to a target token at a target wallet
+ *
+ * This function handles the complete logic of converting and moving tokens:
+ * 1. Swaps tokens with different addresses to the target token
+ * 2. Creates transfer steps for tokens already at target token but wrong wallet
+ * 3. Keeps tokens already at target token and target wallet (no action needed)
+ *
+ * @param tokens - Tokens to process (from one or multiple wallets on the same chain)
+ * @param targetToken - Target token specification including wallet address
+ * @param steps - Existing steps array to append to
+ * @param log - Logging function for debug output
+ * @returns Array of output tokens (swapped + transferred + staying)
+ *
+ * @throws {Error} ExternalAPIError if any swap quote fails
+ */
+async function createSwapsAndTransfers(
+  tokens: TokenAmount[],
+  targetToken: DestinationToken,
+  steps: TransactionStep[],
+  log: (...args: unknown[]) => void,
+): Promise<TokenAmount[]> {
+  const outputTokens: TokenAmount[] = [];
+
+  // Separate tokens that need swapping from those already at destination token
+  const tokensToSwap = tokens.filter((token) => !isAddressEqual(token.token, targetToken.token));
+  const alreadyTargetToken = tokens.filter((token) => isAddressEqual(token.token, targetToken.token));
+
+  // Swap tokens to target token
+  if (tokensToSwap.length > 0) {
+    log(
+      `🔍 [DEBUG] Creating swap steps for ${tokensToSwap.length} tokens to ${targetToken.symbol} at wallet ${targetToken.walletAddress}`,
+    );
+    const swapOutputs = await createSwapSteps(tokensToSwap, targetToken, steps, log);
+    outputTokens.push(...swapOutputs);
+  }
+
+  // Handle tokens already at target token
+  for (const token of alreadyTargetToken) {
+    if (isAddressEqual(token.walletAddress, targetToken.walletAddress)) {
+      // Already at target wallet - no action needed
+      log(`🔍 [DEBUG] Token ${token.symbol} already destination token and at destination wallet, no action needed`);
+      outputTokens.push(token);
+    } else {
+      // Same token, wrong wallet - needs transfer
+      log(`🔍 [DEBUG] Token ${token.symbol} already destination token but needs transfer`);
+      const stepId = `step-${steps.length + 1}`;
+
+      const transferOutput: TokenAmount = {
+        ...token,
+        walletAddress: targetToken.walletAddress,
+        provenance: stepId,
+      };
+
+      steps.push({
+        id: stepId,
+        type: "transfer",
+        status: "pending",
+        chainId: targetToken.chainId,
+        inputTokens: [token],
+        outputToken: transferOutput,
+      });
+
+      outputTokens.push(transferOutput);
     }
   }
 
@@ -515,19 +584,14 @@ async function createFinalSwaps(
     })),
   );
 
-  const swappedTokens: TokenAmount[] = [];
-  const tokensNeedingTransfer: TokenAmount[] = [];
+  const allOutputTokens: TokenAmount[] = [];
 
-  // Determine dependencies - should depend on claim step if it exists
-  const claimSteps = steps.filter((s) => s.type === "claim");
-  const dependencies = claimSteps.map((s) => s.id);
-
-  // Step 1: Process each wallet - swap all tokens to destination token
+  // Process each wallet - create swaps and transfers as needed
   for (const consolidatedTokens of tokensByChainAndWallet.values()) {
     const walletAddress = consolidatedTokens[0].walletAddress;
 
     log(
-      `🔍 [DEBUG] Wallet ${walletAddress} - Consolidated tokens:`,
+      `🔍 [DEBUG] Wallet ${walletAddress} - Processing ${consolidatedTokens.length} consolidated tokens`,
       consolidatedTokens.map((t) => ({
         symbol: t.symbol,
         amount: t.amount.toString(),
@@ -535,76 +599,14 @@ async function createFinalSwaps(
       })),
     );
 
-    // Separate tokens that need swapping from those that don't
-    const tokensToSwap = consolidatedTokens.filter((token) => !isAddressEqual(token.token, destinationToken.token));
+    // Use shared logic to create swaps and transfers
+    const walletOutputs = await createSwapsAndTransfers(consolidatedTokens, destinationToken, steps, log);
 
-    const alreadyDestToken = consolidatedTokens.filter((token) => isAddressEqual(token.token, destinationToken.token));
-
-    // Swap tokens to destination token, outputting directly to destination wallet
-    if (tokensToSwap.length > 0) {
-      log(
-        `🔍 [DEBUG] Wallet ${walletAddress} - Creating final swap for ${tokensToSwap.length} tokens to ${destinationToken.symbol} at destination wallet, dependencies: ${dependencies.join(", ")}`,
-      );
-
-      // Create swap steps that output directly to destination wallet
-      const walletSwapOutputs = await createSwapSteps(
-        tokensToSwap,
-        destinationToken, // Output to destination wallet
-        steps,
-        log,
-      );
-
-      swappedTokens.push(...walletSwapOutputs);
-    }
-
-    // Tokens already at destination token: transfer only if at wrong wallet
-    for (const token of alreadyDestToken) {
-      if (isAddressEqual(token.walletAddress, destinationToken.walletAddress)) {
-        // Already at destination wallet, no action needed
-        log(
-          `🔍 [DEBUG] Wallet ${walletAddress} - Token already destination token and at destination wallet, no swap needed`,
-        );
-        swappedTokens.push(token);
-      } else {
-        // At wrong wallet, needs transfer
-        log(`🔍 [DEBUG] Wallet ${walletAddress} - Token already destination token but needs transfer`);
-        tokensNeedingTransfer.push(token);
-      }
-    }
+    allOutputTokens.push(...walletOutputs);
   }
 
-  // Step 2: Create transfer steps only for tokens that need them
-  // (tokens already at destination token but wrong wallet)
-  const transferOutputs: TokenAmount[] = [];
-
-  for (const token of tokensNeedingTransfer) {
-    const stepId = `step-${steps.length + 1}`;
-
-    const transferOutput: TokenAmount = {
-      ...token,
-      walletAddress: destinationToken.walletAddress,
-      provenance: stepId,
-    };
-
-    steps.push({
-      id: stepId,
-      type: "transfer",
-      status: "pending",
-      chainId: destinationToken.chainId,
-      inputTokens: [token],
-      outputToken: transferOutput,
-    });
-
-    transferOutputs.push(transferOutput);
-
-    log(
-      `🔍 [DEBUG] Added transfer step ${stepId} from wallet ${token.walletAddress} to ${destinationToken.walletAddress}`,
-    );
-  }
-
-  // Step 3: Final consolidation - sum up all destination tokens at destination wallet
-  const allFinalTokens = [...swappedTokens, ...transferOutputs];
-  const finalTokens = groupTokensByChainAndWallet(allFinalTokens, true).flat();
+  // Final consolidation - sum up all destination tokens at destination wallet
+  const finalTokens = groupTokensByChainAndWallet(allOutputTokens, true).flat();
 
   log(
     "🔍 [DEBUG] Final tokens after consolidation:",

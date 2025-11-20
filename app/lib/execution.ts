@@ -1,8 +1,8 @@
 import type { Account, Chain, HttpTransport, WalletClient } from "viem";
-import { type Call, encodeFunctionData, parseAbi } from "viem";
+import { type Call, encodeFunctionData, parseAbi, zeroAddress } from "viem";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import { createTransactionError } from "./errors";
-import { executeOdosSwapOrTransfer, getSwapQuote } from "./odos";
+import { executeOdosSwap, getSwapQuote } from "./odos";
 import { prepareSendCalls } from "./send-calls";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
 
@@ -203,7 +203,7 @@ async function executeStep(
       const nonZeroTokens = filterZeroAmounts(step.inputTokens, step.id, "swap");
 
       // Execute swap using Odos with non-zero tokens
-      const { amount: actualAmount, transactionHash } = await executeOdosSwapOrTransfer(
+      const { amount: actualAmount, transactionHash } = await executeOdosSwap(
         nonZeroTokens,
         step.outputToken,
         sendCalls,
@@ -346,7 +346,7 @@ async function executeStep(
     }
 
     case "transfer": {
-      // Execute simple ERC20 transfer(s)
+      // Execute simple token transfer
       const calls: Call[] = [];
 
       if (step.inputTokens.length > 1) {
@@ -360,14 +360,24 @@ async function executeStep(
         throw new Error("Transfer source and destination must be on the same chain");
       }
 
-      // Build transfer call
-      calls.push({
-        to: inputToken.token,
-        data: encodeFunctionData({
-          abi: parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]),
-          args: [step.outputToken.walletAddress, inputToken.amount],
-        }),
-      });
+      // Build transfer call - handle native tokens (ETH) specially
+      if (inputToken.token === zeroAddress) {
+        // Native token (ETH) - simple value transfer
+        calls.push({
+          to: step.outputToken.walletAddress,
+          data: "0x",
+          value: inputToken.amount,
+        });
+      } else {
+        // ERC20 token - encode transfer function call
+        calls.push({
+          to: inputToken.token,
+          data: encodeFunctionData({
+            abi: parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]),
+            args: [step.outputToken.walletAddress, inputToken.amount],
+          }),
+        });
+      }
 
       // Execute all transfers
       const [transactionHash] = await sendCalls("transfer", step.chainId, step.inputTokens[0].walletAddress, calls);

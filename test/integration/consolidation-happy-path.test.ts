@@ -9,7 +9,7 @@ vi.mock("../../app/lib/cctp");
 
 import { planConsolidation } from "../../app/lib/planning";
 import { executeConsolidationPlan } from "../../app/lib/execution";
-import { getSwapQuote, executeOdosSwapOrTransfer } from "../../app/lib/odos";
+import { getSwapQuote, executeOdosSwap } from "../../app/lib/odos";
 import { getBridgeFee, executeCCTPBurn, retrieveAttestations, executeCCTPMint } from "../../app/lib/cctp";
 import { stringify, parse } from "superjson";
 
@@ -52,7 +52,7 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
     vi.mocked(getBridgeFee).mockResolvedValue(0n);
     
     // Setup default mocks for execution
-    vi.mocked(executeOdosSwapOrTransfer).mockImplementation(async (tokensIn, tokenOut, _sendCalls) => {
+    vi.mocked(executeOdosSwap).mockImplementation(async (tokensIn, tokenOut, _sendCalls) => {
       const totalAmount = tokensIn.reduce((sum, token) => sum + token.amount, 0n);
       return { amount: totalAmount / 2n, transactionHash: `0x${Math.random().toString(16).substring(2)}` }; // Mock 50% conversion
     });
