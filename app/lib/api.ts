@@ -158,10 +158,19 @@ async function fetchTokenBalancesFromZerion(address: string): Promise<TokenBalan
     // Get quantity - this is specific to THIS chain for THIS position
     const quantity = attributes.quantity.numeric;
 
+    // Normalize token address
+    // Zerion uses 0x0000000000000000000000000000000000001010 for Polygon native token (POL)
+    // but we use zeroAddress (0x0000000000000000000000000000000000000000)
+    const tokenAddress =
+      implementation.address &&
+      !(Number(chainId) === 137 && implementation.address === "0x0000000000000000000000000000000000001010")
+        ? getAddress(implementation.address)
+        : zeroAddress;
+
     balances.push({
       symbol: attributes.fungible_info.symbol,
       name: attributes.fungible_info.name,
-      address: implementation.address ? getAddress(implementation.address) : zeroAddress,
+      address: tokenAddress,
       decimals: implementation.decimals.toString(),
       exchange_rate: price.toString(),
       value: quantity,

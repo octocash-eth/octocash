@@ -32,3 +32,7 @@ export const ETH: Record<number, `0x${string}`> = {
   [unichain.id]: "0x0000000000000000000000000000000000000000",
   [linea.id]: "0x0000000000000000000000000000000000000000",
 };
+
+export const POL: Record<number, `0x${string}`> = {
+  [polygon.id]: "0x0000000000000000000000000000000000000000",
+};

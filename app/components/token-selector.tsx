@@ -3,7 +3,7 @@ import * as React from "react";
 import type { Address } from "viem";
 import { erc20Abi, getAddress, isAddress, isAddressEqual, zeroAddress } from "viem";
 import { usePublicClient } from "wagmi";
-import { ETH, USDC, WBTC } from "~/data/token-contracts";
+import { ETH, POL, USDC, WBTC } from "~/data/token-contracts";
 import { Combobox, type ComboboxOption } from "./combobox";
 import { TokenLabel } from "./token-label";
 
@@ -158,6 +158,16 @@ export function getDefaultTokenOptions(chainId: number): ComboboxOption[] {
       symbol: "WBTC",
       name: "Wrapped BTC",
       decimals: 8,
+    });
+  }
+
+  // Add POL if available for this chain (Polygon native token)
+  if (POL[chainId]) {
+    tokens.push({
+      address: POL[chainId],
+      symbol: "POL",
+      name: "Polygon Token",
+      decimals: 18,
     });
   }
 
