@@ -570,7 +570,36 @@ describe("executeConsolidationPlan", () => {
     expect((errorDetails as Error).message).toContain("No attestations found for claim");
   });
 
-  test("transfer step fails with multiple input tokens", async () => {
+  test("transfer step with multiple input tokens of the same address - should sum amounts", async () => {
+    const WALLET_2 = "0x2234567890123456789012345678901234567890" as Address;
+
+    const validTransferStep: TransactionStep = {
+      id: "transfer-1",
+      type: "transfer",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken(USDC_ADDRESS, 1000000n, 1, { provenance: "step-1" }), // 1 USDC from step-1
+        makeToken(USDC_ADDRESS, 2000000n, 1, { provenance: "step-2" }), // 2 USDC from step-2
+        makeToken(USDC_ADDRESS, 500000n, 1), // 0.5 USDC existing (no provenance)
+      ],
+      outputToken: makeToken(USDC_ADDRESS, 3500000n, 1, { walletAddress: WALLET_2 }),
+    };
+
+    mockState.plan = [validTransferStep];
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    // Should succeed
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["transfer-1"].status).toBe("success");
+
+    // Verify actual output has summed amount
+    expect(finalState.results["transfer-1"].actualOutput?.amount).toBe(3500000n);
+    expect(finalState.results["transfer-1"].actualOutput?.walletAddress).toBe(WALLET_2);
+  });
+
+  test("transfer step fails with multiple input tokens of different addresses", async () => {
     const DAI_ADDRESS = "0x6B175474E89094C44Da98b954EedeAC495271d0F" as Address;
 
     const invalidTransferStep: TransactionStep = {
@@ -580,7 +609,7 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [
         makeToken(USDC_ADDRESS, 1000000n, 1),
-        makeToken(DAI_ADDRESS, 2000000n, 1, { walletAddress: WALLET, symbol: "DAI", decimals: 18 }), // Second input - invalid!
+        makeToken(DAI_ADDRESS, 2000000n, 1, { walletAddress: WALLET, symbol: "DAI", decimals: 18 }), // Second input with different token address - invalid!
       ],
       outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
     };
@@ -594,7 +623,7 @@ describe("executeConsolidationPlan", () => {
     expect(finalState.results["transfer-1"].status).toBe("failed");
     const errorDetails = finalState.results["transfer-1"].error?.details;
     expect(errorDetails).toBeInstanceOf(Error);
-    expect((errorDetails as Error).message).toContain("Transfer step can only have one input token");
+    expect((errorDetails as Error).message).toContain("All transfer input tokens must be the same token address");
   });
 
   test("transfer step fails when input and output chains differ", async () => {
@@ -1169,6 +1198,109 @@ describe("recalculatePlan - comprehensive coverage", () => {
     expect(finalState.plan[2].outputToken.amount).toBe(1200000n);
     expect(finalState.plan[3].inputTokens[0].amount).toBe(1200000n);
     expect(finalState.plan[3].outputToken.amount).toBe(1200000n);
+  });
+
+  test("regression: transfer with multiple inputs (different provenances) - recalculation updates all sources", async () => {
+    // Regression test: when a transfer has multiple inputs with different provenances,
+    // recalculation after a step completes should update the correct input amounts
+    const WALLET_2 = "0x2234567890123456789012345678901234567890" as Address;
+
+    const swap1: TransactionStep = createStep(
+      "step-1",
+      "swap",
+      [makeToken(WETH_ADDRESS, 1000000n, 10)],
+      makeToken(USDC_ADDRESS, 100000000n, 10, { provenance: "step-1" }), // 100 USDC
+    );
+
+    const swap2: TransactionStep = createStep(
+      "step-2",
+      "swap",
+      [makeToken(DAI_ADDRESS, 500000n, 10)],
+      makeToken(USDC_ADDRESS, 200000000n, 10, { provenance: "step-2" }), // 200 USDC
+    );
+
+    const existingUSDC = makeToken(USDC_ADDRESS, 50000000n, 10); // 50 USDC, no provenance
+
+    const transfer: TransactionStep = createStep(
+      "step-3",
+      "transfer",
+      [
+        makeToken(USDC_ADDRESS, 100000000n, 10, { provenance: "step-1" }), // From swap1
+        makeToken(USDC_ADDRESS, 200000000n, 10, { provenance: "step-2" }), // From swap2
+        existingUSDC, // Existing, no provenance
+      ],
+      makeToken(USDC_ADDRESS, 350000000n, 10, { walletAddress: WALLET_2, provenance: "step-3" }), // Total: 350 USDC
+    );
+
+    const state: ConsolidationState = {
+      id: "test",
+      plan: [swap1, swap2, transfer],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10, { walletAddress: WALLET_2 }),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    // Mock swap1 to produce actual amount 105 USDC (instead of 100)
+    vi.mocked(executeOdosSwap)
+      .mockResolvedValueOnce({ amount: 105000000n, transactionHash: "0xswap1" })
+      .mockResolvedValueOnce({ amount: 195000000n, transactionHash: "0xswap2" }); // swap2 produces 195 USDC
+
+    const { values, finalValue: finalState } = await consumeGenerator(
+      executeConsolidationPlan(state, mockWalletClient),
+    );
+
+    // Find state after step-1 (swap1)
+    const stateAfterSwap = values.find((s) => s.results["step-1"]?.status === "success");
+    expect(stateAfterSwap).toBeDefined();
+
+    if (stateAfterSwap) {
+      // After swap1: transfer input from swap1 should be recalculated
+      const transferStepAfterSwap = stateAfterSwap.plan[2];
+      const swap1Input = transferStepAfterSwap.inputTokens.find((t) => t.provenance === "step-1");
+      expect(swap1Input?.amount).toBe(105000000n); // Updated from 100 to 105
+
+      // Other inputs should remain unchanged
+      const swap2Input = transferStepAfterSwap.inputTokens.find((t) => t.provenance === "step-2");
+      const existingInput = transferStepAfterSwap.inputTokens.find((t) => !t.provenance);
+      expect(swap2Input?.amount).toBe(200000000n); // Unchanged (swap2 not executed yet)
+      expect(existingInput?.amount).toBe(50000000n); // Unchanged
+
+      // Transfer output should be recalculated to sum all inputs
+      expect(transferStepAfterSwap.outputToken.amount).toBe(355000000n); // 105 + 200 + 50
+    }
+
+    // Find state after step-2 (swap2)
+    const stateAfterSwap2 = values.find((s) => s.results["step-2"]?.status === "success");
+    expect(stateAfterSwap2).toBeDefined();
+
+    if (stateAfterSwap2) {
+      // After swap2: transfer input from swap2 should also be recalculated
+      const transferStepAfterSwap2 = stateAfterSwap2.plan[2];
+      const swap1Input = transferStepAfterSwap2.inputTokens.find((t) => t.provenance === "step-1");
+      const swap2Input = transferStepAfterSwap2.inputTokens.find((t) => t.provenance === "step-2");
+      const existingInput = transferStepAfterSwap2.inputTokens.find((t) => !t.provenance);
+
+      expect(swap1Input?.amount).toBe(105000000n); // Still updated
+      expect(swap2Input?.amount).toBe(195000000n); // Now updated to actual (was 200)
+      expect(existingInput?.amount).toBe(50000000n); // Still unchanged
+
+      // Transfer output should be recalculated with both actual amounts
+      expect(transferStepAfterSwap2.outputToken.amount).toBe(350000000n); // 105 + 195 + 50
+    }
+
+    // Verify final state
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-1"].actualOutput?.amount).toBe(105000000n);
+    expect(finalState.results["step-2"].actualOutput?.amount).toBe(195000000n);
+
+    // Verify transfer was executed with correct total amount
+    expect(finalState.results["step-3"].status).toBe("success");
+    expect(finalState.results["step-3"].actualOutput?.amount).toBe(350000000n); // Sum of all three inputs with actual amounts
   });
 
   test("bridge with multiple swaps + existing USDC - recalculation preserves all sources", async () => {

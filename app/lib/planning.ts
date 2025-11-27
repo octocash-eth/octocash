@@ -302,7 +302,7 @@ async function processChainWalletSwaps(
   const tokensNotToSwap: TokenAmount[] = [];
 
   // Group tokens by chain and wallet
-  const tokensByChainAndWallet = groupTokensByChainAndWallet(sourceTokens, true);
+  const tokensByChainAndWallet = groupTokensByChainAndWallet(sourceTokens);
 
   log(
     "🔍 [DEBUG] Tokens grouped by chain and wallet:",
@@ -574,8 +574,8 @@ async function createFinalSwaps(
     })),
   );
 
-  // Group tokens by chain and wallet, consolidating duplicate token addresses
-  const tokensByChainAndWallet = groupTokensByChainAndWallet(tokens, true);
+  // Group tokens by chain and wallet
+  const tokensByChainAndWallet = groupTokensByChainAndWallet(tokens);
 
   log(
     "🔍 [DEBUG] Tokens grouped by wallet (consolidated):",
@@ -606,7 +606,7 @@ async function createFinalSwaps(
   }
 
   // Final consolidation - sum up all destination tokens at destination wallet
-  const finalTokens = groupTokensByChainAndWallet(allOutputTokens, true).flat();
+  const finalTokens = groupTokensByChainAndWallet(allOutputTokens).flat();
 
   log(
     "🔍 [DEBUG] Final tokens after consolidation:",
@@ -626,16 +626,35 @@ async function createFinalTransfer(
   destinationToken: DestinationToken,
   log: (...args: unknown[]) => void,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
-  const consolidatedTokens = groupTokensByChainAndWallet(tokens, true);
-  if (consolidatedTokens.length !== 1 || consolidatedTokens[0].length !== 1) {
-    throw new Error("PlanningError: Final transfer step must have exactly one token in the same wallet and chain");
+  const consolidatedTokens = groupTokensByChainAndWallet(tokens);
+
+  // Validate that all tokens are at the same wallet, chain, and token address
+  if (consolidatedTokens.length !== 1) {
+    throw new Error("PlanningError: Final transfer step must have tokens from exactly one wallet and chain");
   }
 
-  const token = consolidatedTokens[0][0];
+  const tokensAtWallet = consolidatedTokens[0];
+  if (tokensAtWallet.length === 0) {
+    throw new Error("PlanningError: Final transfer step must have at least one token");
+  }
+
+  // Verify all tokens are the same token address
+  const tokenAddress = tokensAtWallet[0].token;
+  for (const token of tokensAtWallet) {
+    if (token.token !== tokenAddress) {
+      throw new Error("PlanningError: Final transfer step must have tokens of the same address");
+    }
+  }
+
   const stepId = `step-${steps.length + 1}`;
 
+  // Calculate total amount from all tokens (they may have different provenances)
+  const totalAmount = tokensAtWallet.reduce((sum, t) => sum + t.amount, 0n);
+  const sourceWallet = tokensAtWallet[0].walletAddress;
+
   const transferOutput: TokenAmount = {
-    ...token,
+    ...tokensAtWallet[0],
+    amount: totalAmount,
     walletAddress: destinationToken.walletAddress,
     provenance: stepId,
   };
@@ -645,12 +664,12 @@ async function createFinalTransfer(
     type: "transfer",
     status: "pending",
     chainId: destinationToken.chainId,
-    inputTokens: [token],
+    inputTokens: tokensAtWallet as [TokenAmount, ...TokenAmount[]],
     outputToken: transferOutput,
   });
 
   log(
-    `🔍 [DEBUG] Added transfer step ${stepId} from wallet ${token.walletAddress} to ${destinationToken.walletAddress}`,
+    `🔍 [DEBUG] Added transfer step ${stepId} from wallet ${sourceWallet} to ${destinationToken.walletAddress} with ${tokensAtWallet.length} input token(s) totaling ${totalAmount.toString()}`,
   );
 
   return { steps, tokens: [transferOutput] };

@@ -1606,6 +1606,111 @@ describe("planConsolidation", () => {
     expect(getSwapQuote).not.toHaveBeenCalled();
   });
 
+  test("regression: consolidation with mixed sources (bridge + swap + existing) preserves all amounts in final transfer", async () => {
+    // Regression test for bug where final transfer only included swap amount, not bridge+existing amounts
+    // Scenario: wBTC (arbitrum) + usdc (polygon) + usdc (arbitrum) → usdc (arbitrum, different wallet)
+    const NON_CONNECTED_WALLET = "0x4444444444444444444444444444444444444444" as Address;
+    const POLYGON_USDC = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359" as Address;
+    const ARBITRUM_USDC = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831" as Address;
+    const ARBITRUM_WBTC = "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f" as Address;
+
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: ARBITRUM_WBTC,
+        amount: 10000000n, // 0.1 WBTC on Arbitrum (needs swap)
+        chainId: 42161, // Arbitrum
+        walletAddress: WALLET,
+        symbol: "WBTC",
+        decimals: 8,
+      },
+      {
+        token: POLYGON_USDC,
+        amount: 1000000000n, // 1000 USDC on Polygon (needs bridge)
+        chainId: 137, // Polygon
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      },
+      {
+        token: ARBITRUM_USDC,
+        amount: 500000000n, // 500 USDC already on Arbitrum (no action needed except final transfer)
+        chainId: 42161, // Arbitrum
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+
+    const destinationToken = {
+      token: ARBITRUM_USDC,
+      chainId: 42161, // Arbitrum
+      walletAddress: NON_CONNECTED_WALLET, // Different wallet
+      symbol: "USDC",
+      decimals: 6,
+    };
+
+    vi.mocked(getBridgeFee).mockResolvedValue(1000000n); // 1 USDC bridge fee
+
+    // Mock swap WBTC → USDC on Arbitrum
+    vi.mocked(getSwapQuote).mockResolvedValueOnce({
+      token: ARBITRUM_USDC,
+      amount: 3000000000n, // 3000 USDC from swap
+      chainId: 42161,
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    });
+
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+    // Find all step types
+    const bridgeStep = result.find((s: TransactionStep) => s.type === "bridge");
+    const attestationStep = result.find((s: TransactionStep) => s.type === "attestation");
+    const claimStep = result.find((s: TransactionStep) => s.type === "claim");
+    const swapStep = result.find((s: TransactionStep) => s.type === "swap");
+    const transferStep = result.find((s: TransactionStep) => s.type === "transfer");
+
+    // Verify all expected steps exist
+    expect(bridgeStep).toBeDefined();
+    expect(attestationStep).toBeDefined();
+    expect(claimStep).toBeDefined();
+    expect(swapStep).toBeDefined();
+    expect(transferStep).toBeDefined();
+
+    if (!bridgeStep || !claimStep || !swapStep || !transferStep) {
+      return;
+    }
+
+    // Verify bridge step
+    expect(bridgeStep.inputTokens[0].amount).toBe(1000000000n); // 1000 USDC
+    expect(bridgeStep.outputToken.amount).toBe(999000000n); // 999 USDC (after 1 USDC fee)
+
+    // Verify swap step
+    expect(swapStep.inputTokens[0].token).toBe(ARBITRUM_WBTC);
+    expect(swapStep.outputToken.amount).toBe(3000000000n); // 3000 USDC
+
+    // CRITICAL: Verify transfer step has THREE inputs with different provenances
+    expect(transferStep.inputTokens.length).toBe(3);
+
+    // Find inputs by provenance
+    const claimedUSDC = transferStep.inputTokens.find((t) => t.provenance === claimStep.id);
+    const swappedUSDC = transferStep.inputTokens.find((t) => t.provenance === swapStep.id);
+    const existingUSDC = transferStep.inputTokens.find((t) => !t.provenance);
+
+    expect(claimedUSDC).toBeDefined();
+    expect(swappedUSDC).toBeDefined();
+    expect(existingUSDC).toBeDefined();
+
+    expect(claimedUSDC?.amount).toBe(999000000n); // Bridged USDC
+    expect(swappedUSDC?.amount).toBe(3000000000n); // Swapped USDC
+    expect(existingUSDC?.amount).toBe(500000000n); // Existing USDC
+
+    // CRITICAL: Verify transfer output has the SUM of all three sources
+    const totalExpected = 999000000n + 3000000000n + 500000000n; // 4499 USDC
+    expect(transferStep.outputToken.amount).toBe(totalExpected);
+    expect(transferStep.outputToken.walletAddress).toBe(NON_CONNECTED_WALLET);
+  });
+
   test("complex: bridge + swap, transfer from different wallet, final transfer to non-connected wallet", async () => {
     const NON_CONNECTED_WALLET = "0x4444444444444444444444444444444444444444" as Address;
     const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;

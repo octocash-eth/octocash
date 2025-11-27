@@ -1,5 +1,6 @@
 import { Check, Circle, ExternalLink, Loader2, X } from "lucide-react";
 import { chains } from "~/data/supported-chains";
+import { consolidateTokenAmounts } from "~/lib/tokens";
 import type { StepResult, TransactionStep } from "~/lib/types";
 import { ChainIcon } from "../chain-icon";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "../ui/address-display";
@@ -56,15 +57,19 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
     case "swap": {
       const outputToken = result?.actualOutput ?? step.outputToken;
       const inputWallets = [...new Set(step.inputTokens.map((t) => t.walletAddress))];
+
+      // Consolidate input tokens by token address to avoid showing duplicates
+      const consolidatedInputs = consolidateTokenAmounts(step.inputTokens);
+
       return (
         <>
           <span className="text-foreground">{isPast ? "Swapped" : isExecuting ? "Swapping" : "Swap"}</span>{" "}
-          {step.inputTokens.map((inputToken) => {
-            const key = `${inputToken.token}-${inputToken.chainId}-${inputToken.walletAddress}`;
+          {consolidatedInputs.map((token, index) => {
+            const key = `${token.token}`;
             return (
               <span key={key}>
-                {step.inputTokens.indexOf(inputToken) > 0 && <span className="text-muted-foreground"> + </span>}
-                {tokenAmount(inputToken.amount, inputToken.chainId, inputToken.token, inputToken.symbol)}
+                {index > 0 && <span className="text-muted-foreground"> + </span>}
+                {tokenAmount(token.amount, token.chainId, token.token, token.symbol)}
               </span>
             );
           })}{" "}
@@ -90,10 +95,12 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
         ? chains[step.outputToken.chainId as keyof typeof chains]?.name || `Chain ${step.outputToken.chainId}`
         : chainName;
       const destChainId = step.outputToken.chainId || step.chainId;
+      // Display aggregated amount for bridge (can have multiple USDC inputs: swap outputs + existing)
+      const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
       return (
         <>
           <span className="text-foreground">{isPast ? "Bridged" : isExecuting ? "Bridging" : "Bridge"}</span>{" "}
-          {tokenAmount(inputToken.amount, inputToken.chainId, inputToken.token, inputToken.symbol)}{" "}
+          {tokenAmount(totalAmount, inputToken.chainId, inputToken.token, inputToken.symbol)}{" "}
           <span className="text-muted-foreground">from</span> {chainBadge(step.chainId, chainName)}{" "}
           <span className="text-muted-foreground">to</span> {chainBadge(destChainId, destChain)}{" "}
           <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
@@ -131,18 +138,11 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
     case "transfer": {
       const inputToken = step.inputTokens[0];
       const outputToken = step.outputToken;
+      const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
       return (
         <>
           <span className="text-foreground">{isPast ? "Transferred" : isExecuting ? "Transferring" : "Transfer"}</span>{" "}
-          {step.inputTokens.map((inputToken) => {
-            const key = `${inputToken.token}-${inputToken.chainId}-${inputToken.walletAddress}`;
-            return (
-              <span key={key}>
-                {step.inputTokens.indexOf(inputToken) > 0 && <span className="text-muted-foreground"> + </span>}
-                {tokenAmount(inputToken.amount, inputToken.chainId, inputToken.token, inputToken.symbol)}
-              </span>
-            );
-          })}{" "}
+          {tokenAmount(totalAmount, inputToken.chainId, inputToken.token, inputToken.symbol)}{" "}
           <span className="text-muted-foreground">on</span> {chainBadge(step.chainId, chainName)}{" "}
           <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
             ({addressDisplay(inputToken.walletAddress)} → {addressDisplay(outputToken.walletAddress)})
@@ -172,17 +172,17 @@ export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
       <div className="flex gap-3 flex-1 min-w-0">
         {/* Status Icon or Step Number */}
         {isPending && stepNumber !== undefined ? (
-          <div className="w-5 h-5 flex items-center justify-center flex-shrink-0 bg-primary text-primary-foreground rounded-full">
+          <div className="w-5 h-5 flex items-center justify-center shrink-0 bg-primary text-primary-foreground rounded-full">
             <span className="text-xs font-semibold">{stepNumber}</span>
           </div>
         ) : isPending ? (
-          <Circle className="w-5 h-5 text-muted-foreground flex-shrink-0" />
+          <Circle className="w-5 h-5 text-muted-foreground shrink-0" />
         ) : isExecuting ? (
-          <Loader2 className="w-5 h-5 text-primary animate-spin flex-shrink-0" />
+          <Loader2 className="w-5 h-5 text-primary animate-spin shrink-0" />
         ) : isSuccess ? (
-          <Check className="w-5 h-5 text-green-500 flex-shrink-0" />
+          <Check className="w-5 h-5 text-green-500 shrink-0" />
         ) : isFailed ? (
-          <X className="w-5 h-5 text-red-500 flex-shrink-0" />
+          <X className="w-5 h-5 text-red-500 shrink-0" />
         ) : null}
 
         {/* Action description */}
@@ -192,7 +192,7 @@ export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
       </div>
 
       {/* Right side: Transaction link or status */}
-      <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+      <div className="flex items-center gap-2 shrink-0 ml-4">
         {isSuccess && result?.transactionHash && (
           <a
             href={getExplorerUrl(step.chainId, result.transactionHash)}

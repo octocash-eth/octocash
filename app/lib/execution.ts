@@ -347,48 +347,62 @@ async function executeStep(
 
     case "transfer": {
       // Execute simple token transfer
-      const calls: Call[] = [];
-
-      if (step.inputTokens.length > 1) {
-        throw new Error("Transfer step can only have one input token");
+      if (step.inputTokens.length === 0) {
+        throw new Error("Transfer step must have at least one input token");
       }
 
-      const inputToken = step.inputTokens[0];
-
-      // Validate tokens are on the same chain
-      if (inputToken.chainId !== step.outputToken.chainId) {
-        throw new Error("Transfer source and destination must be on the same chain");
+      // Validate all inputs match the output token (same token address, chain)
+      // Only the wallet address should differ
+      for (const token of step.inputTokens) {
+        if (token.token !== step.outputToken.token) {
+          throw new Error("All transfer input tokens must be the same token address as output");
+        }
+        if (token.chainId !== step.outputToken.chainId) {
+          throw new Error("Transfer source and destination must be on the same chain");
+        }
       }
+
+      // All inputs must come from the same source wallet
+      const sourceWallet = step.inputTokens[0].walletAddress;
+      for (const token of step.inputTokens) {
+        if (token.walletAddress !== sourceWallet) {
+          throw new Error("All transfer input tokens must be from the same wallet");
+        }
+      }
+
+      // Calculate total amount to transfer
+      const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
 
       // Build transfer call - handle native tokens (ETH) specially
-      if (inputToken.token === zeroAddress) {
+      const calls: Call[] = [];
+      if (step.outputToken.token === zeroAddress) {
         // Native token (ETH) - simple value transfer
         calls.push({
           to: step.outputToken.walletAddress,
           data: "0x",
-          value: inputToken.amount,
+          value: totalAmount,
         });
       } else {
         // ERC20 token - encode transfer function call
         calls.push({
-          to: inputToken.token,
+          to: step.outputToken.token,
           data: encodeFunctionData({
             abi: parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]),
-            args: [step.outputToken.walletAddress, inputToken.amount],
+            args: [step.outputToken.walletAddress, totalAmount],
           }),
         });
       }
 
-      // Execute all transfers
-      const [transactionHash] = await sendCalls("transfer", step.chainId, step.inputTokens[0].walletAddress, calls);
+      // Execute transfer
+      const [transactionHash] = await sendCalls("transfer", step.chainId, sourceWallet, calls);
 
       return {
         stepId: step.id,
         status: "success",
         chainId: step.chainId,
         actualOutput: {
-          ...inputToken,
-          walletAddress: step.outputToken.walletAddress,
+          ...step.outputToken,
+          amount: totalAmount,
           provenance: step.id, // When transfer is successful, the amount of all dependent steps will update
         },
         transactionHash,
@@ -495,12 +509,14 @@ async function calculateStepOutput(
         amount: totalClaimAmount,
       };
     }
-    case "transfer":
-      // Transfer outputs what it inputs (1:1)
+    case "transfer": {
+      // Transfer outputs sum of all inputs
+      const totalAmount = updatedInputs.reduce((sum, t) => sum + t.amount, 0n);
       return {
         ...step.outputToken,
-        amount: updatedInputs[0].amount,
+        amount: totalAmount,
       };
+    }
     case "attestation":
       // Attestations don't change amounts
       return step.outputToken;

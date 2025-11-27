@@ -7,14 +7,13 @@ import { tryCatch } from "./utils";
  * Groups source tokens by chain and wallet address for efficient processing
  *
  * @param sourceTokens - Array of tokens to group
- * @param consolidateAmounts - If true, consolidates duplicate token addresses by summing amounts
  * @returns Array of token groups, where each group represents tokens from the same chain and wallet
  *
  * @example
  * // Returns:
  * [[token1, token2], [token3]]
  */
-export function groupTokensByChainAndWallet(sourceTokens: TokenAmount[], consolidateAmounts = false): TokenAmount[][] {
+export function groupTokensByChainAndWallet(sourceTokens: TokenAmount[]): TokenAmount[][] {
   const grouped = new Map<string, TokenAmount[]>();
 
   for (const token of sourceTokens) {
@@ -25,34 +24,42 @@ export function groupTokensByChainAndWallet(sourceTokens: TokenAmount[], consoli
     grouped.get(key)?.push(token);
   }
 
-  // Consolidate duplicate token addresses if requested
-  if (consolidateAmounts) {
-    for (const [key, tokens] of grouped.entries()) {
-      const consolidatedMap = new Map<Address, TokenAmount>();
+  return Array.from(grouped.values());
+}
 
-      for (const token of tokens) {
-        const normalizedAddress = getAddress(token.token);
-        const existing = consolidatedMap.get(normalizedAddress);
+/**
+ * Consolidates tokens by summing amounts for duplicate token addresses
+ *
+ * @param tokens - Array of tokens to consolidate
+ * @returns Array of consolidated tokens with summed amounts
+ *
+ * @example
+ * // Consolidate tokens across same chain/wallet/token
+ * const consolidated = consolidateTokenAmounts(tokens);
+ */
+export function consolidateTokenAmounts(tokens: TokenAmount[]): TokenAmount[] {
+  const consolidatedMap = new Map<string, TokenAmount>();
 
-        if (existing) {
-          // Sum the amounts for duplicate tokens
-          consolidatedMap.set(normalizedAddress, {
-            ...existing,
-            amount: existing.amount + token.amount,
-          });
-        } else {
-          consolidatedMap.set(normalizedAddress, {
-            ...token,
-            token: normalizedAddress,
-          });
-        }
-      }
+  for (const token of tokens) {
+    const tokenAddress = getAddress(token.token);
+    const keyParts = [token.chainId.toString(), tokenAddress, getAddress(token.walletAddress)];
+    const key = keyParts.join("-");
 
-      grouped.set(key, Array.from(consolidatedMap.values()));
+    const existing = consolidatedMap.get(key);
+    if (existing) {
+      consolidatedMap.set(key, {
+        ...existing,
+        amount: existing.amount + token.amount,
+      });
+    } else {
+      consolidatedMap.set(key, {
+        ...token,
+        token: tokenAddress,
+      });
     }
   }
 
-  return Array.from(grouped.values());
+  return Array.from(consolidatedMap.values());
 }
 
 /**
@@ -77,7 +84,9 @@ export async function buildERC20ApprovalCalls(tokens: TokenAmount | TokenAmount[
   }
 
   const publicClient = getPublicClient(chainId);
-  const uniqueTokens = groupTokensByChainAndWallet(tokenArray, true).flat();
+
+  // Consolidate duplicate tokens by summing amounts for approval
+  const uniqueTokens = consolidateTokenAmounts(tokenArray);
 
   // Process each unique token with summed amounts
   for (const t of uniqueTokens) {
