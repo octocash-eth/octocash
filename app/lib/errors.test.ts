@@ -159,6 +159,19 @@ describe("errors", () => {
         expect(result.code).toBe(ERROR_CODES.RPC_ERROR);
       });
 
+      it("should detect RPC_ERROR from MetaMask 'Internal JSON-RPC error'", () => {
+        const error = new Error("MetaMask - RPC Error: Internal JSON-RPC error.");
+        const result = createTransactionError(error);
+        expect(result.code).toBe(ERROR_CODES.RPC_ERROR);
+        expect(result.recoverable).toBe(true);
+      });
+
+      it("should detect RPC_ERROR from generic 'rpc error' message", () => {
+        const error = new Error("An rpc error occurred");
+        const result = createTransactionError(error);
+        expect(result.code).toBe(ERROR_CODES.RPC_ERROR);
+      });
+
       it("should detect ATTESTATION_TIMEOUT before general TIMEOUT (case-insensitive)", () => {
         const error = new Error("ATTESTATION_TIMEOUT occurred");
         const result = createTransactionError(error);

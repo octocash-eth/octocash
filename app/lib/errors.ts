@@ -54,7 +54,12 @@ export function createTransactionError(
     code = ERROR_CODES.INSUFFICIENT_GAS;
   } else if (messageIncludes("SLIPPAGE_EXCEEDED") || messageIncludes("slippage")) {
     code = ERROR_CODES.SLIPPAGE_EXCEEDED;
-  } else if (messageIncludes("RPC_ERROR") || messageIncludes("network")) {
+  } else if (
+    messageIncludes("RPC_ERROR") ||
+    messageIncludes("JSON-RPC") ||
+    messageIncludes("rpc error") ||
+    messageIncludes("network")
+  ) {
     code = ERROR_CODES.RPC_ERROR;
   } else if (messageIncludes("ATTESTATION_TIMEOUT")) {
     code = ERROR_CODES.ATTESTATION_TIMEOUT;
