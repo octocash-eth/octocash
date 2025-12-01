@@ -1,6 +1,26 @@
 import { isAddressEqual } from "viem";
 import { TokenCard } from "~/components/token-card";
-import type { ConsolidationState, TokenAmount } from "~/lib/types";
+import type { ConsolidationState, DestinationToken, TokenAmount, TransactionStep } from "~/lib/types";
+
+/**
+ * Check if a token matches the destination (same token address, chain, and wallet)
+ */
+function isTokenAtDestination(token: TokenAmount, destination: DestinationToken): boolean {
+  return (
+    isAddressEqual(token.token, destination.token) &&
+    token.chainId === destination.chainId &&
+    isAddressEqual(token.walletAddress, destination.walletAddress)
+  );
+}
+
+/**
+ * Find final steps (steps whose output is not consumed by any other step in the list)
+ */
+function findFinalSteps(steps: TransactionStep[]): TransactionStep[] {
+  return steps.filter(
+    (step) => !steps.some((other) => other.inputTokens.some((input) => input.provenance === step.id)),
+  );
+}
 
 interface ConsolidationTokensSummaryProps {
   state: ConsolidationState;
@@ -72,72 +92,41 @@ function getSourceTokensWithStatus(state: ConsolidationState): Array<{ token: To
  * For partial: includes other successful final step outputs marked as "Unintended"
  */
 function getFinalTokens(state: ConsolidationState): Array<{ token: TokenAmount; label?: string }> {
-  // Get all successful steps, excluding attestation steps (they're verification, not real tokens)
+  const { destinationToken } = state;
   const successfulSteps = state.plan.filter((step) => step.status === "success" && step.type !== "attestation");
+  const finalSteps = findFinalSteps(successfulSteps);
 
   if (state.status === "completed") {
-    // For completed: return the destination token with the final amount
-    const lastStep = successfulSteps[successfulSteps.length - 1];
-    return [
-      {
-        token: {
-          ...state.destinationToken,
-          amount: lastStep.outputToken.amount,
-        },
-        label: undefined,
-      },
-    ];
+    // Sum source tokens already at destination
+    const sourceAmount = state.sourceTokens
+      .filter((token) => isTokenAtDestination(token, destinationToken))
+      .reduce((sum, token) => sum + token.amount, 0n);
+
+    // Sum final steps that produced destination tokens
+    // (excluding steps that consumed source tokens already at destination)
+    const stepsAmount = finalSteps
+      .filter((step) => isTokenAtDestination(step.outputToken, destinationToken))
+      .filter(
+        (step) => !step.inputTokens.some((input) => !input.provenance && isTokenAtDestination(input, destinationToken)),
+      )
+      .reduce((sum, step) => sum + (state.results[step.id]?.actualOutput?.amount ?? step.outputToken.amount), 0n);
+
+    return [{ token: { ...destinationToken, amount: sourceAmount + stepsAmount } }];
   }
 
-  // For partial: collect outputs from all successful final steps
-  // Find steps that don't have any dependent steps that succeeded
-  const finalSteps = successfulSteps.filter((step) => {
-    const hasSuccessfulDependent = successfulSteps.some((otherStep) =>
-      otherStep.inputTokens.some((input) => input.provenance === step.id),
-    );
-    return !hasSuccessfulDependent;
-  });
+  // For partial: check token type and chain (not wallet) to find destination token
+  const isDestinationType = (step: TransactionStep) =>
+    isAddressEqual(step.outputToken.token, destinationToken.token) &&
+    step.outputToken.chainId === destinationToken.chainId;
 
-  const finalTokensList: Array<{ token: TokenAmount; label?: string }> = [];
+  const destinationFinalStep = finalSteps.find(isDestinationType);
+  const destinationResult = destinationFinalStep
+    ? { token: destinationFinalStep.outputToken }
+    : { token: { ...destinationToken, amount: 0n } };
 
-  // Always include destination token first
-  // Check if any final step produced the destination token
-  const destinationFinalStep = finalSteps.find(
-    (step) =>
-      isAddressEqual(step.outputToken.token, state.destinationToken.token) &&
-      step.outputToken.chainId === state.destinationToken.chainId,
-  );
+  const unintendedTokens = finalSteps
+    .filter((step) => !isDestinationType(step))
+    .map((step) => ({ token: step.outputToken, label: "Unintended" as const }));
 
-  if (destinationFinalStep) {
-    // We reached the destination token
-    finalTokensList.push({
-      token: destinationFinalStep.outputToken,
-      label: undefined,
-    });
-  } else {
-    // We never reached the destination token, show it with 0 amount
-    finalTokensList.push({
-      token: {
-        ...state.destinationToken,
-        amount: 0n,
-      },
-      label: undefined,
-    });
-  }
-
-  // Add other final tokens (not the destination) marked as "Unintended"
-  for (const step of finalSteps) {
-    const isDestinationToken =
-      isAddressEqual(step.outputToken.token, state.destinationToken.token) &&
-      step.outputToken.chainId === state.destinationToken.chainId;
-
-    if (!isDestinationToken) {
-      finalTokensList.push({
-        token: step.outputToken,
-        label: "Unintended",
-      });
-    }
-  }
-
-  return finalTokensList;
+  return [destinationResult, ...unintendedTokens];
 }

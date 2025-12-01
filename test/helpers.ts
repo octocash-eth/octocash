@@ -1,5 +1,5 @@
 import type { Address } from "viem";
-import type { TokenAmount, TransactionStep } from "../app/lib/types";
+import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "../app/lib/types";
 
 export const USDC_ETHEREUM = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
 export const USDC_POLYGON = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359" as Address;
@@ -35,17 +35,69 @@ export const makeToken = (
   provenance: options?.provenance,
 });
 
+export type MakeStepOverrides = Partial<TransactionStep> & {
+  id: string;
+  inputTokens: TokenAmount[];
+  outputToken: TokenAmount;
+};
+
 /**
- * Helper to create test TransactionStep
+ * Helper to create test TransactionStep with customizable fields
  */
-export const makeStep = (id: string): TransactionStep => ({
-  id,
+export const makeStep = (overrides: MakeStepOverrides): TransactionStep => ({
   type: "swap",
-  status: "pending",
-  chainId: 1,
-  inputTokens: [makeToken("0x123" as Address, 500n, 1)],
-  outputToken: makeToken("0x456" as Address, 1000n, 1),
+  status: "success",
+  chainId: overrides.inputTokens[0]?.chainId ?? 1,
+  ...overrides,
 });
+
+export type MakeStateOverrides = Partial<ConsolidationState> & {
+  plan: TransactionStep[];
+  sourceTokens: TokenAmount[];
+  destinationToken: Omit<TokenAmount, "amount">;
+};
+
+/**
+ * Helper to create test ConsolidationState with auto-generated results from step statuses
+ */
+export const makeState = (overrides: MakeStateOverrides): ConsolidationState => {
+  const results: Record<string, StepResult> = {};
+  for (const step of overrides.plan) {
+    if (step.status === "success") {
+      results[step.id] = {
+        stepId: step.id,
+        status: "success",
+        chainId: step.chainId,
+        transactionHash: `0xhash-${step.id}`,
+        actualOutput: step.outputToken,
+      };
+    } else if (step.status === "failed") {
+      results[step.id] = {
+        stepId: step.id,
+        status: "failed",
+        chainId: step.chainId,
+      };
+    } else if (step.status === "skipped") {
+      results[step.id] = {
+        stepId: step.id,
+        status: "skipped",
+        chainId: step.chainId,
+        skipReason: "Depends on failed step",
+      };
+    }
+  }
+
+  return {
+    id: "test-state",
+    currentStepIndex: overrides.plan.length,
+    status: "completed",
+    results,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    hasSubsequentExecution: false,
+    ...overrides,
+  };
+};
 
 /**
  * Helper to consume generator and collect all yielded values
