@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import type { Address } from "viem";
+import { makeStep, makeToken, USDC_ETHEREUM, WALLET } from "test/helpers";
 import { describe, expect, test, vi } from "vitest";
 import type { StepResult, TransactionStep } from "~/lib/types";
 import { ERROR_CODES } from "~/lib/types";
@@ -65,31 +65,19 @@ vi.mock("~/components/chain-icon", () => ({
 
 import { PlanCard } from "./plan-card";
 
+const WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as const;
+
 describe("PlanCard", () => {
-  const mockStep: TransactionStep = {
+  const mockStep: TransactionStep = makeStep({
     id: "step-1",
-    type: "swap",
     status: "pending",
-    chainId: 1,
-    inputTokens: [
-      {
-        token: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address,
-        amount: 1000000n,
-        chainId: 1,
-        walletAddress: "0x1234567890123456789012345678901234567890" as Address,
-        symbol: "USDC",
-        decimals: 6,
-      },
-    ],
-    outputToken: {
-      token: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as Address,
-      amount: 500000000000000000n,
-      chainId: 1,
-      walletAddress: "0x1234567890123456789012345678901234567890" as Address,
+    inputTokens: [makeToken(USDC_ETHEREUM, 1000000n, 1, { walletAddress: WALLET })],
+    outputToken: makeToken(WETH_ADDRESS, 500000000000000000n, 1, {
+      walletAddress: WALLET,
       symbol: "WETH",
       decimals: 18,
-    },
-  };
+    }),
+  });
 
   test("renders error message when step has failed status", () => {
     const failedStep: TransactionStep = {

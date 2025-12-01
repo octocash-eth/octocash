@@ -1,7 +1,7 @@
-import type { Address, Hex, PublicClient } from "viem";
+import type { Hex, PublicClient } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { makeToken, USDC_ETHEREUM, WALLET } from "../../test/helpers";
 import type { Attestation } from "./cctp";
-import type { TokenAmount } from "./types";
 
 // Mock the public-client module
 vi.mock("./public-client", () => ({
@@ -100,9 +100,6 @@ import { executeCCTPBurn, executeCCTPMint, getBridgeFee, getMintUsdcCalls, retri
 import { getPublicClient } from "./public-client";
 
 describe("cctp", () => {
-  const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
-  const WALLET = "0x1234567890123456789012345678901234567890" as Address;
-
   beforeEach(() => {
     vi.clearAllMocks();
     // Reset fetch mock
@@ -125,23 +122,8 @@ describe("cctp", () => {
 
   describe("executeCCTPBurn", () => {
     test("executes burn successfully with approve and depositForBurn calls when no allowance", async () => {
-      const tokenIn: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 1000000n, // 1 USDC
-        chainId: 1, // Ethereum
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
-
-      const tokenOut: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 0n,
-        chainId: 137, // Polygon
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
+      const tokenIn = makeToken(USDC_ETHEREUM, 1000000n, 1, { walletAddress: WALLET }); // 1 USDC on Ethereum
+      const tokenOut = makeToken(USDC_ETHEREUM, 0n, 137, { walletAddress: WALLET }); // Polygon
 
       const mockPublicClient = {
         readContract: vi.fn().mockResolvedValue(0n), // No allowance
@@ -166,23 +148,8 @@ describe("cctp", () => {
     });
 
     test("throws error when source and destination chains are the same", async () => {
-      const tokenIn: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 1000000n,
-        chainId: 1,
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
-
-      const tokenOut: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 0n,
-        chainId: 1, // Same chain
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
+      const tokenIn = makeToken(USDC_ETHEREUM, 1000000n, 1, { walletAddress: WALLET });
+      const tokenOut = makeToken(USDC_ETHEREUM, 0n, 1, { walletAddress: WALLET }); // Same chain
 
       const mockSendCalls = vi.fn();
 
@@ -193,23 +160,8 @@ describe("cctp", () => {
     });
 
     test("correctly pads destination address for EVM chains", async () => {
-      const tokenIn: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 500000n,
-        chainId: 10,
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
-
-      const tokenOut: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 0n,
-        chainId: 42161,
-        walletAddress: "0xabcd" as Address, // Short address to test padding
-        symbol: "USDC",
-        decimals: 6,
-      };
+      const tokenIn = makeToken(USDC_ETHEREUM, 500000n, 10, { walletAddress: WALLET });
+      const tokenOut = makeToken(USDC_ETHEREUM, 0n, 42161, { walletAddress: "0xabcd" as `0x${string}` }); // Short address to test padding
 
       const mockSendCalls = vi.fn().mockResolvedValue(["0xhash", []]);
 
@@ -219,23 +171,8 @@ describe("cctp", () => {
     });
 
     test("skips approval when sufficient allowance already exists", async () => {
-      const tokenIn: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 1000000n,
-        chainId: 1,
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
-
-      const tokenOut: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 0n,
-        chainId: 137,
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
+      const tokenIn = makeToken(USDC_ETHEREUM, 1000000n, 1, { walletAddress: WALLET });
+      const tokenOut = makeToken(USDC_ETHEREUM, 0n, 137, { walletAddress: WALLET });
 
       const mockPublicClient = {
         readContract: vi.fn().mockResolvedValue(tokenIn.amount), // Sufficient allowance
@@ -265,23 +202,8 @@ describe("cctp", () => {
     });
 
     test("includes approval when allowance is insufficient", async () => {
-      const tokenIn: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 1000000n,
-        chainId: 1,
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
-
-      const tokenOut: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 0n,
-        chainId: 137,
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
+      const tokenIn = makeToken(USDC_ETHEREUM, 1000000n, 1, { walletAddress: WALLET });
+      const tokenOut = makeToken(USDC_ETHEREUM, 0n, 137, { walletAddress: WALLET });
 
       const mockPublicClient = {
         readContract: vi.fn().mockResolvedValue(500000n), // Insufficient allowance
@@ -620,14 +542,7 @@ describe("cctp", () => {
         },
       ];
 
-      const tokenOut: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 1000000n,
-        chainId: 1,
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
+      const tokenOut = makeToken(USDC_ETHEREUM, 1000000n, 1, { walletAddress: WALLET });
 
       const mockPublicClient = {
         multicall: vi.fn().mockResolvedValue([{ result: 0n }]),
@@ -657,14 +572,7 @@ describe("cctp", () => {
     });
 
     test("throws error when no attestations provided", async () => {
-      const tokenOut: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 1000000n,
-        chainId: 1,
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
+      const tokenOut = makeToken(USDC_ETHEREUM, 1000000n, 1, { walletAddress: WALLET });
 
       const mockSendCalls = vi.fn();
 
@@ -686,14 +594,7 @@ describe("cctp", () => {
         },
       ];
 
-      const tokenOut: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 1000000n,
-        chainId: 1,
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
+      const tokenOut = makeToken(USDC_ETHEREUM, 1000000n, 1, { walletAddress: WALLET });
 
       const mockPublicClient = {
         multicall: vi.fn().mockResolvedValue([{ result: 1n }]), // Nonce already used
@@ -744,14 +645,7 @@ describe("cctp", () => {
         },
       ];
 
-      const tokenOut: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 6000000n,
-        chainId: 1,
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
+      const tokenOut = makeToken(USDC_ETHEREUM, 6000000n, 1, { walletAddress: WALLET });
 
       const mockPublicClient = {
         multicall: vi.fn().mockResolvedValue([
@@ -778,23 +672,8 @@ describe("cctp", () => {
 
   describe("edge cases and integration", () => {
     test("executeCCTPBurn handles large amounts correctly", async () => {
-      const tokenIn: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 999999999999999n, // Very large amount
-        chainId: 1,
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
-
-      const tokenOut: TokenAmount = {
-        token: USDC_ADDRESS,
-        amount: 0n,
-        chainId: 137,
-        walletAddress: WALLET,
-        symbol: "USDC",
-        decimals: 6,
-      };
+      const tokenIn = makeToken(USDC_ETHEREUM, 999999999999999n, 1, { walletAddress: WALLET }); // Very large amount
+      const tokenOut = makeToken(USDC_ETHEREUM, 0n, 137, { walletAddress: WALLET });
 
       const mockPublicClient = {
         readContract: vi.fn().mockResolvedValue(0n), // No allowance

@@ -9,6 +9,7 @@ import {
 } from "viem";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { ETH_ADDRESS, makeToken, WALLET } from "../../test/helpers";
 
 import { buildOdosCalls, executeOdosSwap, getSwapQuote } from "./odos";
 import type { TokenAmount } from "./types";
@@ -54,33 +55,17 @@ function createMockSwapData(): Hex {
   });
 }
 
+const USDC_TOKEN = "0x0000000000000000000000000000000000000001" as const;
+const USDT_TOKEN = "0x0000000000000000000000000000000000000003" as const;
+
 describe("odos", () => {
-  const mockTokenUSDC: TokenAmount = {
-    token: "0x0000000000000000000000000000000000000001" as `0x${string}`,
-    amount: 1000000n,
-    chainId: 1,
-    walletAddress: "0x0000000000000000000000000000000000000002" as `0x${string}`,
-    symbol: "USDC",
-    decimals: 6,
-  };
-
-  const mockTokenUSDT: TokenAmount = {
-    token: "0x0000000000000000000000000000000000000003" as `0x${string}`,
-    amount: 2000000n,
-    chainId: 1,
-    walletAddress: "0x0000000000000000000000000000000000000002" as `0x${string}`,
-    symbol: "USDT",
-    decimals: 6,
-  };
-
-  const mockTokenNative: TokenAmount = {
-    token: zeroAddress,
-    amount: 1000000000000000000n,
-    chainId: 1,
-    walletAddress: "0x0000000000000000000000000000000000000002" as `0x${string}`,
+  const mockTokenUSDC = makeToken(USDC_TOKEN, 1000000n, 1, { walletAddress: WALLET });
+  const mockTokenUSDT = makeToken(USDT_TOKEN, 2000000n, 1, { walletAddress: WALLET, symbol: "USDT" });
+  const mockTokenNative = makeToken(ETH_ADDRESS, 1000000000000000000n, 1, {
+    walletAddress: WALLET,
     symbol: "ETH",
     decimals: 18,
-  };
+  });
 
   describe("buildOdosCalls", () => {
     let mockPublicClient: { readContract: Mock };

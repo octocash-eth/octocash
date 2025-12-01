@@ -1,7 +1,7 @@
 import { type Address, type PublicClient, parseUnits, type Transport } from "viem";
 import { mainnet, optimism, polygon } from "viem/chains";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import type { TokenAmount } from "./types";
+import { ETH_ADDRESS, makeToken } from "../../test/helpers";
 
 // Mock the public-client module
 vi.mock("./public-client", () => ({
@@ -82,6 +82,10 @@ describe("gas", () => {
     });
   });
 
+  const WALLET_1 = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
+  const WALLET_2 = "0x19afE793Fb51902883F68f06685aE5277aF13857" as Address;
+  const WALLET_3 = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e" as Address;
+
   describe("ensureSufficientGas", () => {
     test("should not throw when all wallets have sufficient gas", async () => {
       mockGetGasThresholdForChain.mockReturnValue("0.001");
@@ -91,25 +95,19 @@ describe("gas", () => {
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
-      const tokensIn: TokenAmount[] = [
-        {
-          chainId: mainnet.id,
-          walletAddress: "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address,
-          token: "0x0000000000000000000000000000000000000000" as Address,
-          amount: parseUnits("100", 18),
+      const tokensIn = [
+        makeToken(ETH_ADDRESS, parseUnits("100", 18), mainnet.id, {
+          walletAddress: WALLET_1,
           symbol: "ETH",
           decimals: 18,
-        },
+        }),
       ];
 
-      const tokenOut: TokenAmount = {
-        chainId: optimism.id,
-        walletAddress: "0x19afE793Fb51902883F68f06685aE5277aF13857" as Address,
-        token: "0x0000000000000000000000000000000000000000" as Address,
-        amount: parseUnits("100", 18),
+      const tokenOut = makeToken(ETH_ADDRESS, parseUnits("100", 18), optimism.id, {
+        walletAddress: WALLET_2,
         symbol: "ETH",
         decimals: 18,
-      };
+      });
 
       const chainAddresses = [
         ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
@@ -132,25 +130,19 @@ describe("gas", () => {
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
-      const tokensIn: TokenAmount[] = [
-        {
-          chainId: mainnet.id,
-          walletAddress: "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address,
-          token: "0x0000000000000000000000000000000000000000" as Address,
-          amount: parseUnits("100", 18),
+      const tokensIn = [
+        makeToken(ETH_ADDRESS, parseUnits("100", 18), mainnet.id, {
+          walletAddress: WALLET_1,
           symbol: "ETH",
           decimals: 18,
-        },
+        }),
       ];
 
-      const tokenOut: TokenAmount = {
-        chainId: mainnet.id,
-        walletAddress: "0x19afE793Fb51902883F68f06685aE5277aF13857" as Address,
-        token: "0x0000000000000000000000000000000000000000" as Address,
-        amount: parseUnits("100", 18),
+      const tokenOut = makeToken(ETH_ADDRESS, parseUnits("100", 18), mainnet.id, {
+        walletAddress: WALLET_2,
         symbol: "ETH",
         decimals: 18,
-      };
+      });
 
       const chainAddresses = [
         ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
@@ -182,25 +174,19 @@ describe("gas", () => {
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
-      const tokensIn: TokenAmount[] = [
-        {
-          chainId: mainnet.id,
-          walletAddress: "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address,
-          token: "0x0000000000000000000000000000000000000000" as Address,
-          amount: parseUnits("100", 18),
+      const tokensIn = [
+        makeToken(ETH_ADDRESS, parseUnits("100", 18), mainnet.id, {
+          walletAddress: WALLET_1,
           symbol: "ETH",
           decimals: 18,
-        },
+        }),
       ];
 
-      const tokenOut: TokenAmount = {
-        chainId: optimism.id,
-        walletAddress: "0x19afE793Fb51902883F68f06685aE5277aF13857" as Address,
-        token: "0x0000000000000000000000000000000000000000" as Address,
-        amount: parseUnits("100", 18),
+      const tokenOut = makeToken(ETH_ADDRESS, parseUnits("100", 18), optimism.id, {
+        walletAddress: WALLET_2,
         symbol: "ETH",
         decimals: 18,
-      };
+      });
 
       const chainAddresses = [
         ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
@@ -231,25 +217,19 @@ describe("gas", () => {
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
-      const tokensIn: TokenAmount[] = [
-        {
-          chainId: mainnet.id,
-          walletAddress: "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address,
-          token: "0x0000000000000000000000000000000000000000" as Address,
-          amount: parseUnits("100", 18),
+      const tokensIn = [
+        makeToken(ETH_ADDRESS, parseUnits("100", 18), mainnet.id, {
+          walletAddress: WALLET_1,
           symbol: "ETH",
           decimals: 18,
-        },
+        }),
       ];
 
-      const tokenOut: TokenAmount = {
-        chainId: optimism.id,
-        walletAddress: "0x19afE793Fb51902883F68f06685aE5277aF13857" as Address,
-        token: "0x0000000000000000000000000000000000000000" as Address,
-        amount: parseUnits("100", 18),
+      const tokenOut = makeToken(ETH_ADDRESS, parseUnits("100", 18), optimism.id, {
+        walletAddress: WALLET_2,
         symbol: "ETH",
         decimals: 18,
-      };
+      });
 
       const chainAddresses = [
         ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
@@ -274,35 +254,24 @@ describe("gas", () => {
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
-      const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
+      const USDC_TOKEN = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
 
-      const tokensIn: TokenAmount[] = [
-        {
-          chainId: mainnet.id,
-          walletAddress: address,
-          token: "0x0000000000000000000000000000000000000000" as Address,
-          amount: parseUnits("50", 18),
+      const tokensIn = [
+        makeToken(ETH_ADDRESS, parseUnits("50", 18), mainnet.id, {
+          walletAddress: WALLET_1,
           symbol: "ETH",
           decimals: 18,
-        },
-        {
-          chainId: mainnet.id,
-          walletAddress: address,
-          token: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address,
-          amount: parseUnits("100", 6),
-          symbol: "USDC",
-          decimals: 6,
-        },
+        }),
+        makeToken(USDC_TOKEN, parseUnits("100", 6), mainnet.id, {
+          walletAddress: WALLET_1,
+        }),
       ];
 
-      const tokenOut: TokenAmount = {
-        chainId: optimism.id,
-        walletAddress: "0x19afE793Fb51902883F68f06685aE5277aF13857" as Address,
-        token: "0x0000000000000000000000000000000000000000" as Address,
-        amount: parseUnits("150", 18),
+      const tokenOut = makeToken(ETH_ADDRESS, parseUnits("150", 18), optimism.id, {
+        walletAddress: WALLET_2,
         symbol: "ETH",
         decimals: 18,
-      };
+      });
 
       const chainAddresses = [
         ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
@@ -328,27 +297,19 @@ describe("gas", () => {
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
-      const address = "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address;
-
-      const tokensIn: TokenAmount[] = [
-        {
-          chainId: mainnet.id,
-          walletAddress: address,
-          token: "0x0000000000000000000000000000000000000000" as Address,
-          amount: parseUnits("50", 18),
+      const tokensIn = [
+        makeToken(ETH_ADDRESS, parseUnits("50", 18), mainnet.id, {
+          walletAddress: WALLET_1,
           symbol: "ETH",
           decimals: 18,
-        },
+        }),
       ];
 
-      const tokenOut: TokenAmount = {
-        chainId: mainnet.id,
-        walletAddress: address,
-        token: "0x0000000000000000000000000000000000000000" as Address,
-        amount: parseUnits("50", 18),
+      const tokenOut = makeToken(ETH_ADDRESS, parseUnits("50", 18), mainnet.id, {
+        walletAddress: WALLET_1,
         symbol: "ETH",
         decimals: 18,
-      };
+      });
 
       const chainAddresses = [
         ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
@@ -373,33 +334,24 @@ describe("gas", () => {
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
-      const tokensIn: TokenAmount[] = [
-        {
-          chainId: mainnet.id,
-          walletAddress: "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address,
-          token: "0x0000000000000000000000000000000000000000" as Address,
-          amount: parseUnits("50", 18),
+      const tokensIn = [
+        makeToken(ETH_ADDRESS, parseUnits("50", 18), mainnet.id, {
+          walletAddress: WALLET_1,
           symbol: "ETH",
           decimals: 18,
-        },
-        {
-          chainId: optimism.id,
-          walletAddress: "0x19afE793Fb51902883F68f06685aE5277aF13857" as Address,
-          token: "0x0000000000000000000000000000000000000000" as Address,
-          amount: parseUnits("50", 18),
+        }),
+        makeToken(ETH_ADDRESS, parseUnits("50", 18), optimism.id, {
+          walletAddress: WALLET_2,
           symbol: "ETH",
           decimals: 18,
-        },
+        }),
       ];
 
-      const tokenOut: TokenAmount = {
-        chainId: polygon.id,
-        walletAddress: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e" as Address,
-        token: "0x0000000000000000000000000000000000000000" as Address,
-        amount: parseUnits("100", 18),
+      const tokenOut = makeToken(ETH_ADDRESS, parseUnits("100", 18), polygon.id, {
+        walletAddress: WALLET_3,
         symbol: "MATIC",
         decimals: 18,
-      };
+      });
 
       const chainAddresses = [
         ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
@@ -433,25 +385,19 @@ describe("gas", () => {
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
-      const tokensIn: TokenAmount[] = [
-        {
-          chainId: mainnet.id,
-          walletAddress: "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address,
-          token: "0x0000000000000000000000000000000000000000" as Address,
-          amount: parseUnits("100", 18),
+      const tokensIn = [
+        makeToken(ETH_ADDRESS, parseUnits("100", 18), mainnet.id, {
+          walletAddress: WALLET_1,
           symbol: "ETH",
           decimals: 18,
-        },
+        }),
       ];
 
-      const tokenOut: TokenAmount = {
-        chainId: mainnet.id,
-        walletAddress: "0x19afE793Fb51902883F68f06685aE5277aF13857" as Address,
-        token: "0x0000000000000000000000000000000000000000" as Address,
-        amount: parseUnits("100", 18),
+      const tokenOut = makeToken(ETH_ADDRESS, parseUnits("100", 18), mainnet.id, {
+        walletAddress: WALLET_2,
         symbol: "ETH",
         decimals: 18,
-      };
+      });
 
       const chainAddresses = [
         ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
@@ -480,33 +426,26 @@ describe("gas", () => {
         getBalance: mockGetBalance,
       } as Partial<PublicClient> as PublicClient);
 
-      const tokensIn: TokenAmount[] = [
-        {
-          chainId: mainnet.id,
-          walletAddress: "0xC30B007BC349D52850207F78C63B4BD0C823F122" as Address, // uppercase
-          token: "0x0000000000000000000000000000000000000000" as Address,
-          amount: parseUnits("50", 18),
+      const USDC_TOKEN = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+      const WALLET_UPPER = "0xC30B007BC349D52850207F78C63B4BD0C823F122" as Address;
+      const WALLET_LOWER = "0xc30b007bc349d52850207f78c63b4bd0c823f122" as Address;
+
+      const tokensIn = [
+        makeToken(ETH_ADDRESS, parseUnits("50", 18), mainnet.id, {
+          walletAddress: WALLET_UPPER, // uppercase
           symbol: "ETH",
           decimals: 18,
-        },
-        {
-          chainId: mainnet.id,
-          walletAddress: "0xc30b007bc349d52850207f78c63b4bd0c823f122" as Address, // lowercase
-          token: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address,
-          amount: parseUnits("100", 6),
-          symbol: "USDC",
-          decimals: 6,
-        },
+        }),
+        makeToken(USDC_TOKEN, parseUnits("100", 6), mainnet.id, {
+          walletAddress: WALLET_LOWER, // lowercase
+        }),
       ];
 
-      const tokenOut: TokenAmount = {
-        chainId: optimism.id,
-        walletAddress: "0x19afE793Fb51902883F68f06685aE5277aF13857" as Address,
-        token: "0x0000000000000000000000000000000000000000" as Address,
-        amount: parseUnits("150", 18),
+      const tokenOut = makeToken(ETH_ADDRESS, parseUnits("150", 18), optimism.id, {
+        walletAddress: WALLET_2,
         symbol: "ETH",
         decimals: 18,
-      };
+      });
 
       const chainAddresses = [
         ...tokensIn.map((token) => [token.chainId, token.walletAddress]),
