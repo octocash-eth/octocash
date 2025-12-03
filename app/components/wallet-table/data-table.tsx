@@ -15,7 +15,8 @@ import {
 } from "@tanstack/react-table";
 import { Coins, Link, RotateCw, Wallet } from "lucide-react";
 import * as React from "react";
-import { supportedChains } from "~/data/supported-chains";
+import { getChainName } from "~/lib/tokens";
+import type { TokenAmount } from "~/lib/types";
 import { ChainIcon } from "../chain-icon";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "../ui/address-display";
 import { Button } from "../ui/button";
@@ -24,7 +25,6 @@ import { DataGridPagination } from "../ui/data-grid-pagination";
 import { DataGridTable } from "../ui/data-grid-table";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "../ui/token-display";
-import { uniq } from "./utils";
 import type { WalletTableFilterConfig } from "./wallet-table-filters";
 import { WalletTableFilters } from "./wallet-table-filters";
 
@@ -47,25 +47,9 @@ function RenderedAddressCell({ address }: { address: string }) {
   );
 }
 
-function RenderedTokenCell({
-  token: { token, tokenAddress, chain },
-}: {
-  token: { token: string; tokenAddress?: string; chain?: string };
-}) {
-  // Map chain name to chainId
-  const chainId = React.useMemo(() => {
-    if (!chain) return undefined;
-    const foundChain = supportedChains.find((c) => c.name === chain);
-    return foundChain?.id;
-  }, [chain]);
-
-  // Fallback for cases where tokenAddress/chainId might not be available
-  if (!tokenAddress || !chainId) {
-    return <div className="flex items-center gap-2">{token}</div>;
-  }
-
+function RenderedTokenCell({ token }: { token: TokenAmount }) {
   return (
-    <TokenDisplayRoot tokenAddress={tokenAddress} chainId={chainId} symbol={token} className="gap-2">
+    <TokenDisplayRoot tokenAddress={token.token} chainId={token.chainId} symbol={token.symbol} className="gap-2">
       <TokenDisplayIcon className="size-4" />
       <TokenDisplaySymbol />
     </TokenDisplayRoot>
@@ -81,7 +65,7 @@ function RenderedChainCell({ chain }: { chain: string }) {
   );
 }
 
-export function DataTable<TData extends object, TValue>({
+export function DataTable<TData extends TokenAmount, TValue>({
   columns,
   data,
   rowSelection,
@@ -95,24 +79,30 @@ export function DataTable<TData extends object, TValue>({
 
   // Unique wallets
   const wallets = React.useMemo(() => {
-    return uniq(data, "wallet");
+    return [...new Set(data.map((token) => token.walletAddress))];
   }, [data]);
 
-  // Unique tokens
+  // Unique tokens (by symbol) - we pass the full token for rendering
   const tokens = React.useMemo(() => {
-    return uniq(data, "token", ["token", "tokenAddress", "chain"]);
+    const seen = new Set<string>();
+    return data.filter((token) => {
+      if (seen.has(token.symbol)) return false;
+      seen.add(token.symbol);
+      return true;
+    });
   }, [data]);
 
-  // Unique chains
+  // Unique chains (as chain names)
   const chains = React.useMemo(() => {
-    return uniq(data, "chain");
+    const chainNames = data.map((token) => getChainName(token.chainId));
+    return [...new Set(chainNames)];
   }, [data]);
 
   // Filter configs
   const filterConfigs = React.useMemo<ReadonlyArray<WalletTableFilterConfig<TData, unknown>>>(
     () => [
       {
-        id: "wallet",
+        id: "walletAddress",
         label: "Wallets",
         icon: Wallet,
         emptyMessage: "No wallets available",
@@ -120,18 +110,16 @@ export function DataTable<TData extends object, TValue>({
         renderOption: (address) => <RenderedAddressCell address={address as string} />,
       },
       {
-        id: "token",
+        id: "symbol",
         label: "Tokens",
         icon: Coins,
         emptyMessage: "No tokens available",
         items: tokens,
-        getValue: (option) => (option as { token: string }).token,
-        renderOption: (option) => (
-          <RenderedTokenCell token={option as { token: string; tokenAddress?: string; chain?: string }} />
-        ),
+        getValue: (option) => (option as TokenAmount).symbol,
+        renderOption: (option) => <RenderedTokenCell token={option as TokenAmount} />,
       },
       {
-        id: "chain",
+        id: "chainId",
         label: "Chains",
         icon: Link,
         emptyMessage: "No chains available",

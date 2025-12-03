@@ -4,6 +4,7 @@ import type { Address } from "viem";
 import { formatUnits, isAddress, zeroAddress } from "viem";
 import { useToken } from "wagmi";
 import { supportedChains } from "~/data/supported-chains";
+import { formatUsd } from "~/lib/tokens";
 import { cn } from "~/lib/utils";
 import { TokenIcon } from "../token-icon";
 
@@ -145,25 +146,49 @@ TokenDisplayName.displayName = "TokenDisplayName";
 // Amount Component
 interface TokenDisplayAmountProps extends React.ComponentProps<"span"> {
   amount: bigint;
-  maximumFractionDigits?: number;
-  minimumFractionDigits?: number;
+  unitaryPrice?: number;
+}
+
+/**
+ * Formats a number with adaptive decimal places based on the value:
+ * - >= 1000: 2 decimals
+ * - >= 1: 4 decimals
+ * - < 1: 6 decimals
+ */
+function formatAdaptiveAmount(value: number): string {
+  if (value !== 0 && value < 0.000001) return "<0.000001";
+
+  if (value >= 1000) {
+    return value.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  } else if (value >= 1) {
+    return value.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 4,
+    });
+  } else {
+    return value.toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 6,
+    });
+  }
 }
 
 const TokenDisplayAmount = React.forwardRef<HTMLSpanElement, TokenDisplayAmountProps>(
-  ({ amount, maximumFractionDigits = 6, minimumFractionDigits = 2, className, ...props }, ref) => {
+  ({ amount, unitaryPrice, className, ...props }, ref) => {
     const { decimals } = useTokenDisplay();
 
-    const formattedAmount = React.useMemo(() => {
+    const { formattedAmount, titleText } = React.useMemo(() => {
       const value = Number(formatUnits(amount, decimals));
-      if (value !== 0 && value < 0.000001) return "<0.000001";
-      return value.toLocaleString(undefined, {
-        maximumFractionDigits,
-        minimumFractionDigits,
-      });
-    }, [amount, decimals, maximumFractionDigits, minimumFractionDigits]);
+      const tokenAmount = formatAdaptiveAmount(value);
+      const title = unitaryPrice !== undefined ? `${tokenAmount} (${formatUsd(value * unitaryPrice)})` : tokenAmount;
+      return { formattedAmount: tokenAmount, titleText: title };
+    }, [amount, decimals, unitaryPrice]);
 
     return (
-      <span ref={ref} className={cn("truncate text-nowrap", className)} title={formattedAmount} {...props}>
+      <span ref={ref} className={cn("truncate text-nowrap", className)} title={titleText} {...props}>
         {formattedAmount}
       </span>
     );

@@ -19,24 +19,30 @@ import {
   StepperTitle,
   StepperTrigger,
 } from "~/components/ui/stepper";
-import type { WalletData } from "~/components/wallet-table/columns";
-import { supportedChains } from "~/data/supported-chains";
 import { USDC } from "~/data/token-contracts";
-import type { ConsolidationState, DestinationToken, SourceToken } from "~/lib/types";
+import { formatTokenAmount, formatUsd, getTokenAmountInUsd, getTokenId } from "~/lib/tokens";
+import type { ConsolidationState, DestinationToken, SourceToken, TokenAmount } from "~/lib/types";
 import { CompletionStage } from "./consolidation-stages/completion-stage";
 import { ConfirmPlanStage } from "./consolidation-stages/confirm-plan-stage";
 import { SelectAmountStage } from "./consolidation-stages/select-amount-stage";
 import { type DestinationSelection, SelectDestinationStage } from "./consolidation-stages/select-destination-stage";
 
+/**
+ * TokenAmount extended with the amount to consolidate (as a formatted string)
+ */
+export interface TokenWithConsolidateAmount extends TokenAmount {
+  amountToConsolidate: string;
+}
+
 interface ConsolidateTokensModalProps {
-  walletData: WalletData[];
+  tokens: TokenAmount[];
   rowSelection?: Record<string, boolean>;
   selectedRows?: number;
   onComplete?: () => void;
 }
 
 export function ConsolidateTokensModal({
-  walletData,
+  tokens,
   rowSelection = {},
   selectedRows = 0,
   onComplete,
@@ -53,15 +59,16 @@ export function ConsolidateTokensModal({
   const [completedState, setCompletedState] = React.useState<ConsolidationState | null>(null);
   const [isExecuting, setIsExecuting] = React.useState(false);
 
-  const consolidatedTokens = React.useMemo(() => {
+  const consolidatedTokens = React.useMemo<TokenWithConsolidateAmount[]>(() => {
     return Object.entries(rowSelection)
-      .filter(([rowId, isSelected]) => isSelected && walletData[parseInt(rowId, 10)])
+      .filter(([rowId, isSelected]) => isSelected && tokens[parseInt(rowId, 10)])
       .map(([rowId, _isSelected]) => {
-        const token = walletData[parseInt(rowId, 10)];
-        const amount = tokenAmounts[token.id] || token.amount;
+        const token = tokens[parseInt(rowId, 10)];
+        const tokenId = getTokenId(token);
+        const amount = tokenAmounts[tokenId] || formatTokenAmount(token);
         return { ...token, amountToConsolidate: amount };
       });
-  }, [rowSelection, walletData, tokenAmounts]);
+  }, [rowSelection, tokens, tokenAmounts]);
 
   // Derive sourceTokens from consolidatedTokens and other state
   const sourceTokens = React.useMemo<SourceToken[]>(() => {
@@ -69,17 +76,16 @@ export function ConsolidateTokensModal({
 
     return consolidatedTokens
       .filter((token) => Number.parseFloat(token.amountToConsolidate) > 0)
-      .map((token) => {
-        const chainInfo = supportedChains.find((chain) => chain.name === token.chain);
-        return {
-          amount: parseUnits(token.amountToConsolidate, token.decimals),
-          chainId: chainInfo?.id || 0,
-          token: token.tokenAddress,
-          walletAddress: token.wallet,
-          symbol: token.token,
-          decimals: token.decimals,
-        };
-      });
+      .map((token) => ({
+        amount: parseUnits(token.amountToConsolidate, token.decimals),
+        chainId: token.chainId,
+        token: token.token,
+        walletAddress: token.walletAddress,
+        symbol: token.symbol,
+        decimals: token.decimals,
+        name: token.name,
+        unitaryPrice: token.unitaryPrice,
+      }));
   }, [currentStage, consolidatedTokens]);
 
   // Derive destinationToken from form state
@@ -105,9 +111,9 @@ export function ConsolidateTokensModal({
   const actualTotalToConsolidate = React.useMemo(() => {
     return consolidatedTokens.reduce((total, token) => {
       const amountToConsolidate = Number.parseFloat(token.amountToConsolidate);
-      const fullAmount = Number.parseFloat(token.amount);
+      const fullAmount = Number(formatTokenAmount(token));
       const ratio = fullAmount > 0 ? amountToConsolidate / fullAmount : 0;
-      return total + token.amountInUsd * ratio;
+      return total + getTokenAmountInUsd(token) * ratio;
     }, 0);
   }, [consolidatedTokens]);
 
@@ -244,15 +250,7 @@ export function ConsolidateTokensModal({
                 "Consolidation Partially Complete"
               )
             ) : (
-              <>
-                Consolidate{" "}
-                {actualTotalToConsolidate.toLocaleString("en-US", {
-                  style: "currency",
-                  currency: "USD",
-                  minimumFractionDigits: 0,
-                  maximumFractionDigits: 0,
-                })}
-              </>
+              <>Consolidate {formatUsd(actualTotalToConsolidate)}</>
             )}
           </DialogTitle>
           {!completedState && (

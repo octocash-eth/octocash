@@ -14,6 +14,8 @@ export type MakeTokenOptions = {
   walletAddress?: Address;
   symbol?: string;
   decimals?: number;
+  name?: string;
+  unitaryPrice?: number;
   provenance?: string;
 };
 
@@ -32,6 +34,8 @@ export const makeToken = (
   walletAddress: options?.walletAddress || WALLET,
   symbol: options?.symbol || "USDC",
   decimals: options?.decimals || 6,
+  name: options?.name,
+  unitaryPrice: options?.unitaryPrice,
   provenance: options?.provenance,
 });
 

@@ -1,7 +1,70 @@
-import { type Address, type Call, encodeFunctionData, erc20Abi, getAddress, zeroAddress } from "viem";
+import { type Address, type Call, encodeFunctionData, erc20Abi, formatUnits, getAddress, zeroAddress } from "viem";
+import { supportedChains } from "~/data/supported-chains";
 import { getPublicClient } from "~/lib/public-client";
 import type { TokenAmount } from "~/lib/types";
 import { tryCatch } from "./utils";
+
+// ============================================================================
+// Token Utility Functions
+// ============================================================================
+
+/**
+ * Generate a unique ID for a token from its properties
+ */
+export function getTokenId(token: TokenAmount): string {
+  return `${token.walletAddress}-${token.token}-${token.chainId}`;
+}
+
+/**
+ * Get the icon URL for a token based on chain ID and token address
+ */
+export function getTokenIconUrl(chainId: number, tokenAddress: Address): string {
+  return `https://assets.octo.cash/token/${chainId}/${tokenAddress}`;
+}
+
+/**
+ * Get the chain name from a chain ID
+ */
+export function getChainName(chainId: number): string {
+  const chain = supportedChains.find((c) => c.id === chainId);
+  return chain?.name ?? `Chain-${chainId}`;
+}
+
+/**
+ * Calculate the USD value of a token amount
+ */
+export function getTokenAmountInUsd(token: TokenAmount): number {
+  if (token.unitaryPrice === undefined) {
+    return 0;
+  }
+  const formattedAmount = Number(formatUnits(token.amount, token.decimals));
+  return formattedAmount * token.unitaryPrice;
+}
+
+/**
+ * Format a token amount for display
+ */
+export function formatTokenAmount(token: TokenAmount): string {
+  return formatUnits(token.amount, token.decimals);
+}
+
+/**
+ * Format a number as USD currency
+ * @param amount - The amount to format
+ * @param decimals - Number of decimal places (default: 2)
+ */
+export function formatUsd(amount: number, decimals = 2): string {
+  return amount.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+}
+
+// ============================================================================
+// Token Grouping and Consolidation
+// ============================================================================
 
 /**
  * Groups source tokens by chain and wallet address for efficient processing

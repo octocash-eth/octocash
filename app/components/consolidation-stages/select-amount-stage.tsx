@@ -1,6 +1,7 @@
 import * as React from "react";
 import { formatUnits, parseUnits, zeroAddress } from "viem";
 import { ChainIcon } from "~/components/chain-icon";
+import type { TokenWithConsolidateAmount } from "~/components/consolidate-tokens-modal";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/ui/address-display";
 import {
   TokenAmountSelectorInput,
@@ -9,45 +10,29 @@ import {
   TokenAmountSelectorSlider,
 } from "~/components/ui/token-amount-selector";
 import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "~/components/ui/token-display";
-import type { WalletData } from "~/components/wallet-table/columns";
 import { getGasThresholdForChain } from "~/data/gas-thresholds";
-
-interface TokenWithAmount extends WalletData {
-  amountToConsolidate: string;
-}
+import { formatTokenAmount, formatUsd, getChainName, getTokenAmountInUsd, getTokenId } from "~/lib/tokens";
 
 interface SelectAmountStageProps {
-  tokens: TokenWithAmount[];
+  tokens: TokenWithConsolidateAmount[];
   onAmountsChange: (amounts: Record<string, string>) => void;
 }
 
-// Map chain name to ID
-// TODO: This is a workaround, ideally WalletData should extend TokenAmount
-const chainMap: Record<string, number> = {
-  Ethereum: 1,
-  "OP Mainnet": 10,
-  "Arbitrum One": 42161,
-  Base: 8453,
-  Polygon: 137,
-  "Linea Mainnet": 59144,
-  Unichain: 1301,
-};
-
 // Helper function to calculate maximum consolidatable amount
 // For native tokens, we need to reserve gas for transactions
-function calculateMaxConsolidatableAmount(token: TokenWithAmount, chainId: number, requestedAmount?: string): string {
-  const isNativeToken = token.tokenAddress === zeroAddress;
+function calculateMaxConsolidatableAmount(token: TokenWithConsolidateAmount, requestedAmount?: string): string {
+  const isNativeToken = token.token === zeroAddress;
+  const fullAmount = formatTokenAmount(token);
 
   // For ERC-20 tokens, all amount is available (no gas reservation needed)
   if (!isNativeToken) {
-    return requestedAmount ?? token.amount;
+    return requestedAmount ?? fullAmount;
   }
 
   // For native tokens, subtract gas threshold using bigint arithmetic
-  const gasThreshold = getGasThresholdForChain(chainId);
-  const totalAmountWei = parseUnits(token.amount, token.decimals);
+  const gasThreshold = getGasThresholdForChain(token.chainId);
   const gasReserveWei = parseUnits(gasThreshold, token.decimals);
-  const maxAvailableWei = totalAmountWei > gasReserveWei ? totalAmountWei - gasReserveWei : 0n;
+  const maxAvailableWei = token.amount > gasReserveWei ? token.amount - gasReserveWei : 0n;
 
   // If a requested amount is provided, return the minimum of requested and available
   if (requestedAmount) {
@@ -64,8 +49,8 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
     // Initialize with amounts from parent (amountToConsolidate) or fall back to max consolidatable amounts
     return tokens.reduce(
       (acc, token) => {
-        const chainId = chainMap[token.chain] || 1;
-        acc[token.id] = calculateMaxConsolidatableAmount(token, chainId, token.amountToConsolidate);
+        const tokenId = getTokenId(token);
+        acc[tokenId] = calculateMaxConsolidatableAmount(token, token.amountToConsolidate);
         return acc;
       },
       {} as Record<string, string>,
@@ -97,24 +82,26 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
 
       <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
         {tokens.map((token) => {
-          const chainId = chainMap[token.chain] || 1;
+          const tokenId = getTokenId(token);
+          const chainName = getChainName(token.chainId);
+          const totalUsdValue = getTokenAmountInUsd(token);
 
           // Calculate max consolidatable amount (respecting gas threshold for native tokens)
-          const maxAmount = calculateMaxConsolidatableAmount(token, chainId);
-          const amountValue = amounts[token.id] ?? "0";
+          const maxAmount = calculateMaxConsolidatableAmount(token);
+          const amountValue = amounts[tokenId] ?? "0";
           const currentUsdValue =
             Number.parseFloat(maxAmount) > 0
-              ? ((Number.parseFloat(amountValue) || 0) / Number.parseFloat(maxAmount)) * token.amountInUsd
+              ? ((Number.parseFloat(amountValue) || 0) / Number.parseFloat(maxAmount)) * totalUsdValue
               : 0;
 
           return (
-            <div key={token.id} className="border rounded-lg p-4 space-y-3">
+            <div key={tokenId} className="border rounded-lg p-4 space-y-3">
               {/* Token Header */}
               <div className="flex justify-between items-start">
                 <TokenDisplayRoot
-                  tokenAddress={token.tokenAddress}
-                  chainId={chainId}
-                  symbol={token.token}
+                  tokenAddress={token.token}
+                  chainId={token.chainId}
+                  symbol={token.symbol}
                   className="gap-2"
                 >
                   <TokenDisplayIcon className="size-8" />
@@ -125,12 +112,12 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
                       </span>
                       <span className="text-xs text-muted-foreground flex items-center gap-1">
                         on
-                        <ChainIcon chain={token.chain} className="size-3" />
-                        {token.chain}
+                        <ChainIcon chain={chainName} className="size-3" />
+                        {chainName}
                       </span>
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      <AddressDisplayRoot address={token.wallet} className="gap-1.5">
+                      <AddressDisplayRoot address={token.walletAddress} className="gap-1.5">
                         <AddressDisplayAvatar className="size-3" />
                         <AddressDisplayText />
                       </AddressDisplayRoot>
@@ -138,26 +125,11 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
                   </div>
                 </TokenDisplayRoot>
                 <div className="text-right">
-                  <div className="font-medium">
-                    {currentUsdValue.toLocaleString("en-US", {
-                      style: "currency",
-                      currency: "USD",
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    of{" "}
-                    {token.amountInUsd.toLocaleString("en-US", {
-                      style: "currency",
-                      currency: "USD",
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })}
-                  </div>
-                  {token.tokenAddress === zeroAddress && (
+                  <div className="font-medium">{formatUsd(currentUsdValue)}</div>
+                  <div className="text-xs text-muted-foreground">of {formatUsd(totalUsdValue)}</div>
+                  {token.token === zeroAddress && (
                     <div className="text-[10px] text-muted-foreground mt-1">
-                      {getGasThresholdForChain(chainId)} {token.token} reserved for gas
+                      {getGasThresholdForChain(token.chainId)} {token.symbol} reserved for gas
                     </div>
                   )}
                 </div>
@@ -166,7 +138,7 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
               {/* Slider and Input Controls */}
               <TokenAmountSelectorRoot
                 value={amountValue}
-                onValueChange={(value) => handleAmountChange(token.id, value)}
+                onValueChange={(value) => handleAmountChange(tokenId, value)}
                 min="0"
                 max={maxAmount}
                 decimals={token.decimals}

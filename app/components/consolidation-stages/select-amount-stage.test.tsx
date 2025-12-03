@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { parseUnits } from "viem";
 import { beforeAll, describe, expect, test, vi } from "vitest";
-import type { WalletData } from "~/components/wallet-table/columns";
+import type { TokenWithConsolidateAmount } from "~/components/consolidate-tokens-modal";
 import { SelectAmountStage } from "./select-amount-stage";
 
 // Mock ResizeObserver for Radix UI components
@@ -76,25 +77,23 @@ vi.mock("~/components/ui/token-display", () => ({
   TokenDisplaySymbol: () => <span data-testid="token-display-symbol">TEST</span>,
 }));
 
-interface TokenWithAmount extends WalletData {
-  amountToConsolidate: string;
-}
-
 describe("SelectAmountStage", () => {
-  const createMockToken = (overrides: Partial<TokenWithAmount> = {}): TokenWithAmount => ({
-    id: "test-token-1",
-    wallet: "0x1234567890123456789012345678901234567890" as `0x${string}`,
-    chain: "Ethereum",
-    token: "USDC",
-    tokenName: "USD Coin",
-    tokenAddress: "0x0000000000000000000000000000000000000001" as `0x${string}`,
-    amount: "1.5",
-    amountInUsd: 1.5,
-    decimals: 6,
-    iconUrl: "https://example.com/icon.png",
-    amountToConsolidate: "1.5",
-    ...overrides,
-  });
+  const createMockToken = (overrides: Partial<TokenWithConsolidateAmount> = {}): TokenWithConsolidateAmount => {
+    const decimals = overrides.decimals ?? 6;
+    const amountStr = overrides.amountToConsolidate ?? "1.5";
+    return {
+      token: "0x0000000000000000000000000000000000000001" as `0x${string}`,
+      amount: parseUnits(amountStr, decimals),
+      chainId: 1,
+      walletAddress: "0x1234567890123456789012345678901234567890" as `0x${string}`,
+      symbol: "USDC",
+      decimals,
+      name: "USD Coin",
+      unitaryPrice: 1,
+      amountToConsolidate: amountStr,
+      ...overrides,
+    };
+  };
 
   describe("high precision amount handling", () => {
     test("clamps slider value to exact max amount", () => {
@@ -102,17 +101,19 @@ describe("SelectAmountStage", () => {
       const maxAmount = "0.974325570775807518";
 
       const token = createMockToken({
-        amount: maxAmount,
+        amount: parseUnits(maxAmount, 18),
         amountToConsolidate: maxAmount,
         decimals: 18,
-        amountInUsd: 1000,
+        unitaryPrice: 1000,
       });
 
       render(<SelectAmountStage tokens={[token]} onAmountsChange={onAmountsChange} />);
 
       // The component should initialize with the max amount
+      // Token ID is derived from walletAddress-token-chainId
+      const tokenId = `${token.walletAddress}-${token.token}-${token.chainId}`;
       expect(onAmountsChange).toHaveBeenCalledWith({
-        [token.id]: maxAmount,
+        [tokenId]: maxAmount,
       });
     });
 
@@ -122,7 +123,7 @@ describe("SelectAmountStage", () => {
       const maxAmount = "0.974325570775807518";
 
       const token = createMockToken({
-        amount: maxAmount,
+        amount: parseUnits(maxAmount, 18),
         amountToConsolidate: "0.5",
         decimals: 18,
       });
@@ -133,8 +134,9 @@ describe("SelectAmountStage", () => {
       await user.click(maxButton);
 
       // Should set to exact max amount, not a precision-lost version
+      const tokenId = `${token.walletAddress}-${token.token}-${token.chainId}`;
       expect(onAmountsChange).toHaveBeenLastCalledWith({
-        [token.id]: maxAmount,
+        [tokenId]: maxAmount,
       });
     });
 
@@ -144,7 +146,7 @@ describe("SelectAmountStage", () => {
       const maxAmount = "0.974325570775807518";
 
       const token = createMockToken({
-        amount: maxAmount,
+        amount: parseUnits(maxAmount, 18),
         amountToConsolidate: "0",
         decimals: 18,
       });
@@ -159,8 +161,9 @@ describe("SelectAmountStage", () => {
       await user.tab();
 
       // Should clamp to exact max
+      const tokenId = `${token.walletAddress}-${token.token}-${token.chainId}`;
       expect(onAmountsChange).toHaveBeenLastCalledWith({
-        [token.id]: maxAmount,
+        [tokenId]: maxAmount,
       });
     });
 
@@ -168,27 +171,29 @@ describe("SelectAmountStage", () => {
       const onAmountsChange = vi.fn();
 
       const token1 = createMockToken({
-        id: "token-1",
-        amount: "0.974325570775807518",
+        token: "0x0000000000000000000000000000000000000001" as `0x${string}`,
+        amount: parseUnits("0.974325570775807518", 18),
         amountToConsolidate: "0.974325570775807518",
         decimals: 18,
-        token: "DAI",
+        symbol: "DAI",
       });
 
       const token2 = createMockToken({
-        id: "token-2",
-        amount: "1000.123456",
+        token: "0x0000000000000000000000000000000000000002" as `0x${string}`,
+        amount: parseUnits("1000.123456", 6),
         amountToConsolidate: "1000.123456",
         decimals: 6,
-        token: "USDC",
+        symbol: "USDC",
       });
 
       render(<SelectAmountStage tokens={[token1, token2]} onAmountsChange={onAmountsChange} />);
 
       // Both tokens should preserve their exact amounts
+      const tokenId1 = `${token1.walletAddress}-${token1.token}-${token1.chainId}`;
+      const tokenId2 = `${token2.walletAddress}-${token2.token}-${token2.chainId}`;
       expect(onAmountsChange).toHaveBeenCalledWith({
-        [token1.id]: "0.974325570775807518",
-        [token2.id]: "1000.123456",
+        [tokenId1]: "0.974325570775807518",
+        [tokenId2]: "1000.123456",
       });
     });
   });

@@ -1,17 +1,7 @@
-import { type Address, getAddress, zeroAddress } from "viem";
-import type { WalletData } from "~/components/wallet-table/columns";
-import { chainIdToZerionId, supportedChains } from "~/data/supported-chains";
-
-// Mapping of chain IDs to readable names
-const chainIdToName: Record<number, string> = {
-  ...supportedChains.reduce(
-    (acc, chain) => {
-      acc[chain.id] = chain.name;
-      return acc;
-    },
-    {} as Record<number, string>,
-  ),
-};
+import { type Address, getAddress, parseUnits, zeroAddress } from "viem";
+import { chainIdToZerionId } from "~/data/supported-chains";
+import { getTokenAmountInUsd } from "./tokens";
+import type { TokenAmount } from "./types";
 
 function isEffectivelyZero(balance: number): boolean {
   return balance < 0.01; // Consider anything less than $0.01 as effectively zero
@@ -182,33 +172,38 @@ async function fetchTokenBalancesFromZerion(address: string): Promise<TokenBalan
   return balances;
 }
 
-function buildWalletDataFromTokens(tokenBalances: TokenBalance[], address: string, chainId: number): WalletData[] {
-  const results: WalletData[] = [];
+function buildTokenAmountsFromBalances(
+  tokenBalances: TokenBalance[],
+  walletAddress: string,
+  chainId: number,
+): TokenAmount[] {
+  const results: TokenAmount[] = [];
 
   for (const token of tokenBalances) {
     try {
-      // Zerion returns quantity.numeric as already-formatted decimal string
-      // So we can use it directly without formatUnits conversion
-      const balance = token.value;
-      const exchangeRate = Number(token.exchange_rate);
-      const amountInUsd = parseFloat(balance) * exchangeRate;
+      const decimals = Number(token.decimals);
+      const unitaryPrice = Number(token.exchange_rate);
 
-      if (isEffectivelyZero(amountInUsd)) {
+      // Convert the formatted decimal string to bigint
+      const amount = parseUnits(token.value, decimals);
+
+      const tokenAmount: TokenAmount = {
+        token: token.address,
+        amount,
+        chainId,
+        walletAddress: walletAddress as Address,
+        symbol: token.symbol,
+        decimals,
+        name: token.name,
+        unitaryPrice,
+      };
+
+      // Skip tokens with effectively zero USD value
+      if (isEffectivelyZero(getTokenAmountInUsd(tokenAmount))) {
         continue;
       }
 
-      results.push({
-        id: `${address}-${token.address}-${chainId}`,
-        wallet: address as Address,
-        token: token.symbol,
-        tokenName: token.name,
-        tokenAddress: token.address as Address,
-        chain: chainIdToName[chainId] || `Chain-${chainId}`,
-        amount: balance,
-        amountInUsd: amountInUsd,
-        iconUrl: `https://assets.octo.cash/token/${chainId}/${token.address}`,
-        decimals: Number(token.decimals),
-      });
+      results.push(tokenAmount);
     } catch (error) {
       console.error(`Error processing token ${token.address}:`, error);
     }
@@ -217,7 +212,7 @@ function buildWalletDataFromTokens(tokenBalances: TokenBalance[], address: strin
   return results;
 }
 
-export async function fetchTokenBalances(addresses: string[]): Promise<WalletData[]> {
+export async function fetchTokenBalances(addresses: string[]): Promise<TokenAmount[]> {
   try {
     // If no addresses provided, return empty array
     if (addresses.length === 0) {
@@ -225,7 +220,7 @@ export async function fetchTokenBalances(addresses: string[]): Promise<WalletDat
       return [];
     }
 
-    const walletData: WalletData[] = [];
+    const tokens: TokenAmount[] = [];
 
     console.log(`Starting to fetch token balances for ${addresses.length} addresses across all networks...`);
 
@@ -253,7 +248,7 @@ export async function fetchTokenBalances(addresses: string[]): Promise<WalletDat
 
         // Group balances by chain and process them
         for (const balance of balances) {
-          walletData.push(...buildWalletDataFromTokens([balance], address, balance.chainId));
+          tokens.push(...buildTokenAmountsFromBalances([balance], address, balance.chainId));
         }
       } else {
         const { address, error } = result.reason as { error: unknown; address?: string };
@@ -264,13 +259,13 @@ export async function fetchTokenBalances(addresses: string[]): Promise<WalletDat
         }
       }
     }
-    console.log(walletData);
-    console.log(`Processed ${walletData.length} tokens with non-zero balances`);
+    console.log(tokens);
+    console.log(`Processed ${tokens.length} tokens with non-zero balances`);
 
-    // Sort wallet data by USD value (descending)
-    walletData.sort((a, b) => b.amountInUsd - a.amountInUsd);
+    // Sort by USD value (descending)
+    tokens.sort((a, b) => getTokenAmountInUsd(b) - getTokenAmountInUsd(a));
 
-    return walletData;
+    return tokens;
   } catch (error) {
     console.error("Error fetching token balances:", error);
     return []; // Return empty array on error

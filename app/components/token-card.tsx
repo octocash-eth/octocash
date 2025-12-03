@@ -44,7 +44,7 @@ export function TokenCard({ token, label }: TokenCardProps) {
           )}
           {token.amount > 0n && (
             <span className="ml-auto font-semibold text-sm">
-              <TokenDisplayAmount amount={token.amount} />
+              <TokenDisplayAmount amount={token.amount} unitaryPrice={token.unitaryPrice} />
             </span>
           )}
         </div>

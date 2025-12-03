@@ -56,11 +56,11 @@ export const blockExplorers = {
 
 // Mapping of chain IDs to Zerion chain identifiers
 export const chainIdToZerionId: Record<number, string> = {
-  1: "ethereum",
-  10: "optimism",
-  42161: "arbitrum",
-  8453: "base",
-  137: "polygon",
-  1301: "unichain",
-  59144: "linea",
+  [mainnet.id]: "ethereum",
+  [optimism.id]: "optimism",
+  [arbitrum.id]: "arbitrum",
+  [base.id]: "base",
+  [polygon.id]: "polygon",
+  [unichain.id]: "unichain",
+  [linea.id]: "linea",
 };

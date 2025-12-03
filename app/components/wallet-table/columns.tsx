@@ -1,12 +1,14 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { ExternalLink, MoreHorizontal } from "lucide-react";
-import { type Address, zeroAddress } from "viem";
+import { zeroAddress } from "viem";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DataGridColumnHeader } from "~/components/ui/data-grid-column-header";
 import { Skeleton } from "~/components/ui/skeleton";
 
 import { supportedChains } from "~/data/supported-chains";
+import { formatUsd, getChainName, getTokenAmountInUsd } from "~/lib/tokens";
+import type { TokenAmount } from "~/lib/types";
 import { ChainIcon } from "../chain-icon";
 import {
   AddressDisplayAvatar,
@@ -23,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import {
+  TokenDisplayAmount,
   TokenDisplayIcon,
   TokenDisplayLink,
   TokenDisplayName,
@@ -30,32 +33,18 @@ import {
   TokenDisplaySymbol,
 } from "../ui/token-display";
 
-export type WalletData = {
-  id: string;
-  wallet: Address;
-  token: string;
-  tokenName: string;
-  tokenAddress: Address;
-  chain: string;
-  amount: string;
-  amountInUsd: number;
-  amountToConsolidate?: string;
-  iconUrl?: string;
-  decimals: number;
-};
-
-function getExplorerUrl(chainName: string, tokenAddress: string | undefined, address: string): string {
-  const chain = supportedChains.find((chain) => chain.name === chainName);
+function getExplorerUrl(chainId: number, tokenAddress: string | undefined, walletAddress: string): string {
+  const chain = supportedChains.find((c) => c.id === chainId);
   if (!chain) {
     return "";
   }
   if (!tokenAddress || tokenAddress === zeroAddress) {
-    return `${chain.explorerUrl}/address/${address}`;
+    return `${chain.explorerUrl}/address/${walletAddress}`;
   }
-  return `${chain.explorerUrl}/token/${tokenAddress}?a=${address}`;
+  return `${chain.explorerUrl}/token/${tokenAddress}?a=${walletAddress}`;
 }
 
-export const columns: ColumnDef<WalletData>[] = [
+export const columns: ColumnDef<TokenAmount>[] = [
   {
     id: "select",
     size: 20,
@@ -80,29 +69,24 @@ export const columns: ColumnDef<WalletData>[] = [
     },
   },
   {
-    accessorKey: "token",
+    accessorKey: "symbol",
     size: 200,
     header: ({ column }) => <DataGridColumnHeader column={column} title="Token" />,
     cell: ({ row }) => {
-      const tokenSymbol = row.getValue("token") as string;
-      const tokenAddress = row.original.tokenAddress;
-      const walletAddress = row.original.wallet;
-      const chainName = row.getValue("chain") as string;
-      const tokenName = row.original.tokenName || tokenSymbol;
-      const chain = supportedChains.find((chain) => chain.name === chainName);
-      const chainId = chain?.id;
+      const token = row.original;
+      const tokenName = token.name || token.symbol;
 
-      // If we don't have a token address, just show the token name
-      if (!tokenAddress || !chainId) {
-        return <div className="text-left">{tokenSymbol}</div>;
+      // If we don't have a token address, just show the token symbol
+      if (!token.token || !token.chainId) {
+        return <div className="text-left">{token.symbol}</div>;
       }
 
       return (
         <div className="text-left">
           <TokenDisplayRoot
-            tokenAddress={tokenAddress}
-            chainId={chainId}
-            symbol={tokenSymbol}
+            tokenAddress={token.token}
+            chainId={token.chainId}
+            symbol={token.symbol}
             name={tokenName}
             className="gap-1"
           >
@@ -111,17 +95,17 @@ export const columns: ColumnDef<WalletData>[] = [
             <span className="text-muted-foreground">
               <TokenDisplaySymbol />
             </span>
-            <TokenDisplayLink walletAddress={walletAddress}>
+            <TokenDisplayLink walletAddress={token.walletAddress}>
               <ExternalLink className="h-3 w-3 ml-1" />
             </TokenDisplayLink>
           </TokenDisplayRoot>
         </div>
       );
     },
-    filterFn: (row, id, value) => {
+    filterFn: (row, _id, value) => {
       const values = value as string[];
       if (values.length === 0) return true;
-      return values.includes(row.getValue(id));
+      return values.includes(row.original.symbol);
     },
     meta: {
       skeleton: (
@@ -134,11 +118,11 @@ export const columns: ColumnDef<WalletData>[] = [
     },
   },
   {
-    accessorKey: "chain",
+    accessorKey: "chainId",
     size: 100,
     header: ({ column }) => <DataGridColumnHeader column={column} title="Chain" />,
     cell: ({ row }) => {
-      const chainName = row.getValue("chain") as string;
+      const chainName = getChainName(row.original.chainId);
       return (
         <div className="text-left flex items-center gap-2">
           <ChainIcon chain={chainName} className="size-4 md:size-5" />
@@ -148,10 +132,11 @@ export const columns: ColumnDef<WalletData>[] = [
         </div>
       );
     },
-    filterFn: (row, id, value) => {
+    filterFn: (row, _id, value) => {
       const values = value as string[];
       if (values.length === 0) return true;
-      return values.includes(row.getValue(id));
+      const chainName = getChainName(row.original.chainId);
+      return values.includes(chainName);
     },
     meta: {
       skeleton: (
@@ -163,18 +148,15 @@ export const columns: ColumnDef<WalletData>[] = [
     },
   },
   {
-    accessorKey: "wallet",
+    accessorKey: "walletAddress",
     size: 150,
     header: ({ column }) => <DataGridColumnHeader column={column} title="Wallet" />,
     cell: ({ row }) => {
-      const walletAddress = row.getValue("wallet") as string;
-      const chainName = row.getValue("chain") as string;
-      const chain = supportedChains.find((chain) => chain.name === chainName);
-      const chainId = chain?.id;
+      const token = row.original;
 
       return (
         <div className="font-medium text-left">
-          <AddressDisplayRoot address={walletAddress} chainId={chainId}>
+          <AddressDisplayRoot address={token.walletAddress} chainId={token.chainId}>
             <AddressDisplayAvatar className="size-4 md:size-5" />
             <AddressDisplayText />
             <AddressDisplayLink />
@@ -182,10 +164,10 @@ export const columns: ColumnDef<WalletData>[] = [
         </div>
       );
     },
-    filterFn: (row, id, value) => {
+    filterFn: (row, _id, value) => {
       const values = value as string[];
       if (values.length === 0) return true;
-      return values.includes(row.getValue(id));
+      return values.includes(row.original.walletAddress);
     },
     meta: {
       skeleton: (
@@ -201,60 +183,44 @@ export const columns: ColumnDef<WalletData>[] = [
     size: 70,
     header: ({ column }) => (
       <div className="flex justify-end -me-7">
-        <DataGridColumnHeader column={column} title="Amount" className="-ms-0 me-0" />
+        <DataGridColumnHeader column={column} title="Amount" className="ms-0 me-0" />
       </div>
     ),
     cell: ({ row }) => {
-      const amount = parseFloat(row.getValue("amount"));
-
-      // Format with appropriate decimal places based on the value
-      const formatAmount = (value: number) => {
-        if (value >= 1000) {
-          return value.toLocaleString(undefined, {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          });
-        } else if (value >= 1) {
-          return value.toLocaleString(undefined, {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 4,
-          });
-        } else {
-          return value.toLocaleString(undefined, {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 6,
-          });
-        }
-      };
-
-      return <div className="text-right font-medium">{formatAmount(amount)}</div>;
+      const token = row.original;
+      return (
+        <div className="text-right font-medium">
+          <TokenDisplayRoot
+            tokenAddress={token.token}
+            chainId={token.chainId}
+            symbol={token.symbol}
+            decimals={token.decimals}
+          >
+            <TokenDisplayAmount amount={token.amount} />
+          </TokenDisplayRoot>
+        </div>
+      );
     },
     meta: {
       skeleton: <Skeleton className="h-4 w-20 ml-auto" />,
     },
   },
   {
-    accessorKey: "amountInUsd",
+    id: "amountInUsd",
+    accessorFn: (row) => getTokenAmountInUsd(row),
     size: 100,
     header: ({ column }) => (
       <div className="flex justify-end -me-7">
-        <DataGridColumnHeader column={column} title="In USD" className="-ms-0 me-0" />
+        <DataGridColumnHeader column={column} title="In USD" className="ms-0 me-0" />
       </div>
     ),
     cell: ({ row }) => {
-      const amount = parseFloat(row.getValue("amountInUsd"));
+      const amount = getTokenAmountInUsd(row.original);
       if (amount <= 0) {
         return <div className="text-right font-medium text-muted-foreground">-</div>;
       }
 
-      const formatted = new Intl.NumberFormat("en-US", {
-        style: "currency",
-        currency: "USD",
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }).format(amount);
-
-      return <div className="text-right font-medium">{formatted}</div>;
+      return <div className="text-right font-medium">{formatUsd(amount)}</div>;
     },
     meta: {
       skeleton: <Skeleton className="h-4 w-16 ml-auto" />,
@@ -264,8 +230,7 @@ export const columns: ColumnDef<WalletData>[] = [
     id: "actions",
     size: 70,
     cell: ({ row }) => {
-      const wallet = row.original;
-      const addressToCopy = wallet.wallet;
+      const token = row.original;
 
       return (
         <div className="text-right">
@@ -278,17 +243,15 @@ export const columns: ColumnDef<WalletData>[] = [
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>Actions</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => navigator.clipboard.writeText(addressToCopy)}>
+              <DropdownMenuItem onClick={() => navigator.clipboard.writeText(token.walletAddress)}>
                 Copy wallet address
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem>View details</DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => {
-                  const tokenAddress = row.original.tokenAddress;
-                  const chainName = row.getValue("chain") as string;
-                  if (tokenAddress) {
-                    window.open(getExplorerUrl(chainName, tokenAddress, wallet.wallet), "_blank");
+                  if (token.token) {
+                    window.open(getExplorerUrl(token.chainId, token.token, token.walletAddress), "_blank");
                   }
                 }}
               >
