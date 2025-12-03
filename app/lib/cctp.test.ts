@@ -1,4 +1,4 @@
-import type { Hex, PublicClient } from "viem";
+import type { Address, Hex, PublicClient } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { makeToken, USDC_ETHEREUM, WALLET } from "../../test/helpers";
 import type { Attestation } from "./cctp";

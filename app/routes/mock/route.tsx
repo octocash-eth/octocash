@@ -48,8 +48,6 @@ const happyPathState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: [],
-      partialDependency: false,
     },
     {
       id: "step-2",
@@ -74,8 +72,6 @@ const happyPathState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: [],
-      partialDependency: false,
     },
     {
       id: "step-3",
@@ -100,8 +96,6 @@ const happyPathState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: ["step-1"],
-      partialDependency: false,
     },
     {
       id: "step-4",
@@ -134,8 +128,6 @@ const happyPathState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: ["step-2", "step-3"],
-      partialDependency: true,
     },
     {
       id: "step-5",
@@ -168,8 +160,6 @@ const happyPathState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: ["step-4"],
-      partialDependency: true,
     },
     {
       id: "step-6",
@@ -194,8 +184,6 @@ const happyPathState: ConsolidationState = {
         symbol: "WBTC",
         decimals: 8,
       },
-      dependsOn: ["step-5"],
-      partialDependency: false,
     },
   ] as TransactionStep[],
   currentStepIndex: 6,
@@ -301,8 +289,6 @@ const partialAdaptationState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: [],
-      partialDependency: false,
     },
     {
       id: "step-2",
@@ -327,8 +313,6 @@ const partialAdaptationState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: [],
-      partialDependency: false,
       error: {
         code: "SLIPPAGE_EXCEEDED",
         message: "Price changed too much during execution",
@@ -359,8 +343,6 @@ const partialAdaptationState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: ["step-1"],
-      partialDependency: false,
     },
     {
       id: "step-4",
@@ -385,8 +367,6 @@ const partialAdaptationState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: ["step-2"],
-      partialDependency: false,
     },
     {
       id: "step-5",
@@ -411,9 +391,6 @@ const partialAdaptationState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: ["step-3"], // Adapted from ["step-3", "step-4"]
-      adaptedFrom: ["step-3", "step-4"],
-      partialDependency: true,
     },
     {
       id: "step-6",
@@ -438,9 +415,6 @@ const partialAdaptationState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: ["step-5"],
-      adaptedFrom: ["step-5"],
-      partialDependency: true,
     },
     {
       id: "step-7",
@@ -465,8 +439,6 @@ const partialAdaptationState: ConsolidationState = {
         symbol: "WBTC",
         decimals: 8,
       },
-      dependsOn: ["step-6"],
-      partialDependency: false,
     },
   ] as TransactionStep[],
   currentStepIndex: 7,
@@ -568,8 +540,6 @@ const pausedState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: [],
-      partialDependency: false,
     },
     {
       id: "step-2",
@@ -594,8 +564,6 @@ const pausedState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: ["step-1"],
-      partialDependency: true,
       error: {
         code: "ATTESTATION_TIMEOUT",
         message: "Attestation not available within timeout period",
@@ -617,8 +585,6 @@ const pausedState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: ["step-2"],
-      partialDependency: true,
     },
     {
       id: "step-4",
@@ -643,8 +609,6 @@ const pausedState: ConsolidationState = {
         symbol: "WBTC",
         decimals: 8,
       },
-      dependsOn: ["step-3"],
-      partialDependency: false,
     },
   ] as TransactionStep[],
   currentStepIndex: 1,
@@ -709,8 +673,6 @@ const simpleSwapState: ConsolidationState = {
         symbol: "WBTC",
         decimals: 8,
       },
-      dependsOn: [],
-      partialDependency: false,
     },
   ] as TransactionStep[],
   currentStepIndex: 1,
@@ -771,8 +733,6 @@ const executingState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: [],
-      partialDependency: false,
     },
     {
       id: "step-2",
@@ -797,8 +757,6 @@ const executingState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: ["step-1"],
-      partialDependency: false,
     },
     {
       id: "step-3",
@@ -823,8 +781,6 @@ const executingState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: ["step-2"],
-      partialDependency: true,
     },
     {
       id: "step-4",
@@ -849,8 +805,6 @@ const executingState: ConsolidationState = {
         symbol: "USDC",
         decimals: 6,
       },
-      dependsOn: ["step-3"],
-      partialDependency: true,
     },
   ] as TransactionStep[],
   currentStepIndex: 1,
@@ -1003,8 +957,6 @@ export default function MockPage() {
                     <span className="text-gray-600">
                       {step.id} • Chain {step.chainId}
                     </span>
-                    {step.partialDependency && <span className="text-xs text-purple-600">(partial dependency)</span>}
-                    {step.adaptedFrom && <span className="text-xs text-blue-600">(adapted)</span>}
                   </div>
                 ))}
               </div>
