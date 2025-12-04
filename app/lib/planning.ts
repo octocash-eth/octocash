@@ -192,6 +192,7 @@ async function createSwapSteps(
         chainId: targetToken.chainId,
         inputTokens: batch as [TokenAmount, ...TokenAmount[]],
         outputToken: outputTokenWithProvenance,
+        quotedAt: Date.now(),
       });
 
       outputTokens.push(outputTokenWithProvenance);

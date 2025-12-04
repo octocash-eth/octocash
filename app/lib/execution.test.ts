@@ -1,6 +1,6 @@
 import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { consumeGenerator, makeToken, WALLET } from "../../test/helpers";
+import { consumeGenerator, makeState, makeStep, makeToken, WALLET } from "../../test/helpers";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
 
 // Mock dependencies BEFORE imports
@@ -2039,5 +2039,162 @@ describe("Additional edge cases for complete coverage", () => {
     expect(finalState.results["step-2"].status).toBe("success");
     // Verify step 1 was NOT re-executed
     expect(executeOdosSwap).toHaveBeenCalledTimes(1); // Only step 2
+  });
+
+  test("swap quote is refreshed when retrying after failure (paused state)", async () => {
+    const step1 = makeStep({
+      id: "step-1",
+      status: "pending",
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
+      quotedAt: Date.now(), // Fresh quote, but we're retrying
+    });
+
+    const state = makeState({
+      plan: [step1],
+      currentStepIndex: 0,
+      status: "paused", // Retrying after failure
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+    });
+
+    // Mock getSwapQuote to return a different (refreshed) amount
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 850000n, 1));
+    vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 850000n, transactionHash: "0xswap" });
+
+    const { finalValue: finalState, values: states } = await consumeGenerator(
+      executeConsolidationPlan(state, mockWalletClient),
+    );
+
+    // getSwapQuote should be called to refresh the quote (because status was paused)
+    expect(getSwapQuote).toHaveBeenCalledWith(step1.inputTokens, step1.outputToken);
+
+    // The plan should be updated with the refreshed quote before execution
+    const stateAfterRefresh = states.find(
+      (s) => s.plan[0].outputToken.amount === 850000n && s.plan[0].status === "pending",
+    );
+    expect(stateAfterRefresh).toBeDefined();
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-1"].status).toBe("success");
+  });
+
+  test("swap quote is refreshed when quote is stale (older than threshold)", async () => {
+    const staleTime = Date.now() - 60 * 1000; // 60 seconds ago (threshold is 55s)
+
+    const step1 = makeStep({
+      id: "step-1",
+      status: "pending",
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
+      quotedAt: staleTime,
+    });
+
+    const state = makeState({
+      plan: [step1],
+      currentStepIndex: 0,
+      status: "ready", // Not retrying, but quote is stale
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+    });
+
+    // Mock getSwapQuote to return a different (refreshed) amount
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 820000n, 1));
+    vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 820000n, transactionHash: "0xswap" });
+
+    const { finalValue: finalState, values: states } = await consumeGenerator(
+      executeConsolidationPlan(state, mockWalletClient),
+    );
+
+    // getSwapQuote should be called to refresh the stale quote
+    expect(getSwapQuote).toHaveBeenCalledWith(step1.inputTokens, step1.outputToken);
+
+    // The plan should be updated with the refreshed quote before execution
+    const stateAfterRefresh = states.find(
+      (s) => s.plan[0].outputToken.amount === 820000n && s.plan[0].status === "pending",
+    );
+    expect(stateAfterRefresh).toBeDefined();
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-1"].status).toBe("success");
+  });
+
+  test("swap quote is NOT refreshed when quote is fresh and not retrying", async () => {
+    const step1 = makeStep({
+      id: "step-1",
+      status: "pending",
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
+      quotedAt: Date.now(), // Fresh quote
+    });
+
+    const state = makeState({
+      plan: [step1],
+      currentStepIndex: 0,
+      status: "ready", // Not retrying
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+    });
+
+    vi.mocked(getSwapQuote).mockClear();
+    vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 900000n, transactionHash: "0xswap" });
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // getSwapQuote should NOT be called (quote is fresh and not retrying)
+    expect(getSwapQuote).not.toHaveBeenCalled();
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-1"].status).toBe("success");
+  });
+
+  test("downstream steps are recalculated after quote refresh", async () => {
+    const step1 = makeStep({
+      id: "step-1",
+      status: "pending",
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: { ...makeToken(USDC_ADDRESS, 900000n, 1), provenance: "step-1" },
+      quotedAt: Date.now(),
+    });
+
+    const step2 = makeStep({
+      id: "step-2",
+      type: "bridge",
+      status: "pending",
+      inputTokens: [makeToken(USDC_ADDRESS, 900000n, 1, { provenance: "step-1" })],
+      outputToken: makeToken(USDC_ADDRESS, 900000n, 10),
+    });
+
+    const state = makeState({
+      plan: [step1, step2],
+      currentStepIndex: 0,
+      status: "paused", // Retrying - will trigger refresh
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+    });
+
+    // Mock getSwapQuote to return a different amount
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 750000n, 1));
+    vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 750000n, transactionHash: "0xswap" });
+
+    const { finalValue: finalState, values: states } = await consumeGenerator(
+      executeConsolidationPlan(state, mockWalletClient),
+    );
+
+    // After refresh, step 2's input should be recalculated
+    const stateAfterRefresh = states.find(
+      (s) => s.plan[0].outputToken.amount === 750000n && s.plan[0].status === "pending",
+    );
+    expect(stateAfterRefresh).toBeDefined();
+
+    // Step 2's input should be updated to match the refreshed quote
+    expect(stateAfterRefresh?.plan[1].inputTokens[0].amount).toBe(750000n);
+    expect(stateAfterRefresh?.plan[1].outputToken.amount).toBe(750000n); // Bridge 1:1
+
+    expect(finalState.status).toBe("completed");
   });
 });

@@ -74,8 +74,26 @@ export async function* executeConsolidationPlan(
       continue;
     }
 
+    // Refresh swap quote if stale or retrying after failure
+    if (step.type === "swap") {
+      const isRetrying = state.status === "paused";
+      const refreshedStep = await refreshSwapQuoteIfNeeded(step, isRetrying);
+      if (refreshedStep.outputToken.amount !== step.outputToken.amount) {
+        // Quote changed - update plan and recalculate downstream steps
+        workingState.plan = [...workingState.plan];
+        workingState.plan[i] = refreshedStep;
+
+        // Recalculate downstream steps with new quote estimate
+        await recalculatePlan(workingState, i, refreshedStep.outputToken);
+        workingState.updatedAt = Date.now();
+
+        // Yield state after quote refresh so UI updates with new estimates
+        yield structuredClone(workingState);
+      }
+    }
+
     // Execute step - create new step reference with executing status
-    const executingStep = { ...step, status: "executing" as const };
+    const executingStep = { ...workingState.plan[i], status: "executing" as const };
     workingState.plan = [...workingState.plan];
     workingState.plan[i] = executingStep;
     workingState.updatedAt = Date.now();
@@ -181,6 +199,46 @@ function filterZeroAmounts(
   }
 
   return nonZeroTokens as [TokenAmount, ...TokenAmount[]];
+}
+
+/** Quote staleness threshold: 55 seconds */
+const QUOTE_STALENESS_MS = 55 * 1000;
+
+/**
+ * Refresh swap quote if stale or previously failed
+ * @param step - The swap step to potentially refresh
+ * @param isRetrying - Whether we're retrying after a failure (paused state)
+ * @returns Updated step with fresh quote, or original step if no refresh needed
+ */
+async function refreshSwapQuoteIfNeeded(step: TransactionStep, isRetrying: boolean): Promise<TransactionStep> {
+  // Only refresh swap steps
+  if (step.type !== "swap") {
+    return step;
+  }
+
+  const now = Date.now();
+  // Only check staleness if quotedAt is set (backward compatibility)
+  const isStale = step.quotedAt !== undefined && now - step.quotedAt > QUOTE_STALENESS_MS;
+
+  // Refresh if stale or retrying after failure
+  if (!isStale && !isRetrying) {
+    return step;
+  }
+
+  try {
+    const freshQuote = await getSwapQuote(step.inputTokens, step.outputToken);
+    return {
+      ...step,
+      outputToken: {
+        ...freshQuote,
+        provenance: step.id,
+      },
+      quotedAt: now,
+    };
+  } catch {
+    // On failure, return original step - execution will proceed with existing quote
+    return step;
+  }
 }
 
 /**

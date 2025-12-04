@@ -67,6 +67,7 @@ export interface TransactionStep {
   transactionHash?: string; // Blockchain tx hash (after execution)
   error?: TransactionError; // Error details if failed
   executedAt?: number; // Timestamp of execution
+  quotedAt?: number; // When the quote was obtained (for swap steps)
 }
 
 // ============================================================================
