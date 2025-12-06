@@ -1,5 +1,5 @@
 import type { ColumnDef } from "@tanstack/react-table";
-import { ExternalLink, MoreHorizontal } from "lucide-react";
+import { MoreHorizontal } from "lucide-react";
 import { zeroAddress } from "viem";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
@@ -12,10 +12,12 @@ import type { TokenAmount } from "~/lib/types";
 import { ChainIcon } from "../chain-icon";
 import {
   AddressDisplayAvatar,
+  AddressDisplayCopy,
   AddressDisplayLink,
   AddressDisplayRoot,
   AddressDisplayText,
 } from "../ui/address-display";
+import { ButtonGroup } from "../ui/button-group";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,6 +28,7 @@ import {
 } from "../ui/dropdown-menu";
 import {
   TokenDisplayAmount,
+  TokenDisplayCopy,
   TokenDisplayIcon,
   TokenDisplayLink,
   TokenDisplayName,
@@ -95,9 +98,10 @@ export const columns: ColumnDef<TokenAmount>[] = [
             <span className="text-muted-foreground">
               <TokenDisplaySymbol />
             </span>
-            <TokenDisplayLink walletAddress={token.walletAddress}>
-              <ExternalLink className="h-3 w-3 ml-1" />
-            </TokenDisplayLink>
+            <ButtonGroup>
+              <TokenDisplayCopy />
+              <TokenDisplayLink walletAddress={token.walletAddress} />
+            </ButtonGroup>
           </TokenDisplayRoot>
         </div>
       );
@@ -159,7 +163,10 @@ export const columns: ColumnDef<TokenAmount>[] = [
           <AddressDisplayRoot address={token.walletAddress} chainId={token.chainId}>
             <AddressDisplayAvatar className="size-4 md:size-5" />
             <AddressDisplayText />
-            <AddressDisplayLink />
+            <ButtonGroup>
+              <AddressDisplayCopy />
+              <AddressDisplayLink />
+            </ButtonGroup>
           </AddressDisplayRoot>
         </div>
       );

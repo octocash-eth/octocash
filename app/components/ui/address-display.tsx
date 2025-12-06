@@ -1,4 +1,3 @@
-import { Check, Copy, ExternalLink } from "lucide-react";
 import * as React from "react";
 import type { Address } from "viem";
 import { isAddress } from "viem";
@@ -7,7 +6,9 @@ import { useEnsAddress, useEnsName } from "wagmi";
 import { supportedChains } from "~/data/supported-chains";
 import { cn, formatAddress } from "~/lib/utils";
 import AddressAvatar from "../address-avatar";
-import { Button } from "./button";
+import type { Button } from "./button";
+import { IconCopyButton } from "./icon-copy-button";
+import { IconLinkButton } from "./icon-link-button";
 
 // Context
 interface AddressDisplayContextValue {
@@ -129,30 +130,16 @@ const AddressDisplayText = React.forwardRef<HTMLSpanElement, AddressDisplayTextP
 AddressDisplayText.displayName = "AddressDisplayText";
 
 // Copy Button Component
-interface AddressDisplayCopyProps extends React.ComponentProps<typeof Button> {}
+interface AddressDisplayCopyProps extends Omit<React.ComponentProps<typeof Button>, "onCopy"> {}
 
 const AddressDisplayCopy = React.forwardRef<HTMLButtonElement, AddressDisplayCopyProps>(
-  ({ children, onClick, className, ...props }, ref) => {
+  ({ children, ...props }, ref) => {
     const { handleCopy, copied } = useAddressDisplay();
 
-    const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-      handleCopy();
-      onClick?.(e);
-    };
-
     return (
-      <Button
-        ref={ref}
-        type="button"
-        variant="ghost"
-        size="icon"
-        onClick={handleClick}
-        className={cn("h-auto w-auto p-1", className)}
-        title={copied ? "Copied!" : "Copy address"}
-        {...props}
-      >
-        {children ?? (copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />)}
-      </Button>
+      <IconCopyButton ref={ref} copied={copied} onCopy={handleCopy} copyTitle="Copy address" {...props}>
+        {children}
+      </IconCopyButton>
     );
   },
 );
@@ -160,10 +147,10 @@ const AddressDisplayCopy = React.forwardRef<HTMLButtonElement, AddressDisplayCop
 AddressDisplayCopy.displayName = "AddressDisplayCopy";
 
 // External Link Component
-interface AddressDisplayLinkProps extends React.ComponentProps<"a"> {}
+interface AddressDisplayLinkProps extends React.ComponentProps<typeof Button> {}
 
-const AddressDisplayLink = React.forwardRef<HTMLAnchorElement, AddressDisplayLinkProps>(
-  ({ children, className, ...props }, ref) => {
+const AddressDisplayLink = React.forwardRef<HTMLButtonElement, AddressDisplayLinkProps>(
+  ({ children, ...props }, ref) => {
     const { explorerUrl } = useAddressDisplay();
 
     if (!explorerUrl) {
@@ -171,17 +158,9 @@ const AddressDisplayLink = React.forwardRef<HTMLAnchorElement, AddressDisplayLin
     }
 
     return (
-      <a
-        ref={ref}
-        href={explorerUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={cn("text-blue-500 hover:text-blue-700 inline-flex items-center", className)}
-        title="View on block explorer"
-        {...props}
-      >
-        {children ?? <ExternalLink className="h-3 w-3" />}
-      </a>
+      <IconLinkButton ref={ref} href={explorerUrl} linkTitle="View on block explorer" {...props}>
+        {children}
+      </IconLinkButton>
     );
   },
 );

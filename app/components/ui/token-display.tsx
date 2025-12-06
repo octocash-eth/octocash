@@ -1,4 +1,3 @@
-import { ExternalLink } from "lucide-react";
 import * as React from "react";
 import type { Address } from "viem";
 import { formatUnits, isAddress, zeroAddress } from "viem";
@@ -7,6 +6,9 @@ import { supportedChains } from "~/data/supported-chains";
 import { formatUsd } from "~/lib/tokens";
 import { cn } from "~/lib/utils";
 import { TokenIcon } from "../token-icon";
+import type { Button } from "./button";
+import { IconCopyButton } from "./icon-copy-button";
+import { IconLinkButton } from "./icon-link-button";
 
 // Context
 interface TokenDisplayContextValue {
@@ -18,6 +20,8 @@ interface TokenDisplayContextValue {
   iconUrl: string;
   explorerUrl?: string;
   tokenUrl?: string;
+  handleCopy: () => void;
+  copied: boolean;
 }
 
 const TokenDisplayContext = React.createContext<TokenDisplayContextValue | null>(null);
@@ -50,6 +54,7 @@ function TokenDisplayRoot({
   children,
   className,
 }: TokenDisplayRootProps) {
+  const [copied, setCopied] = React.useState(false);
   const isAddr = isAddress(tokenAddress);
   const isNativeToken = tokenAddress === zeroAddress;
 
@@ -79,6 +84,12 @@ function TokenDisplayRoot({
     return chain.explorerUrl;
   }, [chainId]);
 
+  const handleCopy = React.useCallback(() => {
+    navigator.clipboard.writeText(tokenAddress);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [tokenAddress]);
+
   const contextValue = React.useMemo(
     () => ({
       tokenAddress: tokenAddress as Address,
@@ -89,8 +100,10 @@ function TokenDisplayRoot({
       iconUrl,
       explorerUrl,
       tokenUrl: tokenAddress !== zeroAddress ? `${explorerUrl}/token/${tokenAddress}` : undefined,
+      handleCopy,
+      copied,
     }),
-    [tokenAddress, chainId, resolvedSymbol, resolvedDecimals, resolvedName, iconUrl, explorerUrl],
+    [tokenAddress, chainId, resolvedSymbol, resolvedDecimals, resolvedName, iconUrl, explorerUrl, handleCopy, copied],
   );
 
   return (
@@ -197,13 +210,28 @@ const TokenDisplayAmount = React.forwardRef<HTMLSpanElement, TokenDisplayAmountP
 
 TokenDisplayAmount.displayName = "TokenDisplayAmount";
 
+// Copy Button Component
+interface TokenDisplayCopyProps extends Omit<React.ComponentProps<typeof Button>, "onCopy"> {}
+
+const TokenDisplayCopy = React.forwardRef<HTMLButtonElement, TokenDisplayCopyProps>(({ children, ...props }, ref) => {
+  const { handleCopy, copied } = useTokenDisplay();
+
+  return (
+    <IconCopyButton ref={ref} copied={copied} onCopy={handleCopy} copyTitle="Copy token address" {...props}>
+      {children}
+    </IconCopyButton>
+  );
+});
+
+TokenDisplayCopy.displayName = "TokenDisplayCopy";
+
 // Link Component
-interface TokenDisplayLinkProps extends React.ComponentProps<"a"> {
+interface TokenDisplayLinkProps extends React.ComponentProps<typeof Button> {
   walletAddress?: Address;
 }
 
-const TokenDisplayLink = React.forwardRef<HTMLAnchorElement, TokenDisplayLinkProps>(
-  ({ children, walletAddress, className, ...props }, ref) => {
+const TokenDisplayLink = React.forwardRef<HTMLButtonElement, TokenDisplayLinkProps>(
+  ({ children, walletAddress, ...props }, ref) => {
     const { explorerUrl, tokenAddress, tokenUrl } = useTokenDisplay();
 
     if (!explorerUrl || (tokenAddress === zeroAddress && !walletAddress)) {
@@ -218,17 +246,9 @@ const TokenDisplayLink = React.forwardRef<HTMLAnchorElement, TokenDisplayLinkPro
     }
 
     return (
-      <a
-        ref={ref}
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={cn("text-blue-500 hover:text-blue-700 inline-flex items-center", className)}
-        title="View token on block explorer"
-        {...props}
-      >
-        {children ?? <ExternalLink className="h-3 w-3" />}
-      </a>
+      <IconLinkButton ref={ref} href={href} linkTitle="View token on block explorer" {...props}>
+        {children}
+      </IconLinkButton>
     );
   },
 );
@@ -241,5 +261,6 @@ export {
   TokenDisplaySymbol,
   TokenDisplayName,
   TokenDisplayAmount,
+  TokenDisplayCopy,
   TokenDisplayLink,
 };
