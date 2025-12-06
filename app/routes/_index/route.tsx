@@ -27,8 +27,9 @@ export function links() {
     // Preload hero image
     {
       rel: "preload",
-      href: "/decorations/octo-header.svg",
+      href: "/decorations/octo-header.webp",
       as: "image",
+      type: "image/webp",
       fetchPriority: "high",
     },
   ];
@@ -68,11 +69,11 @@ export default function Home() {
           {/* Octo Header Image - positioned at bottom */}
           <div className="relative z-10 w-full max-w-[200px] sm:max-w-xs md:max-w-sm lg:max-w-md xl:max-w-lg mx-auto">
             <img
-              src="/decorations/octo-header.svg"
+              src="/decorations/octo-header.webp"
               alt="Octo mascot"
               width={567}
               height={430}
-              className="w-full h-auto"
+              className="w-full h-auto text-transparent"
             />
           </div>
         </section>
