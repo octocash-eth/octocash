@@ -15,7 +15,7 @@ import {
 } from "@tanstack/react-table";
 import { Coins, Link, RotateCw, Wallet } from "lucide-react";
 import * as React from "react";
-import { getChainName } from "~/lib/tokens";
+import { getChainName, getTokenId } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
 import { ChainIcon } from "../chain-icon";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "../ui/address-display";
@@ -142,6 +142,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
     onColumnVisibilityChange: setColumnVisibility,
     onRowSelectionChange,
     enableRowSelection: true,
+    getRowId: (row) => getTokenId(row),
     state: {
       sorting,
       columnFilters,
@@ -166,7 +167,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
       <DataGrid<TData>
         table={table}
         recordCount={data.length}
-        isLoading={isRefreshing}
+        isLoading={isRefreshing && data.length === 0}
         loadingMode="skeleton"
         emptyMessage="No tokens found"
         onRowClick={(rowData) => {

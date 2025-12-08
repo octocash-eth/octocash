@@ -60,10 +60,9 @@ export function ConsolidateTokensModal({
   const [isExecuting, setIsExecuting] = React.useState(false);
 
   const consolidatedTokens = React.useMemo<TokenWithConsolidateAmount[]>(() => {
-    return Object.entries(rowSelection)
-      .filter(([rowId, isSelected]) => isSelected && tokens[parseInt(rowId, 10)])
-      .map(([rowId, _isSelected]) => {
-        const token = tokens[parseInt(rowId, 10)];
+    return tokens
+      .filter((token) => rowSelection[getTokenId(token)])
+      .map((token) => {
         const tokenId = getTokenId(token);
         const amount = tokenAmounts[tokenId] || formatTokenAmount(token);
         return { ...token, amountToConsolidate: amount };
