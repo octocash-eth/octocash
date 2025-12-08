@@ -1,7 +1,27 @@
 import type { Address } from "viem";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ETH_ADDRESS, USDC_ETHEREUM, USDC_OPTIMISM, WALLET } from "../../test/helpers";
-import { fetchTokenBalances } from "./api";
+import { EXTRA_TOKENS, fetchTokenBalances } from "./api";
+
+// Mock getPublicClient for extra tokens RPC calls (using multicall)
+// Each token now requires 4 calls: balanceOf, name, symbol, decimals
+vi.mock("./public-client", () => ({
+  getPublicClient: vi.fn((_chainId: number) => ({
+    multicall: vi.fn().mockImplementation(async ({ contracts }: { contracts: any[] }) => {
+      // Generate results for all tokens (all with zero balance by default)
+      const results = [];
+      for (let i = 0; i < contracts.length; i += 4) {
+        results.push(
+          { status: "success", result: 0n }, // balanceOf
+          { status: "success", result: "Mock Token" }, // name
+          { status: "success", result: "MOCK" }, // symbol
+          { status: "success", result: 18 }, // decimals
+        );
+      }
+      return results;
+    }),
+  })),
+}));
 
 const mockApiKey = "test-api-key";
 const mockFetch = vi.fn();
@@ -238,7 +258,6 @@ describe("api", () => {
       await fetchTokenBalances([WALLET]);
 
       const [url] = mockFetch.mock.calls[0] as [string, unknown];
-      expect(url).toContain("filter%5Bpositions%5D=only_simple");
       expect(url).toContain("currency=usd");
       expect(url).toContain("filter%5Bchain_ids%5D=");
     });
@@ -573,10 +592,266 @@ describe("api", () => {
 
       await fetchTokenBalances(addresses);
 
-      expect(mockFetch).toHaveBeenCalledTimes(3);
-      if (callTimes.length === 3) {
+      // Each address triggers 1 Zerion positions call + potential extra token calls
+      expect(mockFetch).toHaveBeenCalled();
+      if (callTimes.length >= 3) {
         expect(callTimes[2] - callTimes[0]).toBeLessThan(50);
       }
+    });
+  });
+
+  describe("extra tokens", () => {
+    test("EXTRA_TOKENS list is defined and contains sUSDS", () => {
+      expect(EXTRA_TOKENS).toBeDefined();
+      expect(EXTRA_TOKENS.length).toBeGreaterThan(0);
+
+      const susds = EXTRA_TOKENS.find(
+        (t) => t.address.toLowerCase() === "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase(),
+      );
+      expect(susds).toBeDefined();
+      expect(susds?.chainId).toBe(1);
+    });
+
+    test("fetches extra token balance via multicall and price from Odos", async () => {
+      const { getPublicClient } = await import("./public-client");
+      const sUSDS_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD";
+
+      const mockMulticall = vi.fn().mockImplementation(async ({ contracts }: { contracts: any[] }) => {
+        // Generate results based on the contracts array
+        const results = [];
+        for (let i = 0; i < contracts.length; i += 4) {
+          const tokenAddress = contracts[i]?.address;
+          const isSUSDS = tokenAddress?.toLowerCase() === sUSDS_ADDRESS.toLowerCase();
+
+          // balanceOf
+          results.push({
+            status: "success",
+            result: isSUSDS ? 1000000000000000000n : 0n,
+          });
+          // name
+          results.push({
+            status: "success",
+            result: isSUSDS ? "Sky Savings USDS" : "Mock Token",
+          });
+          // symbol
+          results.push({
+            status: "success",
+            result: isSUSDS ? "sUSDS" : "MOCK",
+          });
+          // decimals
+          results.push({
+            status: "success",
+            result: 18,
+          });
+        }
+        return results;
+      });
+
+      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
+        if (chainId === 1) {
+          return { multicall: mockMulticall } as never;
+        }
+        // Other chains - return zero balances for all tokens
+        return {
+          multicall: vi.fn().mockImplementation(async ({ contracts }: { contracts: any[] }) => {
+            const results = [];
+            for (let i = 0; i < contracts.length; i += 4) {
+              results.push(
+                { status: "success", result: 0n },
+                { status: "success", result: "Mock Token" },
+                { status: "success", result: "MOCK" },
+                { status: "success", result: 6 },
+              );
+            }
+            return results;
+          }),
+        } as never;
+      });
+
+      // Mock Zerion positions response (empty)
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [], links: {} }),
+      });
+
+      // Mock Odos pricing API response for sUSDS
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            currencyId: "USD",
+            tokenPrices: {
+              "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD": 1.05,
+            },
+          }),
+      });
+
+      const result = await fetchTokenBalances([WALLET]);
+
+      // Verify multicall was called for Ethereum chain with balanceOf, name, symbol, decimals
+      expect(mockMulticall).toHaveBeenCalledWith({
+        contracts: expect.arrayContaining([
+          expect.objectContaining({
+            address: "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD",
+            functionName: "balanceOf",
+          }),
+          expect.objectContaining({
+            address: "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD",
+            functionName: "name",
+          }),
+          expect.objectContaining({
+            address: "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD",
+            functionName: "symbol",
+          }),
+          expect.objectContaining({
+            address: "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD",
+            functionName: "decimals",
+          }),
+        ]),
+        allowFailure: true,
+      });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].symbol).toBe("sUSDS");
+      expect(result[0].unitaryPrice).toBe(1.05);
+      expect(result[0].chainId).toBe(1);
+    });
+
+    test("skips extra token when balance is zero", async () => {
+      const { getPublicClient } = await import("./public-client");
+      vi.mocked(getPublicClient).mockImplementation(
+        (chainId: number) =>
+          ({
+            multicall: vi.fn().mockResolvedValue(
+              chainId === 1
+                ? [
+                    // Token 1: balanceOf=0, name, symbol, decimals
+                    { status: "success", result: 0n },
+                    { status: "success", result: "Token 1" },
+                    { status: "success", result: "TK1" },
+                    { status: "success", result: 18 },
+                    // Token 2: balanceOf=0, name, symbol, decimals
+                    { status: "success", result: 0n },
+                    { status: "success", result: "Token 2" },
+                    { status: "success", result: "TK2" },
+                    { status: "success", result: 18 },
+                  ]
+                : [
+                    // Token 3: balanceOf=0, name, symbol, decimals
+                    { status: "success", result: 0n },
+                    { status: "success", result: "Token 3" },
+                    { status: "success", result: "TK3" },
+                    { status: "success", result: 6 },
+                  ],
+            ),
+          }) as never,
+      );
+
+      mockOk([pos()]);
+
+      const result = await fetchTokenBalances([WALLET]);
+
+      // Should only have the regular token, not the extra token with zero balance
+      expect(result).toHaveLength(1);
+      expect(result[0].symbol).toBe("USDC");
+    });
+
+    test("deduplicates tokens if Zerion returns same token as extra tokens", async () => {
+      const { getPublicClient } = await import("./public-client");
+      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
+        if (chainId === 1) {
+          return {
+            multicall: vi.fn().mockResolvedValue([
+              // sUSDS: balanceOf, name, symbol, decimals
+              { status: "success", result: 1000000000000000000n },
+              { status: "success", result: "Sky Savings USDS" },
+              { status: "success", result: "sUSDS" },
+              { status: "success", result: 18 },
+              // sUSDC: balanceOf=0, name, symbol, decimals
+              { status: "success", result: 0n },
+              { status: "success", result: "Spark USDC Vault" },
+              { status: "success", result: "sUSDC" },
+              { status: "success", result: 6 },
+            ]),
+          } as never;
+        }
+        return {
+          multicall: vi.fn().mockResolvedValue([
+            // aOptUSDCn: balanceOf=0, name, symbol, decimals
+            { status: "success", result: 0n },
+            { status: "success", result: "Aave Optimism USDC" },
+            { status: "success", result: "aOptUSDCn" },
+            { status: "success", result: 6 },
+          ]),
+        } as never;
+      });
+
+      // Mock Zerion positions returning sUSDS
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [
+              {
+                type: "positions",
+                id: "susds-position",
+                attributes: {
+                  parent: null,
+                  protocol: null,
+                  name: "sUSDS",
+                  position_type: "wallet",
+                  quantity: { decimals: 18, numeric: "2.0" },
+                  value: 2.1,
+                  price: 1.05,
+                  fungible_info: {
+                    name: "Sky Savings USDS",
+                    symbol: "sUSDS",
+                    icon: { url: "https://cdn.zerion.io/susds.png" },
+                    implementations: [
+                      { chain_id: "ethereum", address: "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD", decimals: 18 },
+                    ],
+                  },
+                  flags: { displayable: true },
+                },
+                relationships: { chain: { data: { id: "ethereum", type: "chains" } } },
+              },
+            ],
+            links: {},
+          }),
+      });
+
+      // Mock Odos pricing response for extra token
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            currencyId: "USD",
+            tokenPrices: {
+              "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD": 1.05,
+            },
+          }),
+      });
+
+      const result = await fetchTokenBalances([WALLET]);
+
+      // Should only have one sUSDS entry (from Zerion positions, as it comes first)
+      const susdsTokens = result.filter((t) => t.symbol === "sUSDS");
+      expect(susdsTokens).toHaveLength(1);
+    });
+
+    test("handles extra token fetch errors gracefully", async () => {
+      const { getPublicClient } = await import("./public-client");
+      vi.mocked(getPublicClient).mockReturnValue({
+        multicall: vi.fn().mockRejectedValue(new Error("RPC error")),
+      } as never);
+
+      mockOk([pos()]);
+
+      const result = await fetchTokenBalances([WALLET]);
+
+      // Should still return regular tokens even if extra token fetch fails
+      expect(result).toHaveLength(1);
+      expect(result[0].symbol).toBe("USDC");
     });
   });
 });

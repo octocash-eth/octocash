@@ -12,6 +12,7 @@ import {
   getTokenIconUrl,
   getTokenId,
   groupTokensByChainAndWallet,
+  isSameToken,
 } from "./tokens";
 
 // Mock the public-client module
@@ -58,6 +59,81 @@ describe("tokens", () => {
     test("works with different chain IDs", () => {
       const url = getTokenIconUrl(137, USDC_ETHEREUM);
       expect(url).toBe(`https://assets.octo.cash/token/137/${USDC_ETHEREUM}`);
+    });
+  });
+
+  describe("isSameToken", () => {
+    const wallet2 = "0x2222222222222222222222222222222222222222" as Address;
+
+    test("returns true for identical tokens", () => {
+      const token1 = { token: USDC_ETHEREUM, chainId: 1, walletAddress: WALLET };
+      const token2 = { token: USDC_ETHEREUM, chainId: 1, walletAddress: WALLET };
+
+      expect(isSameToken(token1, token2)).toBe(true);
+    });
+
+    test("returns false for different token addresses", () => {
+      const token1 = { token: USDC_ETHEREUM, chainId: 1, walletAddress: WALLET };
+      const token2 = { token: ETH_ADDRESS, chainId: 1, walletAddress: WALLET };
+
+      expect(isSameToken(token1, token2)).toBe(false);
+    });
+
+    test("returns false for different chainIds", () => {
+      const token1 = { token: USDC_ETHEREUM, chainId: 1, walletAddress: WALLET };
+      const token2 = { token: USDC_ETHEREUM, chainId: 10, walletAddress: WALLET };
+
+      expect(isSameToken(token1, token2)).toBe(false);
+    });
+
+    test("returns false for different wallet addresses", () => {
+      const token1 = { token: USDC_ETHEREUM, chainId: 1, walletAddress: WALLET };
+      const token2 = { token: USDC_ETHEREUM, chainId: 1, walletAddress: wallet2 };
+
+      expect(isSameToken(token1, token2)).toBe(false);
+    });
+
+    test("returns true when wallet addresses differ but ignoreWallet is true", () => {
+      const token1 = { token: USDC_ETHEREUM, chainId: 1, walletAddress: WALLET };
+      const token2 = { token: USDC_ETHEREUM, chainId: 1, walletAddress: wallet2 };
+
+      expect(isSameToken(token1, token2, true)).toBe(true);
+    });
+
+    test("handles case-insensitive address comparison", () => {
+      const lowercaseAddress = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" as Address;
+      const token1 = { token: USDC_ETHEREUM, chainId: 1, walletAddress: WALLET };
+      const token2 = { token: lowercaseAddress, chainId: 1, walletAddress: WALLET };
+
+      expect(isSameToken(token1, token2)).toBe(true);
+    });
+
+    test("treats undefined wallet addresses as zero address", () => {
+      const token1 = { token: USDC_ETHEREUM, chainId: 1 };
+      const token2 = { token: USDC_ETHEREUM, chainId: 1 };
+
+      expect(isSameToken(token1, token2)).toBe(true);
+    });
+
+    test("returns false when one wallet is undefined and other has value", () => {
+      const token1 = { token: USDC_ETHEREUM, chainId: 1 };
+      const token2 = { token: USDC_ETHEREUM, chainId: 1, walletAddress: WALLET };
+
+      expect(isSameToken(token1, token2)).toBe(false);
+    });
+
+    test("works with TokenAmount objects", () => {
+      const token1 = makeToken(USDC_ETHEREUM, 100n, 1);
+      const token2 = makeToken(USDC_ETHEREUM, 200n, 1);
+
+      expect(isSameToken(token1, token2)).toBe(true);
+    });
+
+    test("ignores amount differences when comparing tokens", () => {
+      const token1 = makeToken(USDC_ETHEREUM, 1000000n, 1);
+      const token2 = makeToken(USDC_ETHEREUM, 9999999n, 1);
+
+      expect(isSameToken(token1, token2)).toBe(true);
     });
   });
 

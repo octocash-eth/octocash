@@ -2,7 +2,6 @@ import type { RowSelectionState } from "@tanstack/react-table";
 import * as React from "react";
 import { ConsolidateTokensModal } from "~/components/consolidate-tokens-modal";
 import { fetchTokenBalances } from "~/lib/api";
-import { formatTokenAmount, getTokenAmountInUsd } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
 import { columns } from "./columns";
 import { DataTable } from "./data-table";
@@ -51,19 +50,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
         console.log(`Fetching token balances for ${addresses.length} addresses across different networks...`);
         const data = await fetchTokenBalances(addresses);
         console.log(`Received ${data.length} tokens from API`);
-
-        if (data.length > 0) {
-          const filteredData = data.filter(
-            (token) => Number(formatTokenAmount(token)) > 0.000001 && getTokenAmountInUsd(token) > 0,
-          );
-          console.log(
-            `After filtering, ${filteredData.length} tokens remain with non-zero balances and monetary value`,
-          );
-          setTokens(filteredData);
-        } else {
-          console.log("No tokens returned from API, using empty array");
-          setTokens([]);
-        }
+        setTokens(data);
       } catch (err) {
         console.error("Failed to fetch token balances:", err);
         setError("Failed to load token balances.");

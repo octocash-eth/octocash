@@ -1,4 +1,13 @@
-import { type Address, type Call, encodeFunctionData, erc20Abi, formatUnits, getAddress, zeroAddress } from "viem";
+import {
+  type Address,
+  type Call,
+  encodeFunctionData,
+  erc20Abi,
+  formatUnits,
+  getAddress,
+  isAddressEqual,
+  zeroAddress,
+} from "viem";
 import { supportedChains } from "~/data/supported-chains";
 import { getPublicClient } from "~/lib/public-client";
 import type { TokenAmount } from "~/lib/types";
@@ -20,6 +29,21 @@ export function getTokenId(token: TokenAmount): string {
  */
 export function getTokenIconUrl(chainId: number, tokenAddress: Address): string {
   return `https://assets.octo.cash/token/${chainId}/${tokenAddress}`;
+}
+
+/**
+ * Checks if two tokens are the same (ignoring wallet address if specified)
+ */
+export function isSameToken(
+  token1: { token: Address; chainId: number; walletAddress?: Address },
+  token2: { token: Address; chainId: number; walletAddress?: Address },
+  ignoreWallet = false,
+): boolean {
+  return (
+    isAddressEqual(token1.token, token2.token) &&
+    token1.chainId === token2.chainId &&
+    (ignoreWallet || isAddressEqual(token1.walletAddress ?? zeroAddress, token2.walletAddress ?? zeroAddress))
+  );
 }
 
 /**
@@ -65,6 +89,24 @@ export function formatUsd(amount: number, decimals = 2): string {
 // ============================================================================
 // Token Grouping and Consolidation
 // ============================================================================
+
+/**
+ * Groups tokens by chain ID for efficient batch processing per chain
+ *
+ * @param tokens - Array of objects with chainId property
+ * @returns Map of chainId to array of tokens on that chain
+ */
+export function groupTokensByChain<T extends { chainId: number }>(tokens: T[]): Map<number, T[]> {
+  const grouped = new Map<number, T[]>();
+
+  for (const token of tokens) {
+    const existing = grouped.get(token.chainId) ?? [];
+    existing.push(token);
+    grouped.set(token.chainId, existing);
+  }
+
+  return grouped;
+}
 
 /**
  * Groups source tokens by chain and wallet address for efficient processing
