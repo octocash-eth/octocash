@@ -1,12 +1,16 @@
 import { Menu, X } from "lucide-react";
-import { useId, useState } from "react";
+import { lazy, Suspense, useId, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router";
 import { SITE_NAME } from "~/data/site";
 import { cn } from "~/lib/utils";
-import { GatedConnectButton } from "./gated-connect-button";
 import { NavAnchor } from "./nav-anchor";
 import { ThemeToggle } from "./theme-toggle";
 import { Button, buttonVariants } from "./ui/button";
+
+// Lazy load wallet button to keep it out of the homepage bundle
+const GatedConnectButton = lazy(() =>
+  import("./gated-connect-button").then((m) => ({ default: m.GatedConnectButton })),
+);
 
 type NavItem = {
   to: string;
@@ -33,7 +37,11 @@ function MainButton({ isHomePage }: { isHomePage: boolean }) {
       </Button>
     );
   }
-  return <GatedConnectButton />;
+  return (
+    <Suspense fallback={<Button disabled>Connect Wallet</Button>}>
+      <GatedConnectButton />
+    </Suspense>
+  );
 }
 
 function Links({
