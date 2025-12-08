@@ -4,10 +4,13 @@ import { chains, transports } from "~/data/supported-chains";
 export const MAX_RETRIES = 5;
 export const BASE_DELAY = 2000;
 
+// Cache for public clients - avoids creating new clients for every RPC call
+const publicClientCache = new Map<number, PublicClient>();
+
 /**
- * Creates a public client for the given chain.
+ * Creates or retrieves a cached public client for the given chain.
  * @param chainId - The chain ID to create the client for.
- * @param transport - Optional transport to use. If not provided, uses the configured transport for the chain.
+ * @param transport - Optional transport to use. If provided, bypasses cache and creates a new client.
  * @returns A viem PublicClient instance.
  */
 export function getPublicClient(chainId: number, transport?: Transport): PublicClient {
@@ -16,12 +19,27 @@ export function getPublicClient(chainId: number, transport?: Transport): PublicC
     throw new Error(`Chain ${chainId} not supported`);
   }
 
+  // If no custom transport, check cache first
+  if (!transport) {
+    const cached = publicClientCache.get(chainId);
+    if (cached) {
+      return cached;
+    }
+  }
+
   const effectiveTransport = transport ?? transports?.[chainId as keyof typeof transports];
   if (!effectiveTransport) {
     throw new Error(`No transport configured for chain ${chainId}`);
   }
 
-  return viemCreatePublicClient({ chain, transport: effectiveTransport });
+  const client = viemCreatePublicClient({ chain, transport: effectiveTransport });
+
+  // Cache the client if using default transport
+  if (!transport) {
+    publicClientCache.set(chainId, client);
+  }
+
+  return client;
 }
 
 /**
