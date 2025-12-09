@@ -1,6 +1,6 @@
 import type { Address, Hex, PublicClient } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { makeToken, USDC_ETHEREUM, WALLET } from "../../test/helpers";
+import { makeToken, USDC_ETHEREUM, WALLET } from "../../test/test-helpers";
 import type { Attestation } from "./cctp";
 
 // Mock the public-client module

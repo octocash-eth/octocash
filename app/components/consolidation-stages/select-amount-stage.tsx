@@ -1,15 +1,17 @@
 import * as React from "react";
 import { formatUnits, parseUnits, zeroAddress } from "viem";
-import { ChainIcon } from "~/components/chain-icon";
+import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
+import { ChainIcon } from "~/components/chain/chain-icon";
 import type { TokenWithConsolidateAmount } from "~/components/consolidate-tokens-modal";
-import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/ui/address-display";
 import {
   TokenAmountSelectorInput,
   TokenAmountSelectorMaxButton,
   TokenAmountSelectorRoot,
   TokenAmountSelectorSlider,
-} from "~/components/ui/token-amount-selector";
-import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "~/components/ui/token-display";
+  TokenDisplayIcon,
+  TokenDisplayRoot,
+  TokenDisplaySymbol,
+} from "~/components/token";
 import { getGasThresholdForChain } from "~/data/gas-thresholds";
 import { formatTokenAmount, formatUsd, getChainName, getTokenAmountInUsd, getTokenId } from "~/lib/tokens";
 

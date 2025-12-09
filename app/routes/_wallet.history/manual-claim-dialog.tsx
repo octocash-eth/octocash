@@ -50,18 +50,15 @@ export function ManualClaimDialog({ children }: { children: React.ReactNode }) {
     try {
       const chainId = explorerUrls.find(([url]) => txUrl.includes(url))?.[1];
       const tx = txUrl.split("/").pop();
-      console.log(chainId, tx);
       if (!tx || !chainId) {
         return;
       }
-      const { mintTx, logs } = await claim(tx, chainId);
+      const { mintTx } = await claim(tx, chainId);
 
       if (!mintTx) {
         setSubmitError("USDC was already claimed.");
         return;
       }
-
-      console.log(mintTx, logs);
 
       setIsOpen(false);
     } catch (err) {

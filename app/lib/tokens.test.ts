@@ -1,7 +1,7 @@
 import type { Address, PublicClient } from "viem";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { ETH_ADDRESS, makeToken, USDC_ETHEREUM, WALLET } from "../../test/helpers";
+import { ETH_ADDRESS, makeToken, USDC_ETHEREUM, WALLET } from "../../test/test-helpers";
 import {
   buildERC20ApprovalCalls,
   consolidateTokenAmounts,

@@ -1,5 +1,5 @@
 import { isAddressEqual } from "viem";
-import { TokenCard } from "~/components/token-card";
+import { TokenCard } from "~/components/token";
 import type { ConsolidationState, DestinationToken, TokenAmount, TransactionStep } from "~/lib/types";
 
 /**

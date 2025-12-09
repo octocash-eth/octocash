@@ -1,31 +1,41 @@
-import { render, screen } from "@testing-library/react";
-import { DAI_ADDRESS, makeState, makeStep, makeToken, USDC_ETHEREUM, WBTC_ADDRESS } from "test/helpers";
+import { screen } from "@testing-library/react";
+import {
+  DAI_ADDRESS,
+  makeState,
+  makeStep,
+  makeToken,
+  renderWithWallet as render,
+  USDC_ETHEREUM,
+  WBTC_ADDRESS,
+} from "test/test-helpers";
 import type { Address } from "viem";
-import { zeroAddress } from "viem";
 import { describe, expect, test, vi } from "vitest";
 import { CompletionStage } from "./completion-stage";
 
-// Mock wagmi hooks
-vi.mock("wagmi", () => ({
-  useToken: vi.fn((params) => ({
-    data:
-      params.address !== zeroAddress
-        ? {
-            address: params.address,
-            symbol: "USDC",
-            decimals: 6,
-          }
-        : null,
-  })),
-}));
+// Mock wagmi useToken hook
+vi.mock("wagmi", async () => {
+  const actual = await vi.importActual("wagmi");
+  return {
+    ...actual,
+    useToken: () => ({
+      data: {
+        address: "0x0000000000000000000000000000000000000000" as Address,
+        decimals: 6,
+        name: "Mock Token",
+        symbol: "MOCK",
+        totalSupply: { formatted: "1000000", value: 1000000n },
+      },
+    }),
+  };
+});
 
 // Mock ChainIcon component
-vi.mock("~/components/chain-icon", () => ({
+vi.mock("~/components/chain/chain-icon", () => ({
   ChainIcon: ({ chain }: { chain: string }) => <div data-testid="chain-icon">{chain}</div>,
 }));
 
 // Mock AddressDisplay components
-vi.mock("~/components/ui/address-display", () => {
+vi.mock("~/components/address/address-display", () => {
   const React = require("react");
   const AddressContext = React.createContext("");
 
@@ -58,7 +68,7 @@ vi.mock("~/components/ui/address-display", () => {
 });
 
 // Mock TokenDisplay components
-vi.mock("~/components/ui/token-display", () => ({
+vi.mock("~/components/token/token-display", () => ({
   TokenDisplayRoot: ({ children, className }: { children: React.ReactNode; className?: string }) => (
     <div className={className} data-testid="token-display-root">
       {children}

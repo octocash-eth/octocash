@@ -3,13 +3,13 @@ import { LogOutIcon, WalletIcon } from "lucide-react";
 import { useId, useState } from "react";
 import useLocalStorageState from "use-local-storage-state";
 import { useDisconnect } from "wagmi";
-import AddressAvatar from "~/components/address-avatar";
 import {
+  AddressAvatar,
   AddressDisplayAvatar,
   AddressDisplayCopy,
   AddressDisplayRoot,
   AddressDisplayText,
-} from "~/components/ui/address-display";
+} from "~/components/address";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,

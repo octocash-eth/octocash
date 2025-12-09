@@ -1,11 +1,11 @@
 import { render, screen } from "@testing-library/react";
-import { makeStep, makeToken, USDC_ETHEREUM, WALLET } from "test/helpers";
+import { makeStep, makeToken, USDC_ETHEREUM, WALLET } from "test/test-helpers";
 import { describe, expect, test, vi } from "vitest";
 import type { StepResult, TransactionStep } from "~/lib/types";
 import { ERROR_CODES } from "~/lib/types";
 
 // Mock AddressAvatar component that uses wagmi hooks
-vi.mock("~/components/address-avatar", () => ({
+vi.mock("~/components/address/address-avatar", () => ({
   default: ({ className }: { className?: string }) => (
     <div className={className} data-testid="address-avatar">
       <img src="mock-avatar.png" alt="" />
@@ -14,7 +14,7 @@ vi.mock("~/components/address-avatar", () => ({
 }));
 
 // Mock AddressDisplay components that use wagmi hooks
-vi.mock("~/components/ui/address-display", () => ({
+vi.mock("~/components/address/address-display", () => ({
   AddressDisplayRoot: ({ children, address }: { children: React.ReactNode; address: string }) => (
     <div data-testid="address-display-root" data-address={address}>
       {children}
@@ -29,7 +29,7 @@ vi.mock("~/components/ui/address-display", () => ({
 }));
 
 // Mock TokenDisplay components that use wagmi hooks
-vi.mock("~/components/ui/token-display", () => ({
+vi.mock("~/components/token/token-display", () => ({
   TokenDisplayRoot: ({
     children,
     tokenAddress,
@@ -55,7 +55,7 @@ vi.mock("~/components/ui/token-display", () => ({
 }));
 
 // Mock ChainIcon component
-vi.mock("~/components/chain-icon", () => ({
+vi.mock("~/components/chain/chain-icon", () => ({
   ChainIcon: ({ chain, className }: { chain: string; className?: string }) => (
     <div className={className} data-testid="chain-icon">
       {chain}

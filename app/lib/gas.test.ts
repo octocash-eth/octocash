@@ -1,7 +1,7 @@
 import { type Address, type PublicClient, parseUnits, type Transport } from "viem";
 import { mainnet, optimism, polygon } from "viem/chains";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { ETH_ADDRESS, makeToken } from "../../test/helpers";
+import { ETH_ADDRESS, makeToken } from "../../test/test-helpers";
 
 // Mock the public-client module
 vi.mock("./public-client", () => ({

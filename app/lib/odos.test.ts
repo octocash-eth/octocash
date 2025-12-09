@@ -9,7 +9,7 @@ import {
 } from "viem";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { ETH_ADDRESS, makeToken, WALLET } from "../../test/helpers";
+import { ETH_ADDRESS, makeToken, WALLET } from "../../test/test-helpers";
 
 import { buildOdosCalls, executeOdosSwap, getSwapQuote } from "./odos";
 import type { TokenAmount } from "./types";

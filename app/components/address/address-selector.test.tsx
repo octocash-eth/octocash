@@ -5,16 +5,21 @@ import { describe, expect, test, vi } from "vitest";
 import { AddressSelector, formatAddressValue, parseAddressValue } from "./address-selector";
 
 // Mock wagmi hooks
-vi.mock("wagmi", () => ({
-  useEnsAddress: vi.fn(() => ({ data: undefined })),
-  usePublicClient: vi.fn(() => ({
-    getEnsName: vi.fn(() => Promise.resolve(null)),
-    getEnsAddress: vi.fn(() => Promise.resolve(null)),
-  })),
-}));
+vi.mock("wagmi", async () => {
+  const actual = await vi.importActual("wagmi");
+  return {
+    ...actual,
+    useEnsAddress: vi.fn(() => ({ data: undefined })),
+    useEnsName: vi.fn(() => ({ data: undefined })),
+    usePublicClient: vi.fn(() => ({
+      getEnsName: vi.fn(() => Promise.resolve(null)),
+      getEnsAddress: vi.fn(() => Promise.resolve(null)),
+    })),
+  };
+});
 
 // Mock AddressDisplay components to avoid WagmiProvider requirement
-vi.mock("~/components/ui/address-display", () => {
+vi.mock("~/components/address/address-display", () => {
   const React = require("react");
 
   // Create a context to pass the address

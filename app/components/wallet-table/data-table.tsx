@@ -15,16 +15,16 @@ import {
 } from "@tanstack/react-table";
 import { Coins, Link, RotateCw, Wallet } from "lucide-react";
 import * as React from "react";
+import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
+import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "~/components/token";
 import { getChainName, getTokenId } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
-import { ChainIcon } from "../chain-icon";
-import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "../ui/address-display";
+import { ChainIcon } from "../chain/chain-icon";
 import { Button } from "../ui/button";
 import { DataGrid, DataGridContainer } from "../ui/data-grid";
 import { DataGridPagination } from "../ui/data-grid-pagination";
 import { DataGridTable } from "../ui/data-grid-table";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
-import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "../ui/token-display";
 import type { WalletTableFilterConfig } from "./wallet-table-filters";
 import { WalletTableFilters } from "./wallet-table-filters";
 

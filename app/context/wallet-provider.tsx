@@ -3,9 +3,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type PropsWithChildren, useEffect, useState } from "react";
 import colors from "tailwindcss/colors";
 import { type State, WagmiProvider } from "wagmi";
+import { AddressAvatar } from "~/components/address";
 import { E2EAutoConnect } from "~/components/mock-wallet";
-import { useTheme } from "~/components/theme-provider";
-import AddressAvatar from "../components/address-avatar";
+import { useTheme } from "~/components/theme";
 import { WALLETCONNECT_CONFIG } from "../utils/wallet";
 
 interface Props extends PropsWithChildren {
@@ -26,6 +26,11 @@ function RainbowKitThemeWrapper({ children }: PropsWithChildren) {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // In test environment, skip RainbowKit to avoid lingering timers
+  if (import.meta.env.VITEST) {
+    return <>{children}</>;
+  }
 
   // Use light theme as default for SSR and first render
   const themeToUse = !mounted ? "light" : resolvedTheme;

@@ -1,4 +1,4 @@
-import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 
 export function ChainIcon({ chain, className }: { chain: string; className?: string }) {
   const iconPath = `/chain-icons/${chain.toLowerCase().replace(/\s+/g, "-")}.svg`;

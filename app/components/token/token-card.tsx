@@ -1,15 +1,10 @@
 import { zeroAddress } from "viem";
 import { useToken } from "wagmi";
-import { ChainIcon } from "~/components/chain-icon";
-import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/ui/address-display";
-import {
-  TokenDisplayAmount,
-  TokenDisplayIcon,
-  TokenDisplayRoot,
-  TokenDisplaySymbol,
-} from "~/components/ui/token-display";
+import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
+import { ChainIcon } from "~/components/chain/chain-icon";
 import { chains } from "~/data/supported-chains";
 import type { TokenAmount } from "~/lib/types";
+import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "./token-display";
 
 interface TokenCardProps {
   token: TokenAmount;

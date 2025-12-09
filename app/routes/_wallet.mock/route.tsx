@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
 import type { Address } from "viem";
-import { SiteHeader } from "~/components/site-header";
+import { SiteHeader } from "~/components/site";
 import { TransactionPlanViewer } from "~/components/transaction-plan";
 import type { ConsolidationState, TransactionStep } from "~/lib/types";
 import { generateMeta } from "~/utils/meta";

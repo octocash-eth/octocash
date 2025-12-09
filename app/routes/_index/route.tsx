@@ -1,11 +1,11 @@
 import { Link } from "react-router";
-import { DeferredContent } from "~/components/deferred-content";
-import { SiteHeader } from "~/components/site-header";
+import { SiteHeader } from "~/components/site";
 import { Button } from "~/components/ui/button";
 import { HERO_CONTENT } from "~/data/homepage";
-import { HeroBg } from "~/images/hero-bg";
 import { generateMeta } from "~/utils/meta";
 import { generateHomepageStructuredData, structuredDataToMetaTags } from "~/utils/structured-data";
+import { DeferredContent } from "./deferred-content";
+import { HeroBg } from "./hero-bg";
 import FAQSection from "./sections/faq";
 import FeaturesSection from "./sections/features";
 import FooterSection from "./sections/footer";

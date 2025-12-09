@@ -4,8 +4,8 @@ import type { Address } from "viem";
 import { getAddress, isAddress } from "viem";
 import { normalize } from "viem/ens";
 import { usePublicClient } from "wagmi";
-import { Combobox, type ComboboxOption } from "./combobox";
-import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "./ui/address-display";
+import { Combobox, type ComboboxOption } from "../combobox";
+import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "./address-display";
 
 // Format: "address:ensName" or just "address" if no ENS name
 // When options include formatted values with ENS names, users can filter by typing

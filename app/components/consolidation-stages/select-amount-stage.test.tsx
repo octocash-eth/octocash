@@ -15,7 +15,7 @@ beforeAll(() => {
 });
 
 // Mock AddressAvatar to avoid WagmiProvider requirement
-vi.mock("~/components/address-avatar", () => ({
+vi.mock("~/components/address/address-avatar", () => ({
   default: ({ addressOrEns, className }: { addressOrEns: string; className: string }) => (
     <div className={className} data-testid="address-avatar">
       {addressOrEns}
@@ -24,7 +24,7 @@ vi.mock("~/components/address-avatar", () => ({
 }));
 
 // Mock AddressDisplay components to avoid WagmiProvider requirement
-vi.mock("~/components/ui/address-display", () => ({
+vi.mock("~/components/address/address-display", () => ({
   AddressDisplayRoot: ({ children, address }: { children: React.ReactNode; address: string }) => (
     <div data-testid="address-display-root" data-address={address}>
       {children}
@@ -37,7 +37,7 @@ vi.mock("~/components/ui/address-display", () => ({
 }));
 
 // Mock ChainIcon to simplify rendering
-vi.mock("~/components/chain-icon", () => ({
+vi.mock("~/components/chain/chain-icon", () => ({
   ChainIcon: ({ chain, className }: { chain: string; className: string }) => (
     <div className={className} data-testid="chain-icon">
       {chain}
@@ -46,7 +46,7 @@ vi.mock("~/components/chain-icon", () => ({
 }));
 
 // Mock TokenIcon to simplify rendering
-vi.mock("~/components/token-icon", () => ({
+vi.mock("~/components/token/token-icon", () => ({
   TokenIcon: ({ token, className }: { token: string; className: string }) => (
     <div className={className} data-testid="token-icon">
       {token}
@@ -55,7 +55,7 @@ vi.mock("~/components/token-icon", () => ({
 }));
 
 // Mock TokenDisplay components to avoid WagmiProvider requirement
-vi.mock("~/components/ui/token-display", () => ({
+vi.mock("~/components/token/token-display", () => ({
   TokenDisplayRoot: ({
     children,
     tokenAddress,

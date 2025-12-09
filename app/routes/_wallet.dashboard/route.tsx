@@ -1,6 +1,5 @@
 import { Wallet } from "lucide-react";
-import { GatedConnectButton } from "~/components/gated-connect-button";
-import { SiteHeader } from "~/components/site-header";
+import { GatedConnectButton, SiteHeader } from "~/components/site";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "~/components/ui/empty";
 import { WalletTable } from "~/components/wallet-table";
 import { useConnectedAddresses } from "~/hooks/use-connected-addresses";

@@ -1,5 +1,30 @@
+import { render, type RenderOptions } from "@testing-library/react";
+import type { ReactElement } from "react";
 import type { Address } from "viem";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "../app/lib/types";
+import { WalletProvider } from "~/context/wallet-provider";
+
+// ============================================================================
+// React Testing Library Utilities
+// ============================================================================
+
+/**
+ * Custom render function that wraps components with WalletProvider
+ * for testing wallet-dependent components.
+ */
+export function renderWithWallet(ui: ReactElement, options?: RenderOptions) {
+  return render(ui, {
+    wrapper: ({ children }) => <WalletProvider>{children}</WalletProvider>,
+    ...options,
+  });
+}
+
+// Re-export everything from testing-library
+export * from "@testing-library/react";
+
+// ============================================================================
+// Test Data Constants
+// ============================================================================
 
 export const USDC_ETHEREUM = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
 export const USDC_POLYGON = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359" as Address;
@@ -9,6 +34,10 @@ export const DAI_ADDRESS = "0x6B175474E89094C44Da98b954EedeAC495271d0F" as Addre
 export const USDT_ADDRESS = "0xdAC17F958D2ee523a2206206994597C13D831ec7" as Address;
 export const ETH_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
 export const WALLET = "0x1234567890123456789012345678901234567890" as Address;
+
+// ============================================================================
+// Factory Functions
+// ============================================================================
 
 export type MakeTokenOptions = {
   walletAddress?: Address;
@@ -103,6 +132,10 @@ export const makeState = (overrides: MakeStateOverrides): ConsolidationState => 
   };
 };
 
+// ============================================================================
+// Async Utilities
+// ============================================================================
+
 /**
  * Helper to consume generator and collect all yielded values
  * @param generator - The generator instance to consume
@@ -130,4 +163,3 @@ export async function consumeGenerator<TYield>(
 
   return { finalValue, values };
 }
-

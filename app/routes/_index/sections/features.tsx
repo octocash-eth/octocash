@@ -1,6 +1,6 @@
-import { FeatureCard } from "~/components/feature-card";
 import { Card, CardContent, CardDescription, CardTitle } from "~/components/ui/card";
 import { FEATURES_CONTENT } from "~/data/homepage";
+import { FeatureCard } from "../feature-card";
 
 export default function FeaturesSection() {
   return (

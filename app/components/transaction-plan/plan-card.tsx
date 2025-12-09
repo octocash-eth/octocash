@@ -1,10 +1,10 @@
 import { Check, Circle, ExternalLink, Loader2, X } from "lucide-react";
+import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
+import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "~/components/token";
 import { chains } from "~/data/supported-chains";
 import { consolidateTokenAmounts } from "~/lib/tokens";
 import type { StepResult, TransactionStep } from "~/lib/types";
-import { ChainIcon } from "../chain-icon";
-import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "../ui/address-display";
-import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "../ui/token-display";
+import { ChainIcon } from "../chain/chain-icon";
 
 interface PlanCardProps {
   step: TransactionStep;

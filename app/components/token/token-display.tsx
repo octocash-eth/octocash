@@ -2,13 +2,12 @@ import * as React from "react";
 import type { Address } from "viem";
 import { formatUnits, isAddress, zeroAddress } from "viem";
 import { useToken } from "wagmi";
+import { IconCopyButton, IconLinkButton } from "~/components/icon";
 import { supportedChains } from "~/data/supported-chains";
 import { formatUsd } from "~/lib/tokens";
 import { cn } from "~/lib/utils";
-import { TokenIcon } from "../token-icon";
-import type { Button } from "./button";
-import { IconCopyButton } from "./icon-copy-button";
-import { IconLinkButton } from "./icon-link-button";
+import type { Button } from "../ui/button";
+import { TokenIcon } from "./token-icon";
 
 // Context
 interface TokenDisplayContextValue {

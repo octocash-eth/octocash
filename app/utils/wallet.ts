@@ -12,12 +12,13 @@ if (!WALLETCONNECT_PROJECT_ID && !import.meta.env.VITE_E2E && !import.meta.env.V
   console.warn("You need to provide a VITE_WALLETCONNECT_PROJECT_ID env variable");
 }
 
-export const WALLETCONNECT_CONFIG: Config = import.meta.env.VITE_E2E
-  ? createE2EConfig()
-  : getDefaultConfig({
-      appName: SITE_NAME,
-      projectId: WALLETCONNECT_PROJECT_ID || "dummy",
-      chains: Object.values(chains) as unknown as readonly [Chain, ...Chain[]],
-      transports,
-      ssr: true,
-    });
+export const WALLETCONNECT_CONFIG: Config =
+  import.meta.env.VITE_E2E || import.meta.env.VITEST
+    ? createE2EConfig()
+    : getDefaultConfig({
+        appName: SITE_NAME,
+        projectId: WALLETCONNECT_PROJECT_ID || "dummy",
+        chains: Object.values(chains) as unknown as readonly [Chain, ...Chain[]],
+        transports,
+        ssr: true,
+      });

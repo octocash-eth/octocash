@@ -2,7 +2,7 @@ import { ChevronDown, ChevronUp, Inbox, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { ConsolidationTokensSummary } from "~/components/consolidation-tokens-summary";
-import { SiteHeader } from "~/components/site-header";
+import { SiteHeader } from "~/components/site";
 import { TransactionPlanViewer } from "~/components/transaction-plan";
 import { Button } from "~/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "~/components/ui/card";

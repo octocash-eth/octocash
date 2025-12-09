@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, vi } from "vitest";
 import type { Account, Chain, HttpTransport, WalletClient } from "viem";
 import type { ConsolidationState, TokenAmount } from "../../app/lib/types";
-import { WALLET, consumeGenerator, makeToken,  USDT_ADDRESS, DAI_ADDRESS, WBTC_ADDRESS, USDC_ETHEREUM as USDC_ADDRESS } from "../helpers";
+import { WALLET, consumeGenerator, makeToken,  USDT_ADDRESS, DAI_ADDRESS, WBTC_ADDRESS, USDC_ETHEREUM as USDC_ADDRESS } from "../test-helpers";
 
 // Mock dependencies
 vi.mock("../../app/lib/odos");

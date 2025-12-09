@@ -8,6 +8,19 @@ global.ResizeObserver = class ResizeObserver {
   disconnect = vi.fn();
 } as unknown as typeof ResizeObserver;
 
+// Mock IntersectionObserver for footer tests
+global.IntersectionObserver = class IntersectionObserver {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+} as unknown as typeof IntersectionObserver;
+
+// Mock MutationObserver for footer tests
+global.MutationObserver = class MutationObserver {
+  observe = vi.fn();
+  disconnect = vi.fn();
+} as unknown as typeof MutationObserver;
+
 // Mock scrollIntoView for cmdk/Combobox tests
 Element.prototype.scrollIntoView = vi.fn();
 

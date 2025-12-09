@@ -1,6 +1,6 @@
 import type { Address } from "viem";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { ETH_ADDRESS, USDC_ETHEREUM, USDC_OPTIMISM, WALLET } from "../../../test/helpers";
+import { ETH_ADDRESS, USDC_ETHEREUM, USDC_OPTIMISM, WALLET } from "../../../test/test-helpers";
 import { fetchZerionTokenBalances } from "./zerion";
 
 const mockApiKey = "test-api-key";

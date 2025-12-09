@@ -1,6 +1,6 @@
 import type { Address } from "viem";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { WALLET } from "../../../test/helpers";
+import { WALLET } from "../../../test/test-helpers";
 import { isSameToken } from "../tokens";
 import { EXTRA_TOKENS, fetchExtraTokenBalances } from "./odos";
 

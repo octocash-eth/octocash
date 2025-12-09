@@ -1,11 +1,11 @@
 import React, { useId } from "react";
 import { type Address, getAddress, isAddress } from "viem";
 import { useAccount } from "wagmi";
+import { AddressSelector } from "~/components/address";
+import { getDefaultTokenOptions, type TokenData, TokenSelector } from "~/components/token";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { supportedChains } from "~/data/supported-chains";
-import { AddressSelector } from "../address-selector";
-import { ChainIcon } from "../chain-icon";
-import { getDefaultTokenOptions, type TokenData, TokenSelector } from "../token-selector";
+import { ChainIcon } from "../chain/chain-icon";
 
 export interface DestinationSelection {
   walletAddress?: Address;

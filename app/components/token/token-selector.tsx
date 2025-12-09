@@ -4,7 +4,7 @@ import type { Address } from "viem";
 import { erc20Abi, getAddress, isAddress, isAddressEqual, zeroAddress } from "viem";
 import { usePublicClient } from "wagmi";
 import { ETH, POL, USDC, WBTC } from "~/data/token-contracts";
-import { Combobox, type ComboboxOption } from "./combobox";
+import { Combobox, type ComboboxOption } from "../combobox";
 import { TokenLabel } from "./token-label";
 
 // Format: "chainId:address:decimals:symbol:name"

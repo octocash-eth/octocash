@@ -160,7 +160,7 @@ export function Combobox({
               ))}
               {!showAddOption && !isValid && searchValue.trim() && (
                 <CommandItem value={`invalid-${searchValue}`} disabled className="text-muted-foreground">
-                  {(invalidMessage ?? '"$0" is invalid').replace(/\$0/g, searchValue)}
+                  {(invalidMessage || '"$0" is invalid').replace(/\$0/g, searchValue)}
                 </CommandItem>
               )}
               {showAddOption && (

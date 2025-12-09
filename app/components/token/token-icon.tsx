@@ -1,4 +1,4 @@
-import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
 
 export function TokenIcon({ token, iconUrl, className }: { token: string; iconUrl?: string; className?: string }) {
   return (

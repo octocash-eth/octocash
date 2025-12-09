@@ -3,12 +3,11 @@ import type { Address } from "viem";
 import { isAddress } from "viem";
 import { normalize } from "viem/ens";
 import { useEnsAddress, useEnsName } from "wagmi";
+import { IconCopyButton, IconLinkButton } from "~/components/icon";
 import { supportedChains } from "~/data/supported-chains";
 import { cn, formatAddress } from "~/lib/utils";
-import AddressAvatar from "../address-avatar";
-import type { Button } from "./button";
-import { IconCopyButton } from "./icon-copy-button";
-import { IconLinkButton } from "./icon-link-button";
+import type { Button } from "../ui/button";
+import AddressAvatar from "./address-avatar";
 
 // Context
 interface AddressDisplayContextValue {

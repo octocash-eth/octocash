@@ -1,4 +1,4 @@
-import { ETH_ADDRESS, USDC_ETHEREUM as USDC_ADDRESS, USDC_OPTIMISM, WALLET, WBTC_ADDRESS } from "test/helpers";
+import { ETH_ADDRESS, USDC_ETHEREUM as USDC_ADDRESS, USDC_OPTIMISM, WALLET, WBTC_ADDRESS } from "test/test-helpers";
 import type { Address } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { TokenAmount, TransactionStep } from "./types";

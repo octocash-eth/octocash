@@ -1,22 +1,30 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { MoreHorizontal } from "lucide-react";
 import { zeroAddress } from "viem";
-import { Button } from "~/components/ui/button";
-import { Checkbox } from "~/components/ui/checkbox";
-import { DataGridColumnHeader } from "~/components/ui/data-grid-column-header";
-import { Skeleton } from "~/components/ui/skeleton";
-
-import { supportedChains } from "~/data/supported-chains";
-import { formatUsd, getChainName, getTokenAmountInUsd } from "~/lib/tokens";
-import type { TokenAmount } from "~/lib/types";
-import { ChainIcon } from "../chain-icon";
 import {
   AddressDisplayAvatar,
   AddressDisplayCopy,
   AddressDisplayLink,
   AddressDisplayRoot,
   AddressDisplayText,
-} from "../ui/address-display";
+} from "~/components/address";
+import {
+  TokenDisplayAmount,
+  TokenDisplayCopy,
+  TokenDisplayIcon,
+  TokenDisplayLink,
+  TokenDisplayName,
+  TokenDisplayRoot,
+  TokenDisplaySymbol,
+} from "~/components/token";
+import { Button } from "~/components/ui/button";
+import { Checkbox } from "~/components/ui/checkbox";
+import { DataGridColumnHeader } from "~/components/ui/data-grid-column-header";
+import { Skeleton } from "~/components/ui/skeleton";
+import { supportedChains } from "~/data/supported-chains";
+import { formatUsd, getChainName, getTokenAmountInUsd } from "~/lib/tokens";
+import type { TokenAmount } from "~/lib/types";
+import { ChainIcon } from "../chain/chain-icon";
 import { ButtonGroup } from "../ui/button-group";
 import {
   DropdownMenu,
@@ -26,15 +34,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
-import {
-  TokenDisplayAmount,
-  TokenDisplayCopy,
-  TokenDisplayIcon,
-  TokenDisplayLink,
-  TokenDisplayName,
-  TokenDisplayRoot,
-  TokenDisplaySymbol,
-} from "../ui/token-display";
 
 function getExplorerUrl(chainId: number, tokenAddress: string | undefined, walletAddress: string): string {
   const chain = supportedChains.find((c) => c.id === chainId);

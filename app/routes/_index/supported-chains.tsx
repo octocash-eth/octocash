@@ -1,4 +1,4 @@
-import { ChainIcon } from "~/components/chain-icon";
+import { ChainIcon } from "~/components/chain/chain-icon";
 import { supportedChains } from "~/data/supported-chains";
 
 export function SupportedChains() {

@@ -2,7 +2,7 @@ import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration }
 
 import type { Route } from "./+types/root";
 import "./app.css";
-import { ThemeMeta, ThemeProvider } from "./components/theme-provider";
+import { ThemeMeta, ThemeProvider } from "./components/theme";
 
 export const links: Route.LinksFunction = () => [];
 

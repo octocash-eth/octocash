@@ -1,4 +1,4 @@
-import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "./ui/token-display";
+import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "./token-display";
 
 interface TokenLabelProps {
   tokenAddress: string;

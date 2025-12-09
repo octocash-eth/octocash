@@ -1,6 +1,6 @@
 import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { consumeGenerator, makeState, makeStep, makeToken, WALLET } from "../../test/helpers";
+import { consumeGenerator, makeState, makeStep, makeToken, WALLET } from "../../test/test-helpers";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
 
 // Mock dependencies BEFORE imports
