@@ -1,8 +1,9 @@
+import { useQuery } from "@tanstack/react-query";
 import type { RowSelectionState } from "@tanstack/react-table";
 import * as React from "react";
 import { ConsolidateTokensModal } from "~/components/consolidate-tokens-modal";
-import { fetchTokenBalances } from "~/lib/api";
-import type { TokenAmount } from "~/lib/types";
+import { fetchExtraTokenBalances, fetchZerionTokenBalances } from "~/lib/api";
+import { getTokenAmountInUsd, isSameToken } from "~/lib/tokens";
 import { columns } from "./columns";
 import { DataTable } from "./data-table";
 
@@ -21,55 +22,65 @@ const EmptyState = ({ hasAddresses }: { hasAddresses: boolean }) => (
 );
 
 export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
-  const [tokens, setTokens] = React.useState<TokenAmount[]>([]);
-  const [isLoading, setIsLoading] = React.useState(false);
-  const [isRefreshing, setIsRefreshing] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
 
-  const loadTokenBalances = React.useCallback(
-    async (mode: "initial" | "refresh" = "initial") => {
-      if (connectedAddresses.length === 0) {
-        setTokens([]);
-        setIsLoading(false);
-        setIsRefreshing(false);
-        return;
-      }
+  // Stable addresses key for query
+  const addressesKey = React.useMemo(() => Array.from(connectedAddresses).sort().join(","), [connectedAddresses]);
+  const addresses = React.useMemo(() => Array.from(connectedAddresses), [connectedAddresses]);
 
-      if (mode === "initial") {
-        setIsLoading(true);
-      } else {
-        setIsRefreshing(true);
-      }
+  // Query for Zerion tokens (fast, indexed)
+  const zerionQuery = useQuery({
+    queryKey: ["zerion-tokens", addressesKey],
+    queryFn: () => fetchZerionTokenBalances(addresses),
+    enabled: addresses.length > 0,
+    staleTime: 30_000, // 30 seconds
+  });
 
-      setError(null);
-
-      try {
-        const addresses = Array.from(connectedAddresses);
-
-        console.log(`Fetching token balances for ${addresses.length} addresses across different networks...`);
-        const data = await fetchTokenBalances(addresses);
-        console.log(`Received ${data.length} tokens from API`);
-        setTokens(data);
-      } catch (err) {
-        console.error("Failed to fetch token balances:", err);
-        setError("Failed to load token balances.");
-        setTokens([]);
-      } finally {
-        if (mode === "initial") {
-          setIsLoading(false);
-        } else {
-          setIsRefreshing(false);
-        }
-      }
+  // Query for extra tokens (slower, RPC calls) - runs after Zerion data is loaded
+  const extraQuery = useQuery({
+    queryKey: ["extra-tokens", addressesKey],
+    queryFn: async () => {
+      return fetchExtraTokenBalances(addresses);
     },
-    [connectedAddresses],
-  );
+    // Only fetch extra tokens after Zerion query succeeds to reduce concurrent RPC load
+    enabled: addresses.length > 0 && zerionQuery.isSuccess,
+    staleTime: 30_000, // 30 seconds
+  });
 
-  // Fetch token balances when component mounts or when connectedAddresses changes
-  React.useEffect(() => {
-    void loadTokenBalances("initial");
-  }, [loadTokenBalances]);
+  // Combine tokens: Zerion first, then extra tokens (deduplicated)
+  // Importantly, we show zerion tokens immediately without waiting for extra tokens
+  const tokens = React.useMemo(() => {
+    const zerionTokens = zerionQuery.data ?? [];
+
+    // Only include extra tokens if the query has successfully completed
+    // This ensures zerion data renders first before extra tokens are added
+    if (!extraQuery.isSuccess) {
+      // Sort by USD value (descending)
+      const sorted = [...zerionTokens];
+      sorted.sort((a, b) => getTokenAmountInUsd(b) - getTokenAmountInUsd(a));
+      return sorted;
+    }
+
+    const extraTokens = extraQuery.data ?? [];
+
+    // Deduplicate extra tokens against Zerion tokens
+    const deduplicatedExtra = extraTokens.filter((extra) => !zerionTokens.some((zerion) => isSameToken(zerion, extra)));
+
+    const combined = [...zerionTokens, ...deduplicatedExtra];
+    // Sort by USD value (descending)
+    combined.sort((a, b) => getTokenAmountInUsd(b) - getTokenAmountInUsd(a));
+    return combined;
+  }, [zerionQuery.data, extraQuery.data, extraQuery.isSuccess]);
+
+  const isLoading = zerionQuery.isLoading;
+  const isRefreshing = zerionQuery.isFetching || extraQuery.isFetching;
+  const error = zerionQuery.error?.message ?? extraQuery.error?.message ?? null;
+
+  const handleRefresh = React.useCallback(() => {
+    setRowSelection({});
+    zerionQuery.refetch();
+    extraQuery.refetch();
+  }, [zerionQuery.refetch, extraQuery.refetch]);
 
   return (
     <div className="space-y-4">
@@ -82,10 +93,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
             connectedAddresses={connectedAddresses}
             rowSelection={rowSelection}
             onRowSelectionChange={setRowSelection}
-            onRefresh={() => {
-              setRowSelection({});
-              void loadTokenBalances("refresh");
-            }}
+            onRefresh={handleRefresh}
             isRefreshing={isRefreshing || isLoading}
           />
           <div className="flex justify-center mt-6">
@@ -93,10 +101,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
               tokens={tokens}
               rowSelection={rowSelection}
               selectedRows={Object.keys(rowSelection).length}
-              onComplete={() => {
-                setRowSelection({});
-                void loadTokenBalances("refresh");
-              }}
+              onComplete={handleRefresh}
             />
           </div>
         </>

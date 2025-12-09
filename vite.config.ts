@@ -43,7 +43,7 @@ export default defineConfig({
     ],
     coverage: {
       reporter: ["json", "html"],
-      include: ["app/lib/**/*"],
+      include: ["app/**/*"],
       exclude: ["node_modules", "test", "build"],
     },
   },
