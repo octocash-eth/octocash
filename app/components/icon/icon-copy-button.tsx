@@ -4,15 +4,42 @@ import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
 
 interface IconCopyButtonProps extends Omit<React.ComponentProps<typeof Button>, "onCopy"> {
-  copied: boolean;
-  onCopy: () => void;
+  text: string;
   copyTitle?: string;
+  copiedDuration?: number;
+  onCopySuccess?: () => void;
 }
 
 const IconCopyButton = React.forwardRef<HTMLButtonElement, IconCopyButtonProps>(
-  ({ copied, onCopy, copyTitle = "Copy", onClick, className, children, ...props }, ref) => {
-    const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-      onCopy();
+  ({ text, copyTitle = "Copy", copiedDuration = 2000, onCopySuccess, onClick, className, children, ...props }, ref) => {
+    const [copied, setCopied] = React.useState(false);
+    const timeoutRef = React.useRef<NodeJS.Timeout | undefined>(undefined);
+
+    React.useEffect(() => {
+      return () => {
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
+      };
+    }, []);
+
+    const handleClick = async (e: React.MouseEvent<HTMLButtonElement>) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+        onCopySuccess?.();
+
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
+
+        timeoutRef.current = setTimeout(() => {
+          setCopied(false);
+        }, copiedDuration);
+      } catch (error) {
+        console.error("Failed to copy text:", error);
+      }
+
       onClick?.(e);
     };
 

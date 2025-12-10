@@ -19,8 +19,6 @@ interface TokenDisplayContextValue {
   iconUrl: string;
   explorerUrl?: string;
   tokenUrl?: string;
-  handleCopy: () => void;
-  copied: boolean;
 }
 
 const TokenDisplayContext = React.createContext<TokenDisplayContextValue | null>(null);
@@ -53,7 +51,6 @@ function TokenDisplayRoot({
   children,
   className,
 }: TokenDisplayRootProps) {
-  const [copied, setCopied] = React.useState(false);
   const isAddr = isAddress(tokenAddress);
   const isNativeToken = tokenAddress === zeroAddress;
 
@@ -83,12 +80,6 @@ function TokenDisplayRoot({
     return chain.explorerUrl;
   }, [chainId]);
 
-  const handleCopy = React.useCallback(() => {
-    navigator.clipboard.writeText(tokenAddress);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [tokenAddress]);
-
   const contextValue = React.useMemo(
     () => ({
       tokenAddress: tokenAddress as Address,
@@ -99,10 +90,8 @@ function TokenDisplayRoot({
       iconUrl,
       explorerUrl,
       tokenUrl: tokenAddress !== zeroAddress ? `${explorerUrl}/token/${tokenAddress}` : undefined,
-      handleCopy,
-      copied,
     }),
-    [tokenAddress, chainId, resolvedSymbol, resolvedDecimals, resolvedName, iconUrl, explorerUrl, handleCopy, copied],
+    [tokenAddress, chainId, resolvedSymbol, resolvedDecimals, resolvedName, iconUrl, explorerUrl],
   );
 
   return (
@@ -213,10 +202,10 @@ TokenDisplayAmount.displayName = "TokenDisplayAmount";
 interface TokenDisplayCopyProps extends Omit<React.ComponentProps<typeof Button>, "onCopy"> {}
 
 const TokenDisplayCopy = React.forwardRef<HTMLButtonElement, TokenDisplayCopyProps>(({ children, ...props }, ref) => {
-  const { handleCopy, copied } = useTokenDisplay();
+  const { tokenAddress } = useTokenDisplay();
 
   return (
-    <IconCopyButton ref={ref} copied={copied} onCopy={handleCopy} copyTitle="Copy token address" {...props}>
+    <IconCopyButton ref={ref} text={tokenAddress} copyTitle="Copy token address" {...props}>
       {children}
     </IconCopyButton>
   );

@@ -15,8 +15,6 @@ interface AddressDisplayContextValue {
   chainId?: number;
   ensName?: string;
   formattedAddress: string;
-  handleCopy: () => void;
-  copied: boolean;
   explorerUrl?: string;
 }
 
@@ -39,7 +37,6 @@ interface AddressDisplayRootProps {
 }
 
 function AddressDisplayRoot({ address, chainId, children, className }: AddressDisplayRootProps) {
-  const [copied, setCopied] = React.useState(false);
   const isEnsName = address.endsWith(".eth");
   const isAddr = isAddress(address);
 
@@ -73,23 +70,15 @@ function AddressDisplayRoot({ address, chainId, children, className }: AddressDi
     return `${chain.explorerUrl}/address/${resolvedAddress}`;
   }, [chainId, resolvedAddress]);
 
-  const handleCopy = React.useCallback(() => {
-    navigator.clipboard.writeText(resolvedAddress);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [resolvedAddress]);
-
   const contextValue = React.useMemo(
     () => ({
       address: resolvedAddress,
       chainId,
       ensName: normalizedName,
       formattedAddress,
-      handleCopy,
-      copied,
       explorerUrl,
     }),
-    [resolvedAddress, chainId, normalizedName, formattedAddress, handleCopy, copied, explorerUrl],
+    [resolvedAddress, chainId, normalizedName, formattedAddress, explorerUrl],
   );
 
   return (
@@ -133,10 +122,10 @@ interface AddressDisplayCopyProps extends Omit<React.ComponentProps<typeof Butto
 
 const AddressDisplayCopy = React.forwardRef<HTMLButtonElement, AddressDisplayCopyProps>(
   ({ children, ...props }, ref) => {
-    const { handleCopy, copied } = useAddressDisplay();
+    const { address } = useAddressDisplay();
 
     return (
-      <IconCopyButton ref={ref} copied={copied} onCopy={handleCopy} copyTitle="Copy address" {...props}>
+      <IconCopyButton ref={ref} text={address} copyTitle="Copy address" {...props}>
         {children}
       </IconCopyButton>
     );
