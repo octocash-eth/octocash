@@ -109,7 +109,7 @@ vi.mock("lucide-react", () => ({
 
 // Mock lazy loaded GatedConnectButton
 const mockGatedConnectButton = vi.fn(() => <button type="button">Connect Wallet</button>);
-vi.mock("~/components/site", () => ({
+vi.mock("~/components/site/gated-connect-button", () => ({
   GatedConnectButton: () => mockGatedConnectButton(),
 }));
 

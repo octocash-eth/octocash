@@ -95,6 +95,31 @@ export default async function setup() {
 
   console.log('🚀 Starting Prool server');
   const startedServers: Array<typeof proolMainnet> = [];
+  
+  // Cleanup function to stop all servers
+  const cleanup = async () => {
+    if (startedServers.length > 0) {
+      console.log('🛑 Stopping Prool servers...');
+      // Stop all servers concurrently, don't fail if one fails
+      const stopPromises = startedServers.map(s => 
+        s.stop().catch(err => console.error('Error stopping server:', err))
+      );
+      await Promise.allSettled(stopPromises);
+      startedServers.length = 0; // Clear the array
+    }
+  };
+  
+  // Register cleanup handlers for unexpected exits
+  const exitHandler = () => {
+    // Use setTimeout to allow current event loop to complete
+    setTimeout(() => {
+      cleanup().catch(console.error);
+    }, 0);
+  };
+  
+  process.once('SIGINT', exitHandler);
+  process.once('SIGTERM', exitHandler);
+  
   try {
     await proolMainnet.start();
     startedServers.push(proolMainnet);
@@ -111,15 +136,15 @@ export default async function setup() {
     console.log('✅ Prool RPCs are ready');
   } catch (error) {
     console.error('Failed to start servers, cleaning up...');
-    await Promise.allSettled(startedServers.map(s => s.stop()));
+    await cleanup();
     throw error;
   }
 
   return async () => {
-    console.log('🛑 Stopping Prool server');
-    await proolMainnet.stop();
-    await proolOptimism.stop();
-    await proolBase.stop();
+    // Remove handlers before cleanup to prevent double-cleanup
+    process.off('SIGINT', exitHandler);
+    process.off('SIGTERM', exitHandler);
+    await cleanup();
   }
 }
 

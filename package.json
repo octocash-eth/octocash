@@ -11,6 +11,8 @@
     "lint:fix": "biome check . --write",
     "prepare": "husky",
     "test": "vitest",
+    "test:unit": "vitest --project=unit",
+    "test:integration": "vitest --project=integration",
     "coverage": "vitest run --coverage"
   },
   "dependencies": {

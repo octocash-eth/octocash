@@ -25,6 +25,11 @@ export default defineConfig({
           globals: true,
           setupFiles: ["./test/setup.ts"],
           include: ["app/**/*.test.ts", "app/**/*.test.tsx"],
+          pool: "threads",
+          maxConcurrency: 8,
+          sequence: {
+            groupOrder: 1,
+          },
         },
       },
       {
@@ -38,6 +43,9 @@ export default defineConfig({
           include: ["test/integration/**/*.test.ts"],
           pool: "forks",
           testTimeout: 0,
+          sequence: {
+            groupOrder: 2,
+          },
         },
       },
     ],
