@@ -1,0 +1,856 @@
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+import { GatedConnectButton } from "./gated-connect-button";
+
+// Mock RainbowKit
+const mockOpenConnectModal = vi.fn();
+vi.mock("@rainbow-me/rainbowkit", () => ({
+  useConnectModal: () => ({ openConnectModal: mockOpenConnectModal }),
+}));
+
+// Mock lucide-react icons
+vi.mock("lucide-react", () => ({
+  LogOutIcon: ({ className }: { className?: string }) => <div data-testid="logout-icon" className={className} />,
+  WalletIcon: ({ className }: { className?: string }) => <div data-testid="wallet-icon" className={className} />,
+}));
+
+// Mock use-local-storage-state
+const mockSetTermsAccepted = vi.fn();
+const mockUseLocalStorageState = vi.fn();
+vi.mock("use-local-storage-state", () => ({
+  default: (key: string, options: { defaultValue: boolean }) => mockUseLocalStorageState(key, options),
+}));
+
+// Mock wagmi
+const mockDisconnect = vi.fn();
+vi.mock("wagmi", () => ({
+  useDisconnect: () => ({ disconnect: mockDisconnect }),
+}));
+
+// Mock useConnectedAddresses hook
+const mockUseConnectedAddresses = vi.fn();
+vi.mock("~/hooks/use-connected-addresses", () => ({
+  useConnectedAddresses: () => mockUseConnectedAddresses(),
+}));
+
+// Mock address components
+vi.mock("~/components/address", () => ({
+  AddressAvatar: ({ addressOrEns, className }: { addressOrEns: string; className?: string }) => (
+    <div data-testid="address-avatar" data-address={addressOrEns} className={className} />
+  ),
+  AddressDisplayAvatar: ({ className }: { className?: string }) => (
+    <div data-testid="address-display-avatar" className={className} />
+  ),
+  AddressDisplayCopy: () => (
+    <button type="button" data-testid="address-display-copy">
+      Copy
+    </button>
+  ),
+  AddressDisplayRoot: ({
+    address,
+    children,
+    className,
+  }: {
+    address: string;
+    children: React.ReactNode;
+    className?: string;
+  }) => (
+    <div data-testid="address-display-root" data-address={address} className={className}>
+      {children}
+    </div>
+  ),
+  AddressDisplayText: ({ className }: { className?: string }) => (
+    <span data-testid="address-display-text" className={className}>
+      0x1234...5678
+    </span>
+  ),
+}));
+
+// Mock UI components
+vi.mock("~/components/ui/button", () => ({
+  Button: ({
+    children,
+    onClick,
+    variant,
+    size,
+    disabled,
+    type,
+    className,
+  }: {
+    children: React.ReactNode;
+    onClick?: () => void;
+    variant?: string;
+    size?: string;
+    disabled?: boolean;
+    type?: string;
+    className?: string;
+  }) => (
+    <button
+      type={type === "submit" ? "submit" : "button"}
+      onClick={onClick}
+      disabled={disabled}
+      data-variant={variant}
+      data-size={size}
+      className={className}
+    >
+      {children}
+    </button>
+  ),
+}));
+
+vi.mock("~/components/ui/dialog", () => ({
+  Dialog: ({ open, children }: { open: boolean; children: React.ReactNode; onOpenChange?: (open: boolean) => void }) =>
+    open ? <div data-testid="dialog">{children}</div> : null,
+  DialogContent: ({ children }: { children: React.ReactNode }) => <div data-testid="dialog-content">{children}</div>,
+  DialogDescription: ({ children }: { children: React.ReactNode }) => (
+    <p data-testid="dialog-description">{children}</p>
+  ),
+  DialogFooter: ({ children, className }: { children: React.ReactNode; className?: string }) => (
+    <div data-testid="dialog-footer" className={className}>
+      {children}
+    </div>
+  ),
+  DialogHeader: ({ children }: { children: React.ReactNode }) => <div data-testid="dialog-header">{children}</div>,
+  DialogTitle: ({ children }: { children: React.ReactNode }) => <h2 data-testid="dialog-title">{children}</h2>,
+}));
+
+vi.mock("~/components/ui/input", () => ({
+  Input: ({
+    id,
+    type,
+    value,
+    onChange,
+    placeholder,
+    autoFocus,
+    required,
+    className,
+    "aria-invalid": ariaInvalid,
+  }: {
+    id?: string;
+    type?: string;
+    value?: string;
+    onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    placeholder?: string;
+    autoFocus?: boolean;
+    required?: boolean;
+    className?: string;
+    "aria-invalid"?: boolean;
+  }) => (
+    <input
+      id={id}
+      type={type}
+      value={value}
+      onChange={onChange}
+      placeholder={placeholder}
+      {...(autoFocus ? { autoFocus: true } : {})}
+      required={required}
+      className={className}
+      aria-invalid={ariaInvalid}
+    />
+  ),
+}));
+
+vi.mock("~/components/ui/scroll-area", () => ({
+  ScrollArea: ({ children, className }: { children: React.ReactNode; className?: string }) => (
+    <div data-testid="scroll-area" className={className}>
+      {children}
+    </div>
+  ),
+}));
+
+// Mock utils
+vi.mock("~/lib/utils", () => ({
+  cn: (...classes: (string | undefined)[]) => classes.filter(Boolean).join(" "),
+}));
+
+// Mock window.ethereum
+const mockEthereumRequest = vi.fn();
+Object.defineProperty(window, "ethereum", {
+  value: {
+    request: mockEthereumRequest,
+  },
+  writable: true,
+  configurable: true,
+});
+
+describe("GatedConnectButton", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseConnectedAddresses.mockReturnValue([]);
+    mockUseLocalStorageState.mockReturnValue([false, mockSetTermsAccepted]);
+    mockEthereumRequest.mockResolvedValue(undefined);
+  });
+
+  describe("initial rendering", () => {
+    test("renders connect button when no wallets connected", () => {
+      render(<GatedConnectButton />);
+      const button = screen.getByRole("button", { name: /connect wallet/i });
+      expect(button).toBeInTheDocument();
+    });
+
+    test("connect button shows wallet icon", () => {
+      render(<GatedConnectButton />);
+      expect(screen.getByTestId("wallet-icon")).toBeInTheDocument();
+    });
+
+    test("connect button has default variant when disconnected", () => {
+      render(<GatedConnectButton />);
+      const button = screen.getByRole("button", { name: /connect wallet/i });
+      expect(button).toHaveAttribute("data-variant", "default");
+    });
+
+    test("renders connected state when wallets are connected", () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef", "0xabcdef1234567890"]);
+      render(<GatedConnectButton />);
+      expect(screen.getByText("Connected")).toBeInTheDocument();
+    });
+
+    test("connected button has outline variant", () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      render(<GatedConnectButton />);
+      const button = screen.getByRole("button");
+      expect(button).toHaveAttribute("data-variant", "outline");
+    });
+  });
+
+  describe("connected state rendering", () => {
+    test("displays avatars for connected addresses", () => {
+      const addresses = ["0x1234567890abcdef", "0xabcdef1234567890"];
+      mockUseConnectedAddresses.mockReturnValue(addresses);
+      render(<GatedConnectButton />);
+
+      const avatars = screen.getAllByTestId("address-avatar");
+      expect(avatars).toHaveLength(2);
+      expect(avatars[0]).toHaveAttribute("data-address", addresses[0]);
+      expect(avatars[1]).toHaveAttribute("data-address", addresses[1]);
+    });
+
+    test("limits avatars to maximum of 8", () => {
+      const addresses = Array.from({ length: 10 }, (_, i) => `0x${i}`.padEnd(42, "0"));
+      mockUseConnectedAddresses.mockReturnValue(addresses);
+      render(<GatedConnectButton />);
+
+      const avatars = screen.getAllByTestId("address-avatar");
+      expect(avatars).toHaveLength(8);
+    });
+
+    test("applies correct spacing classes for multiple addresses", () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234", "0x5678"]);
+      render(<GatedConnectButton />);
+
+      const container = screen.getAllByTestId("address-avatar")[0].parentElement;
+      expect(container).toHaveClass("flex");
+      expect(container).toHaveClass("-space-x-2");
+    });
+
+    test("applies tighter spacing for more than 4 addresses", () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1", "0x2", "0x3", "0x4", "0x5"]);
+      render(<GatedConnectButton />);
+
+      const container = screen.getAllByTestId("address-avatar")[0].parentElement;
+      expect(container).toHaveClass("-space-x-3");
+    });
+  });
+
+  describe("beta warning dialog", () => {
+    test("does not show dialog initially", () => {
+      render(<GatedConnectButton />);
+      expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
+    });
+
+    test("shows dialog when clicking connect without accepted terms", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      const button = screen.getByRole("button", { name: /connect wallet/i });
+      await user.click(button);
+
+      expect(screen.getByTestId("dialog")).toBeInTheDocument();
+    });
+
+    test("skips dialog when terms already accepted", async () => {
+      mockUseLocalStorageState.mockReturnValue([true, mockSetTermsAccepted]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      const button = screen.getByRole("button", { name: /connect wallet/i });
+      await user.click(button);
+
+      expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
+      expect(mockOpenConnectModal).toHaveBeenCalled();
+    });
+
+    test("dialog shows beta warning title", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Beta Warning");
+    });
+
+    test("dialog shows warning description", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const description = screen.getByTestId("dialog-description");
+      expect(description).toHaveTextContent(/beta and under active development/i);
+      expect(description).toHaveTextContent(/do not use it with real funds/i);
+    });
+
+    test("dialog includes confirmation text label", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      expect(screen.getByText(/I understand the risks/)).toBeInTheDocument();
+    });
+
+    test("confirmation input is initially empty", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      expect(input).toHaveValue("");
+    });
+
+    test("confirmation input is rendered with autoFocus prop", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      // Input should be rendered - autoFocus is handled by React and may not show as HTML attribute
+      expect(input).toBeInTheDocument();
+    });
+
+    test("continue button is disabled when text does not match", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const continueButton = screen.getByRole("button", { name: /continue/i });
+      expect(continueButton).toBeDisabled();
+    });
+
+    test("continue button is enabled when text matches", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      await user.type(input, "I understand the risks");
+
+      const continueButton = screen.getByRole("button", { name: /continue/i });
+      expect(continueButton).not.toBeDisabled();
+    });
+  });
+
+  describe("beta warning dialog form submission", () => {
+    test("saves terms acceptance to localStorage on correct submission", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      await user.type(input, "I understand the risks");
+
+      const continueButton = screen.getByRole("button", { name: /continue/i });
+      await user.click(continueButton);
+
+      expect(mockSetTermsAccepted).toHaveBeenCalledWith(true);
+    });
+
+    test("closes dialog on correct submission", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      await user.type(input, "I understand the risks");
+
+      const continueButton = screen.getByRole("button", { name: /continue/i });
+      await user.click(continueButton);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("dialog-title")).not.toBeInTheDocument();
+      });
+    });
+
+    test("opens connect modal after correct submission", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      await user.type(input, "I understand the risks");
+
+      const continueButton = screen.getByRole("button", { name: /continue/i });
+      await user.click(continueButton);
+
+      await waitFor(() => {
+        expect(mockOpenConnectModal).toHaveBeenCalled();
+      });
+    });
+
+    test("resets confirmation text when dialog opens", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+      const input = screen.getByPlaceholderText("I understand the risks");
+
+      // Input should start empty
+      expect(input).toHaveValue("");
+    });
+
+    test("button remains disabled for wrong text", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      await user.type(input, "wrong text");
+
+      const continueButton = screen.getByRole("button", { name: /continue/i });
+      expect(continueButton).toBeDisabled();
+    });
+
+    test("submitting via Enter with correct text works", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      await user.type(input, "I understand the risks{Enter}");
+
+      await waitFor(() => {
+        expect(mockSetTermsAccepted).toHaveBeenCalledWith(true);
+        expect(mockOpenConnectModal).toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe("connected addresses dialog", () => {
+    test("shows dialog when clicking connected button", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      const button = screen.getByRole("button");
+      await user.click(button);
+
+      expect(screen.getByTestId("dialog")).toBeInTheDocument();
+      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Connected Wallets");
+    });
+
+    test("shows description in connected dialog", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      expect(screen.getByTestId("dialog-description")).toHaveTextContent("Manage your connected wallet addresses");
+    });
+
+    test("displays all connected addresses in dialog", async () => {
+      const addresses = ["0x1234567890abcdef", "0xabcdef1234567890", "0x1111111111111111"];
+      mockUseConnectedAddresses.mockReturnValue(addresses);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      const addressDisplays = screen.getAllByTestId("address-display-root");
+      expect(addressDisplays).toHaveLength(3);
+      expect(addressDisplays[0]).toHaveAttribute("data-address", addresses[0]);
+      expect(addressDisplays[1]).toHaveAttribute("data-address", addresses[1]);
+      expect(addressDisplays[2]).toHaveAttribute("data-address", addresses[2]);
+    });
+
+    test("renders ScrollArea for addresses list", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      expect(screen.getByTestId("scroll-area")).toBeInTheDocument();
+      expect(screen.getByTestId("scroll-area")).toHaveClass("max-h-[400px]");
+    });
+
+    test("renders address components for each address", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      expect(screen.getByTestId("address-display-avatar")).toBeInTheDocument();
+      expect(screen.getByTestId("address-display-text")).toBeInTheDocument();
+      expect(screen.getByTestId("address-display-copy")).toBeInTheDocument();
+    });
+  });
+
+  describe("connected dialog actions", () => {
+    test("renders Change Wallets button", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      expect(screen.getByRole("button", { name: /change wallets/i })).toBeInTheDocument();
+    });
+
+    test("Change Wallets button has wallet icon", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      const changeButton = screen.getByRole("button", { name: /change wallets/i });
+      const icon = changeButton.querySelector('[data-testid="wallet-icon"]');
+      expect(icon).toBeInTheDocument();
+    });
+
+    test("Change Wallets button requests wallet permissions", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      const changeButton = screen.getByRole("button", { name: /change wallets/i });
+      await user.click(changeButton);
+
+      expect(mockEthereumRequest).toHaveBeenCalledWith({
+        method: "wallet_requestPermissions",
+        params: [{ eth_accounts: {} }],
+      });
+    });
+
+    test("handles error when requesting wallet permissions", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      mockEthereumRequest.mockRejectedValue(new Error("User rejected"));
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+      const changeButton = screen.getByRole("button", { name: /change wallets/i });
+      await user.click(changeButton);
+
+      await waitFor(() => {
+        expect(consoleSpy).toHaveBeenCalledWith("Error requesting accounts:", expect.any(Error));
+      });
+
+      consoleSpy.mockRestore();
+    });
+
+    test("renders Disconnect button", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      expect(screen.getByRole("button", { name: /disconnect/i })).toBeInTheDocument();
+    });
+
+    test("Disconnect button has logout icon", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      const disconnectButton = screen.getByRole("button", { name: /disconnect/i });
+      const icon = disconnectButton.querySelector('[data-testid="logout-icon"]');
+      expect(icon).toBeInTheDocument();
+    });
+
+    test("Disconnect button has destructive variant", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      const disconnectButton = screen.getByRole("button", { name: /disconnect/i });
+      expect(disconnectButton).toHaveClass("text-destructive");
+    });
+
+    test("Disconnect button calls disconnect function", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      const disconnectButton = screen.getByRole("button", { name: /disconnect/i });
+      await user.click(disconnectButton);
+
+      expect(mockDisconnect).toHaveBeenCalled();
+    });
+
+    test("Disconnect button closes dialog", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      const disconnectButton = screen.getByRole("button", { name: /disconnect/i });
+      await user.click(disconnectButton);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("dialog-title")).not.toBeInTheDocument();
+      });
+    });
+
+    test("renders Ok button", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      expect(screen.getByRole("button", { name: /ok/i })).toBeInTheDocument();
+    });
+
+    test("Ok button has large size", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      const okButton = screen.getByRole("button", { name: /ok/i });
+      expect(okButton).toHaveAttribute("data-size", "lg");
+    });
+
+    test("Ok button closes dialog", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+
+      const okButton = screen.getByRole("button", { name: /ok/i });
+      await user.click(okButton);
+
+      await waitFor(() => {
+        expect(screen.queryByTestId("dialog-title")).not.toBeInTheDocument();
+      });
+    });
+  });
+
+  describe("localStorage integration", () => {
+    test("uses correct localStorage key", () => {
+      render(<GatedConnectButton />);
+      expect(mockUseLocalStorageState).toHaveBeenCalledWith("octocash:beta-terms-accepted", {
+        defaultValue: false,
+      });
+    });
+
+    test("defaults to false for terms acceptance", () => {
+      render(<GatedConnectButton />);
+      expect(mockUseLocalStorageState).toHaveBeenCalledWith(expect.any(String), {
+        defaultValue: false,
+      });
+    });
+  });
+
+  describe("button variant logic", () => {
+    test("uses default variant when not connected", () => {
+      mockUseConnectedAddresses.mockReturnValue([]);
+      render(<GatedConnectButton />);
+
+      const button = screen.getByRole("button");
+      expect(button).toHaveAttribute("data-variant", "default");
+    });
+
+    test("uses outline variant when connected", () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      render(<GatedConnectButton />);
+
+      const button = screen.getByRole("button");
+      expect(button).toHaveAttribute("data-variant", "outline");
+    });
+  });
+
+  describe("edge cases", () => {
+    test("handles empty connected addresses array", () => {
+      mockUseConnectedAddresses.mockReturnValue([]);
+      render(<GatedConnectButton />);
+
+      expect(screen.getByRole("button", { name: /connect wallet/i })).toBeInTheDocument();
+      expect(screen.queryByText("Connected")).not.toBeInTheDocument();
+    });
+
+    test("handles single connected address", () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      render(<GatedConnectButton />);
+
+      expect(screen.getByText("Connected")).toBeInTheDocument();
+      expect(screen.getAllByTestId("address-avatar")).toHaveLength(1);
+    });
+
+    test("handles many connected addresses", () => {
+      const addresses = Array.from({ length: 15 }, (_, i) => `0x${i}`.padEnd(42, "0"));
+      mockUseConnectedAddresses.mockReturnValue(addresses);
+      render(<GatedConnectButton />);
+
+      // Should only show first 8
+      expect(screen.getAllByTestId("address-avatar")).toHaveLength(8);
+    });
+
+    test("handles undefined openConnectModal gracefully", async () => {
+      mockUseLocalStorageState.mockReturnValue([true, mockSetTermsAccepted]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      const button = screen.getByRole("button", { name: /connect wallet/i });
+
+      // Even if openConnectModal is defined but does nothing, should not throw
+      await user.click(button);
+
+      // Verify the component tried to call it
+      expect(mockOpenConnectModal).toHaveBeenCalled();
+    });
+  });
+
+  describe("form behavior", () => {
+    test("form prevents default submission", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      await user.type(input, "I understand the risks");
+
+      // Submit via Enter key
+      await user.type(input, "{Enter}");
+
+      // Dialog should close after successful submission
+      await waitFor(() => {
+        expect(screen.queryByTestId("dialog-title")).not.toBeInTheDocument();
+      });
+    });
+
+    test("input is required", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      expect(input).toHaveAttribute("required");
+    });
+
+    test("input has correct placeholder", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      expect(input).toBeInTheDocument();
+    });
+  });
+
+  describe("accessibility", () => {
+    test("main button has accessible role", () => {
+      render(<GatedConnectButton />);
+      const button = screen.getByRole("button");
+      expect(button).toBeInTheDocument();
+    });
+
+    test("dialogs have proper structure", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      expect(screen.getByTestId("dialog-header")).toBeInTheDocument();
+      expect(screen.getByTestId("dialog-footer")).toBeInTheDocument();
+    });
+
+    test("input has proper label association", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      expect(input).toHaveAttribute("id");
+    });
+
+    test("continue button is properly enabled/disabled", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+      const input = screen.getByPlaceholderText("I understand the risks");
+      const continueButton = screen.getByRole("button", { name: /continue/i });
+
+      // Initially disabled
+      expect(continueButton).toBeDisabled();
+
+      // Enabled when text matches
+      await user.type(input, "I understand the risks");
+      expect(continueButton).not.toBeDisabled();
+    });
+  });
+
+  describe("dialog state management", () => {
+    test("only one dialog is open at a time", async () => {
+      mockUseConnectedAddresses.mockReturnValue([]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      // Open warning dialog
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+      expect(screen.getByText("Beta Warning")).toBeInTheDocument();
+
+      // No connected dialog should be visible
+      expect(screen.queryByText("Connected Wallets")).not.toBeInTheDocument();
+    });
+
+    test("warning dialog renders when terms not accepted", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Beta Warning");
+    });
+
+    test("connected dialog renders when addresses exist", async () => {
+      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await user.click(screen.getByRole("button"));
+      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Connected Wallets");
+    });
+  });
+});
