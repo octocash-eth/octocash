@@ -5,6 +5,9 @@ export default {
   async prerender() {
     return [
       "/",
+      "/sitemap.xml",
+      "/dashboard",
+      "/history",
       // Add any other routes you want to prerender
     ];
   },

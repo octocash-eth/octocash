@@ -6,3 +6,5 @@ Allow: /
 Disallow: /dashboard
 Disallow: /history
 Disallow: /mock
+
+Sitemap: https://octo.cash/sitemap.xml
