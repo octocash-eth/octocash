@@ -9,7 +9,12 @@ interface IconLinkButtonProps extends React.ComponentProps<typeof Button> {
 }
 
 const IconLinkButton = React.forwardRef<HTMLButtonElement, IconLinkButtonProps>(
-  ({ href, linkTitle = "Open link", className, children, ...props }, ref) => {
+  ({ href, linkTitle = "Open link", className, children, onClick, ...props }, ref) => {
+    const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+      e.stopPropagation();
+      onClick?.(e as unknown as React.MouseEvent<HTMLButtonElement>);
+    };
+
     return (
       <Button
         ref={ref}
@@ -20,7 +25,7 @@ const IconLinkButton = React.forwardRef<HTMLButtonElement, IconLinkButtonProps>(
         title={linkTitle}
         {...props}
       >
-        <a href={href} target="_blank" rel="noopener noreferrer">
+        <a href={href} target="_blank" rel="noopener noreferrer" onClick={handleClick}>
           {children ?? <ExternalLink className="size-3" />}
         </a>
       </Button>

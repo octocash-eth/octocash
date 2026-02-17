@@ -24,6 +24,8 @@ const IconCopyButton = React.forwardRef<HTMLButtonElement, IconCopyButtonProps>(
     }, []);
 
     const handleClick = async (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.stopPropagation();
+
       try {
         await navigator.clipboard.writeText(text);
         setCopied(true);
