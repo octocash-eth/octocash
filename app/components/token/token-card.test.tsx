@@ -10,14 +10,17 @@ vi.mock("ethereum-blockies-base64", () => ({
   default: vi.fn((address: string) => `data:image/png;base64,blockie-${address}`),
 }));
 
-// Mock wagmi hooks
+// Mock hooks
 const mockUseToken = vi.fn();
 const mockUseEnsName = vi.fn();
 const mockUseEnsAddress = vi.fn();
 const mockUseEnsAvatar = vi.fn();
 
-vi.mock("wagmi", () => ({
+vi.mock("~/hooks/use-token", () => ({
   useToken: (config: unknown) => mockUseToken(config),
+}));
+
+vi.mock("wagmi", () => ({
   useEnsName: (config: unknown) => mockUseEnsName(config),
   useEnsAddress: (config: unknown) => mockUseEnsAddress(config),
   useEnsAvatar: (config: unknown) => mockUseEnsAvatar(config),

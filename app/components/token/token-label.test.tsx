@@ -4,10 +4,10 @@ import { zeroAddress } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { TokenLabel } from "./token-label";
 
-// Mock wagmi hooks
+// Mock useToken hook
 const mockUseToken = vi.fn();
 
-vi.mock("wagmi", () => ({
+vi.mock("~/hooks/use-token", () => ({
   useToken: (config: unknown) => mockUseToken(config),
 }));
 

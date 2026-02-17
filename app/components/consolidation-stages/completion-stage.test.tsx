@@ -12,22 +12,17 @@ import type { Address } from "viem";
 import { describe, expect, test, vi } from "vitest";
 import { CompletionStage } from "./completion-stage";
 
-// Mock wagmi useToken hook
-vi.mock("wagmi", async () => {
-  const actual = await vi.importActual("wagmi");
-  return {
-    ...actual,
-    useToken: () => ({
-      data: {
-        address: "0x0000000000000000000000000000000000000000" as Address,
-        decimals: 6,
-        name: "Mock Token",
-        symbol: "MOCK",
-        totalSupply: { formatted: "1000000", value: 1000000n },
-      },
-    }),
-  };
-});
+// Mock useToken hook
+vi.mock("~/hooks/use-token", () => ({
+  useToken: () => ({
+    data: {
+      address: "0x0000000000000000000000000000000000000000" as Address,
+      decimals: 6,
+      name: "Mock Token",
+      symbol: "MOCK",
+    },
+  }),
+}));
 
 // Mock ChainIcon component
 vi.mock("~/components/chain/chain-icon", () => ({

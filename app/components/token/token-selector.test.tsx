@@ -9,9 +9,7 @@ vi.mock("wagmi", () => ({
   usePublicClient: vi.fn(() => ({
     readContract: vi.fn(() => Promise.resolve(null)),
   })),
-  useToken: vi.fn(() => ({
-    data: null,
-  })),
+  useReadContracts: vi.fn(() => ({ data: undefined })),
 }));
 
 // Helper to wrap components with QueryClientProvider

@@ -1,8 +1,8 @@
 import { zeroAddress } from "viem";
-import { useToken } from "wagmi";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
 import { ChainIcon } from "~/components/chain/chain-icon";
 import { chains } from "~/data/supported-chains";
+import { useToken } from "~/hooks/use-token";
 import type { TokenAmount } from "~/lib/types";
 import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "./token-display";
 
