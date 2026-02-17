@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { Link } from "react-router";
 import { FOOTER_CONTENT } from "~/data/homepage";
 
 export default function FooterSection() {
@@ -67,6 +68,20 @@ export default function FooterSection() {
       />
       <div className="relative px-4 sm:px-6 lg:px-8 pb-12 z-10 text-center bg-[#ecdfc1] dark:bg-[#624e20]">
         <p className="text-2xl md:text-3xl font-medium text-orange-900 dark:text-white">{FOOTER_CONTENT.copyright}</p>
+        <div className="mt-4 flex justify-center gap-6">
+          <Link
+            to="/terms"
+            className="text-sm font-medium text-orange-900/70 hover:text-orange-900 dark:text-white/70 dark:hover:text-white transition-colors"
+          >
+            Terms of Service
+          </Link>
+          <Link
+            to="/privacy"
+            className="text-sm font-medium text-orange-900/70 hover:text-orange-900 dark:text-white/70 dark:hover:text-white transition-colors"
+          >
+            Privacy Policy
+          </Link>
+        </div>
       </div>
     </footer>
   );

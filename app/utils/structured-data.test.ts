@@ -420,6 +420,7 @@ describe("structured-data utils", () => {
         "Are there fees when consolidating?",
         "Is it safe?",
         "Can I choose where my tokens end up?",
+        "Who operates OctoCash?",
       ];
 
       const actualQuestions = faqSchema.mainEntity.map((entity: SchemaType) => entity.name);

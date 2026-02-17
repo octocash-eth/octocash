@@ -16,14 +16,20 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
   const { data: walletClient } = useWalletClient();
   const { saveConsolidation } = useConsolidationRecords();
 
-  // Sync incoming state
+  // Sync incoming state from planning hook.
+  // Guards against overwriting execution/terminal states: once execution
+  // has started (status !== "ready"), only a new plan (different ID) can
+  // replace the current state. This prevents a referentially-new but
+  // logically-identical planning memo from resetting progress mid-execution.
   useEffect(() => {
     setState((prev) => {
       // No initial state: reset
       if (initialState === null) return null;
       // Different ID: always accept the new state
       if (prev?.id !== initialState.id) return initialState;
-      // Same ID: only accept if the incoming state is newer
+      // Never overwrite a non-ready state (executing, paused, completed, partial)
+      if (prev.status !== "ready") return prev;
+      // Same ID, both ready: only accept if the incoming state is newer
       if (prev.updatedAt >= initialState.updatedAt) return prev;
       return initialState;
     });

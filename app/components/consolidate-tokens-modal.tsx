@@ -138,25 +138,23 @@ export function ConsolidateTokensModal({
     if (!open) {
       setCurrentStage(1);
       setCompletedState(null);
-      // Reset token amounts when closing after completion
       setTokenAmounts({});
+      setPlanId("");
     }
   }, [open]);
 
-  // Track previous stage to detect stage transitions
-  const prevStageRef = React.useRef(currentStage);
-
-  // Generate new planId when transitioning to stage 3 from any other stage
-  // This ensures the plan is regenerated whenever the user navigates to stage 3
-  React.useEffect(() => {
-    const prevStage = prevStageRef.current;
-    prevStageRef.current = currentStage;
-
-    if (currentStage === 3 && prevStage !== 3) {
-      const newPlanId = `consolidation-${Date.now()}`;
-      setPlanId(newPlanId);
-    }
-  }, [currentStage]);
+  // Navigate to a stage, generating a fresh planId when entering stage 3.
+  // This is synchronous (not in a useEffect) so the new planId is available
+  // in the same render, preventing a one-frame flash of a stale cached plan.
+  const navigateToStage = React.useCallback(
+    (newStage: number) => {
+      if (newStage === 3 && currentStage !== 3) {
+        setPlanId(`consolidation-${Date.now()}`);
+      }
+      setCurrentStage(newStage);
+    },
+    [currentStage],
+  );
 
   // Validation function for navigation
   const canNavigateToStage = React.useCallback(
@@ -193,15 +191,15 @@ export function ConsolidateTokensModal({
     if (currentStage === 3) return;
 
     if (canNavigateToStage(currentStage + 1)) {
-      setCurrentStage((prev) => prev + 1);
+      navigateToStage(currentStage + 1);
     }
-  }, [currentStage, canNavigateToStage]);
+  }, [currentStage, canNavigateToStage, navigateToStage]);
 
   const handleBack = React.useCallback(() => {
     if (currentStage > 1) {
-      setCurrentStage((prev) => prev - 1);
+      navigateToStage(currentStage - 1);
     }
-  }, [currentStage]);
+  }, [currentStage, navigateToStage]);
 
   const handleComplete = React.useCallback((state: ConsolidationState) => {
     console.log("[Modal] handleComplete called with status:", state.status);
@@ -265,7 +263,7 @@ export function ConsolidateTokensModal({
         {completedState ? (
           <CompletionStage state={completedState} onClose={() => handleOpenChange(false)} />
         ) : (
-          <Stepper value={currentStage} onValueChange={setCurrentStage} className="space-y-6">
+          <Stepper value={currentStage} onValueChange={navigateToStage} className="space-y-6">
             <StepperNav className="gap-3.5">
               {[
                 { id: "select-amount", title: "Select Amount" },

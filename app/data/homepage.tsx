@@ -8,8 +8,8 @@ export const HERO_CONTENT = {
 export const HOW_IT_WORKS_CONTENT = {
   title: "How it works",
   paragraphs: [
-    "I'm Octo, your cross-chain treasure hunter. I'll show you where your tokens are hiding, help you pick what to keep, and then I'll fetch them for you.",
-    "In a few clicks, your scattered loot becomes one wallet, one token, one chain.",
+    "I'm Octo, your cross-chain treasure hunter. I'll show you where your tokens are hiding, help you pick what to keep, and coordinate the consolidation for you.",
+    "In a few clicks, bring your scattered loot to one wallet, one token, one chain.",
   ],
 };
 
@@ -35,9 +35,9 @@ export const FEATURES_CONTENT = {
       imageHeight: 333,
     },
     {
-      title: "Treasures Secured",
+      title: "Treasures Delivered",
       description:
-        "Built on trusted protocols. Your treasures arrive in a matter of seconds, exactly where you want them.",
+        "Built on trusted protocols. Your treasures should arrive in a matter of seconds, unless you have really bad luck.",
       imageSrc: "/decorations/feature-card-3.svg",
       imageAlt: "Security illustration",
       imageWidth: 484,
@@ -49,7 +49,7 @@ export const FEATURES_CONTENT = {
     description: (
       <>
         Behind the magic: <strong>Circle's CCTPv2</strong> handles the bridges, <strong>Odos</strong> powers the swaps.
-        Both proven protocols that keep your assets safe.
+        Both proven protocols trusted by the industry.
       </>
     ),
   },
@@ -87,15 +87,20 @@ export const FAQ_ITEMS = [
   {
     question: "Is it safe?",
     answer:
-      "Yes! Octo doesn't hold your funds. All interactions happen directly between your wallet and battle-tested protocols like Circle's CCTP and Odos. We coordinate the consolidation; the protocols handle your assets.",
+      "Octo is non-custodial — we never hold or control your funds. All interactions happen directly between your wallet and established protocols like Circle's CCTP and Odos. We coordinate the consolidation; the protocols handle your assets.",
   },
   {
     question: "Can I choose where my tokens end up?",
     answer:
       "Yes! You can choose which chain and wallet address to consolidate your tokens to. Octo gives you full control over the destination.",
   },
+  {
+    question: "Who operates OctoCash?",
+    answer:
+      "OctoCash is operated by OtoCo WY LLC - Octocash - Series 435, a Wyoming limited liability company. For full details, see our Terms of Service.",
+  },
 ];
 
 export const FOOTER_CONTENT = {
-  copyright: "© 2025 Blossom Labs. Built with love for the people like us, navigating multi-chain complexity.",
+  copyright: "© 2025-2026 Octocash. Built with ❤️ by Blossom Labs.",
 };

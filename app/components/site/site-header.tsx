@@ -29,8 +29,8 @@ const APP_NAV: NavItem[] = [
   { to: "/history", label: "History" },
 ] as const;
 
-function MainButton({ isHomePage }: { isHomePage: boolean }) {
-  if (isHomePage) {
+function MainButton({ isAppPage }: { isAppPage: boolean }) {
+  if (!isAppPage) {
     return (
       <Button asChild>
         <Link to="/dashboard">Go to Dashboard</Link>
@@ -46,12 +46,12 @@ function MainButton({ isHomePage }: { isHomePage: boolean }) {
 
 function Links({
   items,
-  isHomePage,
+  isAppPage,
   isMobile,
   onLinkClick,
 }: {
   items: readonly NavItem[];
-  isHomePage: boolean;
+  isAppPage: boolean;
   isMobile?: boolean;
   onLinkClick?: () => void;
 }) {
@@ -63,14 +63,14 @@ function Links({
   return (
     <>
       {items.map(({ to, label }) =>
-        isHomePage ? (
-          <NavAnchor key={to} href={to} onClick={onLinkClick} className={linkClassName}>
-            {label}
-          </NavAnchor>
-        ) : (
+        isAppPage ? (
           <NavLink key={to} to={to} onClick={onLinkClick} className={linkClassName}>
             {label}
           </NavLink>
+        ) : (
+          <NavAnchor key={to} href={to} onClick={onLinkClick} className={linkClassName}>
+            {label}
+          </NavAnchor>
         ),
       )}
     </>
@@ -79,8 +79,8 @@ function Links({
 
 export function SiteHeader() {
   const location = useLocation();
-  const isHomePage = location.pathname === "/";
-  const NAV = isHomePage ? HOME_NAV : APP_NAV;
+  const isAppPage = location.pathname.startsWith("/dashboard") || location.pathname.startsWith("/history");
+  const NAV = isAppPage ? APP_NAV : HOME_NAV;
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuId = useId();
 
@@ -99,9 +99,9 @@ export function SiteHeader() {
             <ThemeToggle variant="ghost" />
           </div>
           <nav className="hidden md:flex items-center gap-2" aria-label="Main navigation">
-            <Links items={NAV} isHomePage={isHomePage} />
+            <Links items={NAV} isAppPage={isAppPage} />
             <ThemeToggle />
-            <MainButton isHomePage={isHomePage} />
+            <MainButton isAppPage={isAppPage} />
           </nav>
 
           {/* Mobile Menu Button */}
@@ -123,10 +123,10 @@ export function SiteHeader() {
       {mobileMenuOpen && (
         <div id={mobileMenuId} className="md:hidden mt-4 pb-4 border-t pt-4">
           <nav className="flex flex-col gap-2" aria-label="Mobile navigation">
-            <Links items={NAV} isHomePage={isHomePage} isMobile onLinkClick={() => setMobileMenuOpen(false)} />
+            <Links items={NAV} isAppPage={isAppPage} isMobile onLinkClick={() => setMobileMenuOpen(false)} />
           </nav>
           <div className="flex items-center gap-2 mt-4 px-3">
-            <MainButton isHomePage={isHomePage} />
+            <MainButton isAppPage={isAppPage} />
           </div>
         </div>
       )}

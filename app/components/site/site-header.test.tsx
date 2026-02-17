@@ -523,12 +523,12 @@ describe("SiteHeader", () => {
       expect(screen.getByText("History")).toBeInTheDocument();
     });
 
-    test("treats any non-home path as app page", () => {
+    test("treats non-app paths as homepage-like (shows home nav)", () => {
       mockUseLocation.mockReturnValue({ pathname: "/some-other-route" });
       render(<SiteHeader />);
 
-      expect(screen.queryByText("How it works")).not.toBeInTheDocument();
-      expect(screen.getByText("Dashboard")).toBeInTheDocument();
+      expect(screen.getByText("How it works")).toBeInTheDocument();
+      expect(screen.getByText("Go to Dashboard")).toBeInTheDocument();
     });
   });
 

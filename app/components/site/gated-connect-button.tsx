@@ -1,6 +1,7 @@
 import { useConnectModal } from "@rainbow-me/rainbowkit";
-import { LogOutIcon, WalletIcon } from "lucide-react";
-import { useId, useState } from "react";
+import { LightbulbIcon, LogOutIcon, WalletIcon } from "lucide-react";
+import { useState } from "react";
+import { Link } from "react-router";
 import useLocalStorageState from "use-local-storage-state";
 import { useDisconnect } from "wagmi";
 import {
@@ -11,6 +12,7 @@ import {
   AddressDisplayText,
 } from "~/components/address";
 import { Button } from "~/components/ui/button";
+import { Checkbox } from "~/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -19,51 +21,42 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
-import { Input } from "~/components/ui/input";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { useConnectedAddresses } from "~/hooks/use-connected-addresses";
 import { cn } from "~/lib/utils";
 
-const CONFIRMATION_TEXT = "I understand the risks";
-const BETA_TERMS_ACCEPTED_KEY = "octocash:beta-terms-accepted";
+const TERMS_ACCEPTED_KEY = "octocash:terms-accepted";
 
 export function GatedConnectButton() {
   const { openConnectModal } = useConnectModal();
   const connectedAddresses = useConnectedAddresses();
-  const [warningDialogOpen, setWarningDialogOpen] = useState(false);
+  const [onboardingDialogOpen, setOnboardingDialogOpen] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState<1 | 2>(1);
   const [connectedDialogOpen, setConnectedDialogOpen] = useState(false);
-  const [confirmationText, setConfirmationText] = useState("");
-  const [error, setError] = useState("");
-  const [termsAccepted, setTermsAccepted] = useLocalStorageState(BETA_TERMS_ACCEPTED_KEY, {
+  const [checked, setChecked] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useLocalStorageState(TERMS_ACCEPTED_KEY, {
     defaultValue: false,
   });
-  const confirmationId = useId();
   const { disconnect } = useDisconnect();
 
   const onRequestConnect = () => {
-    // If terms already accepted, skip warning and open connect modal directly
     if (termsAccepted) {
       openConnectModal?.();
       return;
     }
 
-    // Otherwise show the warning dialog
-    setConfirmationText("");
-    setError("");
-    setWarningDialogOpen(true);
+    setChecked(false);
+    setOnboardingStep(1);
+    setOnboardingDialogOpen(true);
   };
 
-  const onSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (confirmationText !== CONFIRMATION_TEXT) {
-      setError(`Please type exactly: ${CONFIRMATION_TEXT}`);
-      return;
-    }
-
-    // Save acceptance (automatically persisted to localStorage by the hook)
+  const onAcceptTerms = () => {
     setTermsAccepted(true);
+    setOnboardingStep(2);
+  };
 
-    setWarningDialogOpen(false);
+  const onConnect = () => {
+    setOnboardingDialogOpen(false);
     setTimeout(() => {
       openConnectModal?.();
     }, 0);
@@ -81,7 +74,6 @@ export function GatedConnectButton() {
 
   const handleChangeAddresses = async () => {
     try {
-      // Request accounts via EIP-2255
       await window.ethereum.request({
         method: "wallet_requestPermissions",
         params: [{ eth_accounts: {} }],
@@ -115,44 +107,76 @@ export function GatedConnectButton() {
           </>
         )}
       </Button>
-      {/* Beta Warning Dialog */}
-      <Dialog open={warningDialogOpen} onOpenChange={setWarningDialogOpen}>
+
+      {/* Onboarding Dialog */}
+      <Dialog open={onboardingDialogOpen} onOpenChange={setOnboardingDialogOpen}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Beta Warning</DialogTitle>
-            <DialogDescription>
-              This app is in beta and under active development. Do not use it with real funds yet, unless you know what
-              you are doing.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={onSubmit} className="space-y-3">
-            <div className="space-y-2">
-              <label htmlFor={confirmationId} className="text-sm font-medium mb-5">
-                Type{" "}
-                <code className="bg-muted relative rounded px-[0.3rem] py-[0.2rem] font-mono text-sm font-semibold">
-                  {CONFIRMATION_TEXT}
-                </code>{" "}
-                to confirm
-              </label>
-              <Input
-                id={confirmationId}
-                className="mt-2"
-                type="text"
-                value={confirmationText}
-                onChange={(e) => setConfirmationText(e.target.value)}
-                placeholder={CONFIRMATION_TEXT}
-                aria-invalid={error ? true : undefined}
-                autoFocus
-                required
-              />
-              {error ? <p className="text-sm text-destructive">{error}</p> : null}
-            </div>
-            <DialogFooter>
-              <Button type="submit" className="w-full" disabled={confirmationText !== CONFIRMATION_TEXT}>
-                Continue
-              </Button>
-            </DialogFooter>
-          </form>
+          {onboardingStep === 1 ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>Welcome to Octocash</DialogTitle>
+                <DialogDescription>
+                  Octocash is a client-side dapp, although we do talk to third-party services like RPC providers and
+                  other APIs to fetch your balances and find the best routes for consolidation.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex items-start gap-3 py-2">
+                <Checkbox
+                  id="terms-checkbox"
+                  checked={checked}
+                  onCheckedChange={(value) => setChecked(value === true)}
+                  className="mt-0.5"
+                />
+                <label htmlFor="terms-checkbox" className="text-sm leading-relaxed cursor-pointer">
+                  I agree to the{" "}
+                  <Link
+                    to="/terms"
+                    target="_blank"
+                    className="underline font-medium"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Terms of Service
+                  </Link>{" "}
+                  and{" "}
+                  <Link
+                    to="/privacy"
+                    target="_blank"
+                    className="underline font-medium"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Privacy Policy
+                  </Link>
+                </label>
+              </div>
+              <DialogFooter>
+                <Button className="w-full" disabled={!checked} onClick={onAcceptTerms}>
+                  Continue
+                </Button>
+              </DialogFooter>
+            </>
+          ) : (
+            <>
+              <DialogHeader>
+                <DialogTitle>Connect Your Wallets</DialogTitle>
+                <DialogDescription>
+                  Octo will scan every supported chain and gather your tokens in one place to see what's worth
+                  consolidating.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex items-start gap-2 rounded-lg bg-muted/50 p-3">
+                <LightbulbIcon className="size-4 mt-0.5 shrink-0 text-yellow-500" />
+                <p className="text-sm">
+                  Got multiple addresses? In MetaMask, hit the <span className="font-medium">"Edit accounts"</span> link
+                  and tick as many checkboxes as you like. Octo will happily crunch them all at once!
+                </p>
+              </div>
+              <DialogFooter>
+                <Button className="w-full" onClick={onConnect}>
+                  Let's go!
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
@@ -161,7 +185,6 @@ export function GatedConnectButton() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Connected Wallets</DialogTitle>
-            <DialogDescription>Manage your connected wallet addresses</DialogDescription>
           </DialogHeader>
           <ScrollArea className="max-h-[400px]">
             <div className="space-y-3 py-4">

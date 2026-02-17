@@ -1,6 +1,10 @@
 import { SITE_URL } from "~/data/site";
 
-const pages = [{ path: "/", priority: "1.0", changefreq: "weekly" }];
+const pages = [
+  { path: "/", priority: "1.0", changefreq: "weekly" },
+  { path: "/terms", priority: "0.3", changefreq: "monthly" },
+  { path: "/privacy", priority: "0.3", changefreq: "monthly" },
+];
 
 export function loader() {
   const sitemap = `<?xml version="1.0" encoding="UTF-8"?>

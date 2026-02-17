@@ -6,6 +6,8 @@ export default {
     return [
       "/",
       "/sitemap.xml",
+      "/terms",
+      "/privacy",
       "/dashboard",
       "/history",
       // Add any other routes you want to prerender

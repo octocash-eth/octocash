@@ -11,8 +11,30 @@ vi.mock("@rainbow-me/rainbowkit", () => ({
 
 // Mock lucide-react icons
 vi.mock("lucide-react", () => ({
+  LightbulbIcon: ({ className }: { className?: string }) => <div data-testid="lightbulb-icon" className={className} />,
   LogOutIcon: ({ className }: { className?: string }) => <div data-testid="logout-icon" className={className} />,
   WalletIcon: ({ className }: { className?: string }) => <div data-testid="wallet-icon" className={className} />,
+}));
+
+// Mock react-router
+vi.mock("react-router", () => ({
+  Link: ({
+    to,
+    children,
+    target,
+    className,
+    onClick,
+  }: {
+    to: string;
+    children: React.ReactNode;
+    target?: string;
+    className?: string;
+    onClick?: (e: React.MouseEvent) => void;
+  }) => (
+    <a href={to} target={target} className={className} onClick={onClick}>
+      {children}
+    </a>
+  ),
 }));
 
 // Mock use-local-storage-state
@@ -99,6 +121,29 @@ vi.mock("~/components/ui/button", () => ({
   ),
 }));
 
+vi.mock("~/components/ui/checkbox", () => ({
+  Checkbox: ({
+    id,
+    checked,
+    onCheckedChange,
+    className,
+  }: {
+    id?: string;
+    checked?: boolean;
+    onCheckedChange?: (checked: boolean) => void;
+    className?: string;
+  }) => (
+    <input
+      type="checkbox"
+      id={id}
+      checked={checked}
+      onChange={(e) => onCheckedChange?.(e.target.checked)}
+      className={className}
+      data-testid="terms-checkbox"
+    />
+  ),
+}));
+
 vi.mock("~/components/ui/dialog", () => ({
   Dialog: ({ open, children }: { open: boolean; children: React.ReactNode; onOpenChange?: (open: boolean) => void }) =>
     open ? <div data-testid="dialog">{children}</div> : null,
@@ -113,42 +158,6 @@ vi.mock("~/components/ui/dialog", () => ({
   ),
   DialogHeader: ({ children }: { children: React.ReactNode }) => <div data-testid="dialog-header">{children}</div>,
   DialogTitle: ({ children }: { children: React.ReactNode }) => <h2 data-testid="dialog-title">{children}</h2>,
-}));
-
-vi.mock("~/components/ui/input", () => ({
-  Input: ({
-    id,
-    type,
-    value,
-    onChange,
-    placeholder,
-    autoFocus,
-    required,
-    className,
-    "aria-invalid": ariaInvalid,
-  }: {
-    id?: string;
-    type?: string;
-    value?: string;
-    onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
-    placeholder?: string;
-    autoFocus?: boolean;
-    required?: boolean;
-    className?: string;
-    "aria-invalid"?: boolean;
-  }) => (
-    <input
-      id={id}
-      type={type}
-      value={value}
-      onChange={onChange}
-      placeholder={placeholder}
-      {...(autoFocus ? { autoFocus: true } : {})}
-      required={required}
-      className={className}
-      aria-invalid={ariaInvalid}
-    />
-  ),
 }));
 
 vi.mock("~/components/ui/scroll-area", () => ({
@@ -253,7 +262,7 @@ describe("GatedConnectButton", () => {
     });
   });
 
-  describe("beta warning dialog", () => {
+  describe("onboarding step 1 — terms acceptance", () => {
     test("does not show dialog initially", () => {
       render(<GatedConnectButton />);
       expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
@@ -263,8 +272,7 @@ describe("GatedConnectButton", () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
-      const button = screen.getByRole("button", { name: /connect wallet/i });
-      await user.click(button);
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
       expect(screen.getByTestId("dialog")).toBeInTheDocument();
     });
@@ -274,64 +282,64 @@ describe("GatedConnectButton", () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
-      const button = screen.getByRole("button", { name: /connect wallet/i });
-      await user.click(button);
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
       expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
       expect(mockOpenConnectModal).toHaveBeenCalled();
     });
 
-    test("dialog shows beta warning title", async () => {
+    test("step 1 shows welcome title", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
-      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Beta Warning");
+      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Welcome to Octo.cash");
     });
 
-    test("dialog shows warning description", async () => {
+    test("step 1 explains that data stays in the browser", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
       const description = screen.getByTestId("dialog-description");
-      expect(description).toHaveTextContent(/beta and under active development/i);
-      expect(description).toHaveTextContent(/do not use it with real funds/i);
+      expect(description).toHaveTextContent(/client-side dapp/i);
+      expect(description).toHaveTextContent(/never leaves your browser/i);
     });
 
-    test("dialog includes confirmation text label", async () => {
+    test("step 1 shows a reassuring hint", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
-      expect(screen.getByText(/I understand the risks/)).toBeInTheDocument();
+      expect(screen.getByTestId("lightbulb-icon")).toBeInTheDocument();
+      expect(screen.getByText(/friendly octopus/i)).toBeInTheDocument();
     });
 
-    test("confirmation input is initially empty", async () => {
+    test("step 1 includes terms checkbox", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
-      const input = screen.getByPlaceholderText("I understand the risks");
-      expect(input).toHaveValue("");
+      expect(screen.getByTestId("terms-checkbox")).toBeInTheDocument();
     });
 
-    test("confirmation input is rendered with autoFocus prop", async () => {
+    test("step 1 includes links to Terms of Service and Privacy Policy", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
-      const input = screen.getByPlaceholderText("I understand the risks");
-      // Input should be rendered - autoFocus is handled by React and may not show as HTML attribute
-      expect(input).toBeInTheDocument();
+      const termsLink = screen.getByText("Terms of Service");
+      const privacyLink = screen.getByText("Privacy Policy");
+      expect(termsLink).toHaveAttribute("href", "/terms");
+      expect(privacyLink).toHaveAttribute("href", "/privacy");
     });
 
-    test("continue button is disabled when text does not match", async () => {
+    test("continue button is disabled when checkbox is not checked", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
@@ -341,105 +349,99 @@ describe("GatedConnectButton", () => {
       expect(continueButton).toBeDisabled();
     });
 
-    test("continue button is enabled when text matches", async () => {
+    test("continue button is enabled when checkbox is checked", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
-      const input = screen.getByPlaceholderText("I understand the risks");
-      await user.type(input, "I understand the risks");
+      const checkbox = screen.getByTestId("terms-checkbox");
+      await user.click(checkbox);
 
       const continueButton = screen.getByRole("button", { name: /continue/i });
       expect(continueButton).not.toBeDisabled();
     });
-  });
 
-  describe("beta warning dialog form submission", () => {
-    test("saves terms acceptance to localStorage on correct submission", async () => {
+    test("saves terms acceptance when continue is clicked", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-
-      const input = screen.getByPlaceholderText("I understand the risks");
-      await user.type(input, "I understand the risks");
-
-      const continueButton = screen.getByRole("button", { name: /continue/i });
-      await user.click(continueButton);
+      await user.click(screen.getByTestId("terms-checkbox"));
+      await user.click(screen.getByRole("button", { name: /continue/i }));
 
       expect(mockSetTermsAccepted).toHaveBeenCalledWith(true);
     });
 
-    test("closes dialog on correct submission", async () => {
+    test("resets checkbox when dialog opens", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
-      const input = screen.getByPlaceholderText("I understand the risks");
-      await user.type(input, "I understand the risks");
+      expect(screen.getByTestId("terms-checkbox")).not.toBeChecked();
+    });
+  });
 
-      const continueButton = screen.getByRole("button", { name: /continue/i });
-      await user.click(continueButton);
+  describe("onboarding step 2 — connect wallets info", () => {
+    async function goToStep2(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+      await user.click(screen.getByTestId("terms-checkbox"));
+      await user.click(screen.getByRole("button", { name: /continue/i }));
+    }
+
+    test("accepting terms advances to step 2", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await goToStep2(user);
+
+      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Connect Your Wallets");
+    });
+
+    test("step 2 explains what connecting does", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await goToStep2(user);
+
+      const description = screen.getByTestId("dialog-description");
+      expect(description).toHaveTextContent(/read-only peek at your tokens/i);
+      expect(description).toHaveTextContent(/consolidating/i);
+    });
+
+    test("step 2 shows pro tip about multi-address selection", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await goToStep2(user);
+
+      expect(screen.getByTestId("lightbulb-icon")).toBeInTheDocument();
+      expect(screen.getByText(/multiple addresses/i)).toBeInTheDocument();
+      expect(screen.getByText(/edit accounts/i)).toBeInTheDocument();
+    });
+
+    test("step 2 no longer shows terms checkbox", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await goToStep2(user);
+
+      expect(screen.queryByTestId("terms-checkbox")).not.toBeInTheDocument();
+    });
+
+    test("clicking let's go closes dialog and opens connect modal", async () => {
+      const user = userEvent.setup();
+      render(<GatedConnectButton />);
+
+      await goToStep2(user);
+
+      await user.click(screen.getByRole("button", { name: /let's go/i }));
 
       await waitFor(() => {
-        expect(screen.queryByTestId("dialog-title")).not.toBeInTheDocument();
+        expect(screen.queryByTestId("dialog")).not.toBeInTheDocument();
       });
-    });
-
-    test("opens connect modal after correct submission", async () => {
-      const user = userEvent.setup();
-      render(<GatedConnectButton />);
-
-      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-
-      const input = screen.getByPlaceholderText("I understand the risks");
-      await user.type(input, "I understand the risks");
-
-      const continueButton = screen.getByRole("button", { name: /continue/i });
-      await user.click(continueButton);
-
       await waitFor(() => {
-        expect(mockOpenConnectModal).toHaveBeenCalled();
-      });
-    });
-
-    test("resets confirmation text when dialog opens", async () => {
-      const user = userEvent.setup();
-      render(<GatedConnectButton />);
-
-      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-      const input = screen.getByPlaceholderText("I understand the risks");
-
-      // Input should start empty
-      expect(input).toHaveValue("");
-    });
-
-    test("button remains disabled for wrong text", async () => {
-      const user = userEvent.setup();
-      render(<GatedConnectButton />);
-
-      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-
-      const input = screen.getByPlaceholderText("I understand the risks");
-      await user.type(input, "wrong text");
-
-      const continueButton = screen.getByRole("button", { name: /continue/i });
-      expect(continueButton).toBeDisabled();
-    });
-
-    test("submitting via Enter with correct text works", async () => {
-      const user = userEvent.setup();
-      render(<GatedConnectButton />);
-
-      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-
-      const input = screen.getByPlaceholderText("I understand the risks");
-      await user.type(input, "I understand the risks{Enter}");
-
-      await waitFor(() => {
-        expect(mockSetTermsAccepted).toHaveBeenCalledWith(true);
         expect(mockOpenConnectModal).toHaveBeenCalled();
       });
     });
@@ -456,16 +458,6 @@ describe("GatedConnectButton", () => {
 
       expect(screen.getByTestId("dialog")).toBeInTheDocument();
       expect(screen.getByTestId("dialog-title")).toHaveTextContent("Connected Wallets");
-    });
-
-    test("shows description in connected dialog", async () => {
-      mockUseConnectedAddresses.mockReturnValue(["0x1234567890abcdef"]);
-      const user = userEvent.setup();
-      render(<GatedConnectButton />);
-
-      await user.click(screen.getByRole("button"));
-
-      expect(screen.getByTestId("dialog-description")).toHaveTextContent("Manage your connected wallet addresses");
     });
 
     test("displays all connected addresses in dialog", async () => {
@@ -665,7 +657,7 @@ describe("GatedConnectButton", () => {
   describe("localStorage integration", () => {
     test("uses correct localStorage key", () => {
       render(<GatedConnectButton />);
-      expect(mockUseLocalStorageState).toHaveBeenCalledWith("octocash:beta-terms-accepted", {
+      expect(mockUseLocalStorageState).toHaveBeenCalledWith("octocash:terms-accepted", {
         defaultValue: false,
       });
     });
@@ -729,51 +721,9 @@ describe("GatedConnectButton", () => {
 
       const button = screen.getByRole("button", { name: /connect wallet/i });
 
-      // Even if openConnectModal is defined but does nothing, should not throw
       await user.click(button);
 
-      // Verify the component tried to call it
       expect(mockOpenConnectModal).toHaveBeenCalled();
-    });
-  });
-
-  describe("form behavior", () => {
-    test("form prevents default submission", async () => {
-      const user = userEvent.setup();
-      render(<GatedConnectButton />);
-
-      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-
-      const input = screen.getByPlaceholderText("I understand the risks");
-      await user.type(input, "I understand the risks");
-
-      // Submit via Enter key
-      await user.type(input, "{Enter}");
-
-      // Dialog should close after successful submission
-      await waitFor(() => {
-        expect(screen.queryByTestId("dialog-title")).not.toBeInTheDocument();
-      });
-    });
-
-    test("input is required", async () => {
-      const user = userEvent.setup();
-      render(<GatedConnectButton />);
-
-      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-
-      const input = screen.getByPlaceholderText("I understand the risks");
-      expect(input).toHaveAttribute("required");
-    });
-
-    test("input has correct placeholder", async () => {
-      const user = userEvent.setup();
-      render(<GatedConnectButton />);
-
-      await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-
-      const input = screen.getByPlaceholderText("I understand the risks");
-      expect(input).toBeInTheDocument();
     });
   });
 
@@ -794,30 +744,33 @@ describe("GatedConnectButton", () => {
       expect(screen.getByTestId("dialog-footer")).toBeInTheDocument();
     });
 
-    test("input has proper label association", async () => {
+    test("checkbox has proper label association", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
-      const input = screen.getByPlaceholderText("I understand the risks");
-      expect(input).toHaveAttribute("id");
+      const checkbox = screen.getByTestId("terms-checkbox");
+      expect(checkbox).toHaveAttribute("id", "terms-checkbox");
+
+      const label = screen.getByText(/I agree to the/);
+      expect(label).toHaveAttribute("for", "terms-checkbox");
     });
 
-    test("continue button is properly enabled/disabled", async () => {
+    test("continue button is properly enabled/disabled based on checkbox", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
-      const input = screen.getByPlaceholderText("I understand the risks");
+      const checkbox = screen.getByTestId("terms-checkbox");
       const continueButton = screen.getByRole("button", { name: /continue/i });
 
       // Initially disabled
       expect(continueButton).toBeDisabled();
 
-      // Enabled when text matches
-      await user.type(input, "I understand the risks");
+      // Enabled when checked
+      await user.click(checkbox);
       expect(continueButton).not.toBeDisabled();
     });
   });
@@ -828,20 +781,18 @@ describe("GatedConnectButton", () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
-      // Open warning dialog
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-      expect(screen.getByText("Beta Warning")).toBeInTheDocument();
+      expect(screen.getByText("Welcome to Octo.cash")).toBeInTheDocument();
 
-      // No connected dialog should be visible
       expect(screen.queryByText("Connected Wallets")).not.toBeInTheDocument();
     });
 
-    test("warning dialog renders when terms not accepted", async () => {
+    test("onboarding dialog renders when terms not accepted", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Beta Warning");
+      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Welcome to Octo.cash");
     });
 
     test("connected dialog renders when addresses exist", async () => {
