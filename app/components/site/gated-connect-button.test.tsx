@@ -294,10 +294,10 @@ describe("GatedConnectButton", () => {
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
-      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Welcome to Octo.cash");
+      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Welcome to Octocash");
     });
 
-    test("step 1 explains that data stays in the browser", async () => {
+    test("step 1 explains the client-side data flow", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
@@ -305,17 +305,16 @@ describe("GatedConnectButton", () => {
 
       const description = screen.getByTestId("dialog-description");
       expect(description).toHaveTextContent(/client-side dapp/i);
-      expect(description).toHaveTextContent(/never leaves your browser/i);
+      expect(description).toHaveTextContent(/third-party services/i);
     });
 
-    test("step 1 shows a reassuring hint", async () => {
+    test("step 1 surfaces the terms-of-service link", async () => {
       const user = userEvent.setup();
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
 
-      expect(screen.getByTestId("lightbulb-icon")).toBeInTheDocument();
-      expect(screen.getByText(/friendly octopus/i)).toBeInTheDocument();
+      expect(screen.getByText("Terms of Service")).toBeInTheDocument();
     });
 
     test("step 1 includes terms checkbox", async () => {
@@ -406,7 +405,7 @@ describe("GatedConnectButton", () => {
       await goToStep2(user);
 
       const description = screen.getByTestId("dialog-description");
-      expect(description).toHaveTextContent(/read-only peek at your tokens/i);
+      expect(description).toHaveTextContent(/scan every supported chain/i);
       expect(description).toHaveTextContent(/consolidating/i);
     });
 
@@ -782,7 +781,7 @@ describe("GatedConnectButton", () => {
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-      expect(screen.getByText("Welcome to Octo.cash")).toBeInTheDocument();
+      expect(screen.getByText("Welcome to Octocash")).toBeInTheDocument();
 
       expect(screen.queryByText("Connected Wallets")).not.toBeInTheDocument();
     });
@@ -792,7 +791,7 @@ describe("GatedConnectButton", () => {
       render(<GatedConnectButton />);
 
       await user.click(screen.getByRole("button", { name: /connect wallet/i }));
-      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Welcome to Octo.cash");
+      expect(screen.getByTestId("dialog-title")).toHaveTextContent("Welcome to Octocash");
     });
 
     test("connected dialog renders when addresses exist", async () => {

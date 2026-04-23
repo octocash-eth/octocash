@@ -1,11 +1,30 @@
-import { type Address, isAddressEqual } from "viem";
+import { type Address, isAddressEqual, zeroAddress } from "viem";
 import { chains, transports } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
 import { getBridgeFee } from "./cctp";
-import { ensureSufficientGas } from "./gas";
+import { getNativeBalance } from "./gas";
+import {
+  attachGasEstimates,
+  buildGasContext,
+  estimateChainGasCosts,
+  estimateDestinationChainOperations,
+  estimateOperationsForChainWallet,
+  formatGasCostNative,
+  type GasContext,
+} from "./gas-estimation";
 import { getSwapQuote } from "./odos";
 import { groupTokensByChainAndWallet } from "./tokens";
 import type { DestinationToken, TokenAmount, TransactionStep } from "./types";
+
+/** Throws an InsufficientGasError-style message in the format users already know. */
+function throwInsufficientGas(chainId: number, walletAddress: Address, gasCost: bigint): never {
+  const chain = chains[chainId as keyof typeof chains];
+  const chainName = chain?.name ?? `chain ${chainId}`;
+  const symbol = chain?.nativeCurrency?.symbol ?? "ETH";
+  throw new Error(
+    `Insufficient gas on ${chainName} for ${walletAddress}. Please top up at https://gas.zip. Need ~${formatGasCostNative(gasCost)} ${symbol}.`,
+  );
+}
 
 const SUPPORTED_CHAINS = Object.keys(chains).map(Number);
 
@@ -22,39 +41,45 @@ async function resolveIntermediateWallet(
   sourceTokens: TokenAmount[],
   destinationToken: DestinationToken,
   connectedWallets: readonly Address[] = [],
+  gasCtx: GasContext,
 ): Promise<Address> {
   const destinationWallet = destinationToken.walletAddress;
   const isDestinationConnected = connectedWallets.some((wallet) => isAddressEqual(wallet, destinationWallet));
+  const destChainId = destinationToken.chainId;
+
+  // Estimate minimum gas needed on destination chain (claim + possible final swap)
+  const minDestOps = estimateDestinationChainOperations(true, 1, false, false, false);
+  const minDestGas = await estimateChainGasCosts(destChainId, minDestOps, gasCtx.maxFeePerGas[destChainId]);
 
   if (isDestinationConnected) {
-    await ensureSufficientGas([[destinationToken.chainId, destinationWallet]], transports);
+    const chain = chains[destChainId as keyof typeof chains];
+    const balance = await getNativeBalance(
+      chain,
+      destinationWallet,
+      transports?.[destChainId as keyof typeof transports],
+    );
+    if (balance < minDestGas.totalGasCost) {
+      throwInsufficientGas(destChainId, destinationWallet, minDestGas.totalGasCost);
+    }
     return destinationWallet;
   }
 
   const searchOrder = [...new Set([...sourceTokens.map((token) => token.walletAddress), ...connectedWallets])];
 
-  const insufficient = await ensureSufficientGas(
-    searchOrder.map((wallet) => [destinationToken.chainId, wallet]),
-    transports,
-    false,
-  );
-
-  // Find the first wallet that has sufficient gas
-  const sufficient = searchOrder.find(
-    (wallet) =>
-      !insufficient.some(
-        ([chainId, address]) => chainId === destinationToken.chainId && isAddressEqual(address, wallet),
-      ),
-  );
-  if (!sufficient) {
-    const chain = chains[destinationToken.chainId as keyof typeof chains];
-    const chainName = chain?.name ?? `chain ${destinationToken.chainId}`;
-    throw new Error(
-      `PlanningError: Destination wallet ${destinationWallet} is not connected and no connected wallet has sufficient gas on ${chainName}`,
-    );
+  // Find first wallet with enough native balance on destination chain
+  for (const wallet of searchOrder) {
+    const chain = chains[destChainId as keyof typeof chains];
+    const balance = await getNativeBalance(chain, wallet, transports?.[destChainId as keyof typeof transports]);
+    if (balance >= minDestGas.totalGasCost) {
+      return wallet;
+    }
   }
 
-  return sufficient;
+  const chain = chains[destChainId as keyof typeof chains];
+  const chainName = chain?.name ?? `chain ${destChainId}`;
+  throw new Error(
+    `PlanningError: Destination wallet ${destinationWallet} is not connected and no connected wallet has sufficient gas on ${chainName}`,
+  );
 }
 
 /**
@@ -296,6 +321,7 @@ async function createSwapsAndTransfers(
 async function processChainWalletSwaps(
   sourceTokens: TokenAmount[],
   destinationToken: DestinationToken,
+  gasCtx: GasContext,
   log: (...args: unknown[]) => void,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
   const steps: TransactionStep[] = [];
@@ -333,19 +359,72 @@ async function processChainWalletSwaps(
 
     const chainUSDC = USDC_ADDRESSES[chainId as keyof typeof USDC_ADDRESSES] as Address;
     const tokensToSwapToUSDC: TokenAmount[] = [];
+    const usdcAlreadyHere: TokenAmount[] = [];
 
     for (const token of tokens) {
       const isUSDC = isAddressEqual(token.token, chainUSDC);
 
-      // If tokens are on the destination chain, they will be swapped in the final swap step
-      // If tokens are USDC on non-destination chain they won't be swapped but will be bridged
-      if (isDestChain || isUSDC) {
+      if (isDestChain) {
+        // Destination chain tokens are processed by createFinalSwaps later
         tokensNotToSwap.push(token);
         continue;
       }
 
-      // Token needs to be swapped to USDC (for bridging or if dest is USDC)
+      if (isUSDC) {
+        // USDC stays as-is but still needs to be bridged
+        usdcAlreadyHere.push(token);
+        tokensNotToSwap.push(token);
+        continue;
+      }
+
       tokensToSwapToUSDC.push(token);
+    }
+
+    // Adjust native token amount for gas on source (non-destination) chains.
+    // We need to run this whenever the wallet has *anything* to do on this chain
+    // (swapping or bridging), since CCTP-burn alone still consumes gas.
+    if (!isDestChain && (tokensToSwapToUSDC.length > 0 || usdcAlreadyHere.length > 0)) {
+      const opsInputTokens = [...tokensToSwapToUSDC, ...usdcAlreadyHere];
+      const ops = estimateOperationsForChainWallet(
+        opsInputTokens.map((t) => ({
+          token: t.token,
+          symbol: t.symbol,
+          decimals: t.decimals,
+          amount: t.amount,
+        })),
+        chainId,
+        destinationToken.chainId,
+        chainUSDC,
+      );
+      const gasCost = await estimateChainGasCosts(chainId, ops, gasCtx.maxFeePerGas[chainId]);
+
+      const chain = chains[chainId as keyof typeof chains];
+      const nativeBalance = await getNativeBalance(
+        chain,
+        walletAddress,
+        transports?.[chainId as keyof typeof transports],
+      );
+      const nativeIdx = tokensToSwapToUSDC.findIndex((t) => isAddressEqual(t.token, zeroAddress));
+
+      if (nativeIdx >= 0) {
+        const nativeToken = tokensToSwapToUSDC[nativeIdx];
+        const maxAffordable = nativeBalance > gasCost.totalGasCost ? nativeBalance - gasCost.totalGasCost : 0n;
+
+        if (nativeToken.amount > maxAffordable) {
+          log(
+            `🔍 [DEBUG] Adjusting native token on chain ${chainId}: selected=${nativeToken.amount.toString()}, maxAffordable=${maxAffordable.toString()}, gasCost=${gasCost.totalGasCost.toString()}`,
+          );
+          if (maxAffordable <= 0n) {
+            tokensToSwapToUSDC.splice(nativeIdx, 1);
+          } else {
+            tokensToSwapToUSDC[nativeIdx] = { ...nativeToken, amount: maxAffordable };
+          }
+        }
+      } else if (nativeBalance < gasCost.totalGasCost) {
+        // No native token being swapped (e.g. USDC-only or ERC20-only wallet)
+        // — ensure wallet has enough native for the swap/bridge gas.
+        throwInsufficientGas(chainId, walletAddress, gasCost.totalGasCost);
+      }
     }
 
     // Create swap steps to USDC
@@ -562,6 +641,9 @@ async function createFinalSwaps(
   steps: TransactionStep[],
   tokens: TokenAmount[],
   destinationToken: DestinationToken,
+  gasCtx: GasContext,
+  hasBridges: boolean,
+  needsFinalTransfer: boolean,
   log: (...args: unknown[]) => void,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
   log(
@@ -600,8 +682,51 @@ async function createFinalSwaps(
       })),
     );
 
+    // Adjust native token on destination chain for gas. Only relevant when the
+    // user holds native (zeroAddress) on the dest chain AND the destination token
+    // is not native — in the latter case the user wants to KEEP their native.
+    const tokensToProcess = [...consolidatedTokens];
+    const destIsNative = isAddressEqual(destinationToken.token, zeroAddress);
+    const nativeIdx = destIsNative ? -1 : tokensToProcess.findIndex((t) => isAddressEqual(t.token, zeroAddress));
+
+    if (nativeIdx >= 0) {
+      const nativeToken = tokensToProcess[nativeIdx];
+      const destChainId = destinationToken.chainId;
+      const tokensNeedingSwap = tokensToProcess.filter((t) => !isAddressEqual(t.token, destinationToken.token));
+      const nonNativeSwapCount = tokensNeedingSwap.filter((t) => !isAddressEqual(t.token, zeroAddress)).length;
+      const hasNativeInSwap = tokensNeedingSwap.some((t) => isAddressEqual(t.token, zeroAddress));
+
+      const destOps = estimateDestinationChainOperations(
+        hasBridges,
+        nonNativeSwapCount,
+        hasNativeInSwap,
+        needsFinalTransfer,
+        destIsNative,
+      );
+
+      const gasCost = await estimateChainGasCosts(destChainId, destOps, gasCtx.maxFeePerGas[destChainId]);
+      const chain = chains[destChainId as keyof typeof chains];
+      const nativeBalance = await getNativeBalance(
+        chain,
+        walletAddress,
+        transports?.[destChainId as keyof typeof transports],
+      );
+      const maxAffordable = nativeBalance > gasCost.totalGasCost ? nativeBalance - gasCost.totalGasCost : 0n;
+
+      if (nativeToken.amount > maxAffordable) {
+        log(
+          `🔍 [DEBUG] Adjusting native token on dest chain ${destChainId}: selected=${nativeToken.amount.toString()}, maxAffordable=${maxAffordable.toString()}, gasCost=${gasCost.totalGasCost.toString()}`,
+        );
+        if (maxAffordable <= 0n) {
+          tokensToProcess.splice(nativeIdx, 1);
+        } else {
+          tokensToProcess[nativeIdx] = { ...nativeToken, amount: maxAffordable };
+        }
+      }
+    }
+
     // Use shared logic to create swaps and transfers
-    const walletOutputs = await createSwapsAndTransfers(consolidatedTokens, destinationToken, steps, log);
+    const walletOutputs = await createSwapsAndTransfers(tokensToProcess, destinationToken, steps, log);
 
     allOutputTokens.push(...walletOutputs);
   }
@@ -731,21 +856,37 @@ export async function planConsolidation(
   // Validate inputs
   validateInputs(sourceTokens, destinationToken, connectedWallets, log);
 
-  // Ensure sufficient gas for source wallets and find a suitable intermediate wallet
-  await ensureSufficientGas(
-    sourceTokens.map((token) => [token.chainId, token.walletAddress]),
-    transports,
-  );
-  const intermediateWallet = await resolveIntermediateWallet(sourceTokens, destinationToken, connectedWallets);
+  // Build gas context for all involved chains (fetches gas prices + native token prices)
+  const allChainIds = [...new Set([...sourceTokens.map((t) => t.chainId), destinationToken.chainId])];
+  const gasCtx = await buildGasContext(allChainIds);
+
+  // Find a suitable intermediate wallet using gas estimation
+  const intermediateWallet = await resolveIntermediateWallet(sourceTokens, destinationToken, connectedWallets, gasCtx);
   const intermediateToken = { ...destinationToken, walletAddress: intermediateWallet };
-  // Build consolidation pipeline
-  let { steps, tokens } = await processChainWalletSwaps(sourceTokens, intermediateToken, log);
+
+  // Build consolidation pipeline (gas-adjusted)
+  let { steps, tokens } = await processChainWalletSwaps(sourceTokens, intermediateToken, gasCtx, log);
   ({ steps, tokens } = await createBridgeSteps(steps, tokens, intermediateToken, log));
   ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, intermediateToken));
-  ({ steps, tokens } = await createFinalSwaps(steps, tokens, intermediateToken, log));
-  if (!isAddressEqual(intermediateWallet, destinationToken.walletAddress)) {
+
+  const hasBridges = steps.some((s) => s.type === "bridge");
+  const needsFinalTransfer = !isAddressEqual(intermediateWallet, destinationToken.walletAddress);
+  ({ steps, tokens } = await createFinalSwaps(
+    steps,
+    tokens,
+    intermediateToken,
+    gasCtx,
+    hasBridges,
+    needsFinalTransfer,
+    log,
+  ));
+
+  if (needsFinalTransfer) {
     ({ steps, tokens } = await createFinalTransfer(steps, tokens, destinationToken, log));
   }
+
+  // Attach per-step gas estimates for UI display
+  attachGasEstimates(steps, gasCtx);
 
   // Validate plan constraints
   const attestationSteps = steps.filter((s) => s.type === "attestation");
@@ -759,6 +900,9 @@ export async function planConsolidation(
       id: s.id,
       type: s.type,
       chainId: s.chainId,
+      estimatedGas: s.estimatedGas
+        ? { gasCostWei: s.estimatedGas.gasCostWei.toString(), gasCostUsd: s.estimatedGas.gasCostUsd }
+        : null,
       inputTokens: s.inputTokens.map((t) => ({
         symbol: t.symbol,
         amount: t.amount.toString(),

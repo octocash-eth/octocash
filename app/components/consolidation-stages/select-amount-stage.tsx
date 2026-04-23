@@ -1,5 +1,4 @@
 import * as React from "react";
-import { formatUnits, parseUnits, zeroAddress } from "viem";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
 import { ChainIcon } from "~/components/chain/chain-icon";
 import type { TokenWithConsolidateAmount } from "~/components/consolidate-tokens-modal";
@@ -12,7 +11,6 @@ import {
   TokenDisplayRoot,
   TokenDisplaySymbol,
 } from "~/components/token";
-import { getGasThresholdForChain } from "~/data/gas-thresholds";
 import { formatTokenAmount, formatUsd, getChainName, getTokenAmountInUsd, getTokenId } from "~/lib/tokens";
 
 interface SelectAmountStageProps {
@@ -20,30 +18,10 @@ interface SelectAmountStageProps {
   onAmountsChange: (amounts: Record<string, string>) => void;
 }
 
-// Helper function to calculate maximum consolidatable amount
-// For native tokens, we need to reserve gas for transactions
+// Full balance is selectable for all tokens (gas costs are estimated during planning)
 function calculateMaxConsolidatableAmount(token: TokenWithConsolidateAmount, requestedAmount?: string): string {
-  const isNativeToken = token.token === zeroAddress;
   const fullAmount = formatTokenAmount(token);
-
-  // For ERC-20 tokens, all amount is available (no gas reservation needed)
-  if (!isNativeToken) {
-    return requestedAmount ?? fullAmount;
-  }
-
-  // For native tokens, subtract gas threshold using bigint arithmetic
-  const gasThreshold = getGasThresholdForChain(token.chainId);
-  const gasReserveWei = parseUnits(gasThreshold, token.decimals);
-  const maxAvailableWei = token.amount > gasReserveWei ? token.amount - gasReserveWei : 0n;
-
-  // If a requested amount is provided, return the minimum of requested and available
-  if (requestedAmount) {
-    const requestedWei = parseUnits(requestedAmount, token.decimals);
-    const resultWei = requestedWei < maxAvailableWei ? requestedWei : maxAvailableWei;
-    return formatUnits(resultWei, token.decimals);
-  }
-
-  return formatUnits(maxAvailableWei, token.decimals);
+  return requestedAmount ?? fullAmount;
 }
 
 export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStageProps) {
@@ -129,11 +107,6 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
                 <div className="text-right">
                   <div className="font-medium">{formatUsd(currentUsdValue)}</div>
                   <div className="text-xs text-muted-foreground">of {formatUsd(totalUsdValue)}</div>
-                  {token.token === zeroAddress && (
-                    <div className="text-[10px] text-muted-foreground mt-1">
-                      {getGasThresholdForChain(token.chainId)} {token.symbol} reserved for gas
-                    </div>
-                  )}
                 </div>
               </div>
 

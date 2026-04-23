@@ -2,6 +2,7 @@ import type { Account, Address, Call, Chain, Hex, HttpTransport, WalletClient } 
 import { encodeFunctionData, parseAbi } from "viem";
 import { estimateGas, waitForTransactionReceipt } from "viem/actions";
 import { chains } from "~/data/supported-chains";
+import { getPublicClient } from "./public-client";
 
 /**
  * Multicall3 contract address (same across all chains)
@@ -24,6 +25,7 @@ export const switchChain = async (client: WalletClient<HttpTransport, Chain, Acc
 
 /**
  * Estimates gas for a transaction and sends it with a 20% buffer.
+ * Also sets explicit maxFeePerGas/maxPriorityFeePerGas for precise cost control.
  * If gas estimation fails, continues without explicit gas limit.
  */
 const estimateAndSendTransaction = async (
@@ -36,8 +38,10 @@ const estimateAndSendTransaction = async (
     chain: Chain;
   },
 ): Promise<Hex> => {
-  // Estimate gas with 20% buffer
   let gas: bigint | undefined;
+  let maxFeePerGas: bigint | undefined;
+  let maxPriorityFeePerGas: bigint | undefined;
+
   try {
     const estimatedGas = await estimateGas(client, {
       account: params.account,
@@ -47,17 +51,26 @@ const estimateAndSendTransaction = async (
     });
     gas = (estimatedGas * 120n) / 100n;
   } catch {
-    // Continue without explicit gas limit if estimation fails
     gas = undefined;
   }
 
-  // Send transaction
+  try {
+    const publicClient = getPublicClient(params.chain.id);
+    const fees = await publicClient.estimateFeesPerGas();
+    maxFeePerGas = fees.maxFeePerGas ?? undefined;
+    maxPriorityFeePerGas = fees.maxPriorityFeePerGas ?? undefined;
+  } catch {
+    // Fall back to wallet/RPC defaults
+  }
+
   return await client.sendTransaction({
     account: params.account,
     to: params.to,
     data: params.data,
     value: params.value,
     gas,
+    maxFeePerGas,
+    maxPriorityFeePerGas,
     chain: params.chain,
   });
 };

@@ -51,6 +51,17 @@ export type SourceToken = TokenAmount;
 export type DestinationToken = Omit<TokenAmount, "amount">;
 
 /**
+ * Estimated gas cost for a single transaction step
+ */
+export interface StepGasEstimate {
+  gasUnits: bigint;
+  maxFeePerGas: bigint;
+  gasCostWei: bigint;
+  gasCostUsd: number;
+  nativeSymbol: string;
+}
+
+/**
  * Single operation in the consolidation plan
  */
 export interface TransactionStep {
@@ -62,6 +73,9 @@ export interface TransactionStep {
   // Input/Output
   inputTokens: [TokenAmount, ...TokenAmount[]]; // Tokens consumed by this step (minimum one)
   outputToken: TokenAmount; // Token produced (estimated pre-exec, actual post-exec)
+
+  // Gas estimation (populated during planning, omitted for attestation steps)
+  estimatedGas?: StepGasEstimate;
 
   // Execution details
   transactionHash?: string; // Blockchain tx hash (after execution)

@@ -145,4 +145,30 @@ describe("PlanCard", () => {
     expect(screen.queryByText(/Failed/i)).not.toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument(); // Step number badge
   });
+
+  test("renders gas cost icon when estimatedGas is present", () => {
+    const stepWithGas: TransactionStep = {
+      ...mockStep,
+      estimatedGas: {
+        gasUnits: 500000n,
+        maxFeePerGas: 20000000000n,
+        gasCostWei: 13000000000000000n, // ~0.013 ETH
+        gasCostUsd: 26,
+        nativeSymbol: "ETH",
+      },
+    };
+
+    const { container } = render(<PlanCard step={stepWithGas} stepNumber={1} />);
+
+    // The Fuel icon should be present (lucide renders as svg)
+    const fuelIcon = container.querySelector("svg.lucide-fuel");
+    expect(fuelIcon).toBeInTheDocument();
+  });
+
+  test("does not render gas cost icon when estimatedGas is absent", () => {
+    const { container } = render(<PlanCard step={mockStep} stepNumber={1} />);
+
+    const fuelIcon = container.querySelector("svg.lucide-fuel");
+    expect(fuelIcon).not.toBeInTheDocument();
+  });
 });

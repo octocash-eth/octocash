@@ -1,7 +1,15 @@
 import type { Account, Chain, HttpTransport, WalletClient } from "viem";
-import { type Call, encodeFunctionData, parseAbi, zeroAddress } from "viem";
+import { type Call, encodeFunctionData, isAddressEqual, parseAbi, zeroAddress } from "viem";
+import { chains, transports } from "~/data/supported-chains";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import { createTransactionError } from "./errors";
+import { getNativeBalance } from "./gas";
+import {
+  estimateChainGasCosts,
+  fetchMaxFeePerGas,
+  InsufficientNativeForGasError,
+  type OperationType,
+} from "./gas-estimation";
 import { executeOdosSwap, getSwapQuote } from "./odos";
 import { prepareSendCalls } from "./send-calls";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
@@ -242,6 +250,110 @@ async function refreshSwapQuoteIfNeeded(step: TransactionStep, isRetrying: boole
 }
 
 /**
+ * Re-estimates gas at execution time and adjusts the native token amount if the
+ * planned amount can no longer be afforded (e.g. gas prices rose since planning).
+ * Only intervenes when adjustedNativeAmount < selectedAmount.
+ */
+async function adjustNativeTokenForGas(
+  tokens: [TokenAmount, ...TokenAmount[]],
+  step: TransactionStep,
+  state: ConsolidationState,
+): Promise<[TokenAmount, ...TokenAmount[]]> {
+  const nativeIdx = tokens.findIndex((t) => isAddressEqual(t.token, zeroAddress));
+  if (nativeIdx < 0) return tokens;
+
+  const nativeToken = tokens[nativeIdx];
+  const chainId = step.chainId;
+
+  // Estimate gas for remaining operations on this chain
+  const remainingOps = estimateRemainingChainOps(step, state);
+  if (remainingOps.length === 0) return tokens;
+
+  let balance: bigint;
+  let totalGasCost: bigint;
+  try {
+    const maxFeePerGas = await fetchMaxFeePerGas(chainId);
+    const gasCost = await estimateChainGasCosts(chainId, remainingOps, maxFeePerGas);
+    totalGasCost = gasCost.totalGasCost;
+
+    const chain = chains[chainId as keyof typeof chains];
+    balance = await getNativeBalance(
+      chain,
+      nativeToken.walletAddress,
+      transports?.[chainId as keyof typeof transports],
+    );
+  } catch (error) {
+    // RPC failure during pre-flight gas check: log and fall back to the planned
+    // amount. The transaction itself will surface a meaningful error if it
+    // genuinely lacks gas.
+    console.warn(`[execution] gas re-estimation failed for chain ${chainId}, proceeding with planned amounts`, error);
+    return tokens;
+  }
+
+  const adjustedAmount = balance > totalGasCost ? balance - totalGasCost : 0n;
+  if (adjustedAmount >= nativeToken.amount) return tokens;
+
+  // Gas costs eat into the planned swap amount
+  const adjusted = [...tokens] as [TokenAmount, ...TokenAmount[]];
+  if (adjustedAmount <= 0n) {
+    adjusted.splice(nativeIdx, 1);
+    if (adjusted.length === 0) {
+      throw new InsufficientNativeForGasError(
+        `Cannot execute swap on chain ${chainId}: all native token reserved for gas (balance=${balance}, required=${totalGasCost})`,
+        chainId,
+        nativeToken.walletAddress,
+      );
+    }
+  } else {
+    adjusted[nativeIdx] = { ...nativeToken, amount: adjustedAmount };
+  }
+  return adjusted;
+}
+
+/**
+ * Determines remaining gas-consuming operations on the same chain as the given step.
+ */
+function estimateRemainingChainOps(currentStep: TransactionStep, state: ConsolidationState): OperationType[] {
+  const ops: OperationType[] = [];
+  const chainId = currentStep.chainId;
+  let foundCurrent = false;
+
+  for (const planStep of state.plan) {
+    if (planStep.id === currentStep.id) {
+      foundCurrent = true;
+    }
+    if (!foundCurrent) continue;
+    if (planStep.chainId !== chainId) continue;
+    // Only "pending", "executing", and "failed" (retry candidates) consume gas going forward.
+    if (planStep.status === "success" || planStep.status === "skipped") continue;
+
+    switch (planStep.type) {
+      case "swap":
+        for (const input of planStep.inputTokens) {
+          if (!isAddressEqual(input.token, zeroAddress)) ops.push("erc20-approval");
+        }
+        ops.push(planStep.inputTokens.length > 1 ? "swap-multi" : "swap");
+        break;
+      case "bridge":
+        ops.push("cctp-approval", "cctp-burn");
+        break;
+      case "claim":
+        ops.push("cctp-claim");
+        break;
+      case "transfer": {
+        const firstToken = planStep.inputTokens[0];
+        if (firstToken) {
+          ops.push(isAddressEqual(firstToken.token, zeroAddress) ? "transfer-native" : "transfer-erc20");
+        }
+        break;
+      }
+    }
+  }
+
+  return ops;
+}
+
+/**
  * Execute a single transaction step
  * @param step - Transaction step
  * @param state - Consolidation state
@@ -258,7 +370,16 @@ async function executeStep(
   switch (step.type) {
     case "swap": {
       // Filter out tokens with zero amounts
-      const nonZeroTokens = filterZeroAmounts(step.inputTokens, step.id, "swap");
+      let nonZeroTokens = filterZeroAmounts(step.inputTokens, step.id, "swap");
+
+      // Re-adjust native token amount at execution time if needed (gas prices may
+      // have moved since planning). We mutate the step in place so downstream
+      // recalculatePlan() sees the adjusted inputs.
+      const adjustedTokens = await adjustNativeTokenForGas(nonZeroTokens, step, state);
+      if (adjustedTokens !== nonZeroTokens) {
+        nonZeroTokens = adjustedTokens;
+        step.inputTokens = adjustedTokens;
+      }
 
       // Execute swap using Odos with non-zero tokens
       const { amount: actualAmount, transactionHash } = await executeOdosSwap(
@@ -270,7 +391,7 @@ async function executeStep(
       const actualOutput: TokenAmount = {
         ...step.outputToken,
         amount: actualAmount,
-        provenance: step.id, // When swap is successful, the amount of all dependent steps will update
+        provenance: step.id,
       };
 
       return {
@@ -433,7 +554,7 @@ async function executeStep(
 
       // Build transfer call - handle native tokens (ETH) specially
       const calls: Call[] = [];
-      if (step.outputToken.token === zeroAddress) {
+      if (isAddressEqual(step.outputToken.token, zeroAddress)) {
         // Native token (ETH) - simple value transfer
         calls.push({
           to: step.outputToken.walletAddress,

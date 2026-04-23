@@ -12,6 +12,16 @@ vi.mock("viem/actions", async () => {
   };
 });
 
+// Mock public-client for fee estimation
+vi.mock("./public-client", () => ({
+  getPublicClient: vi.fn().mockReturnValue({
+    estimateFeesPerGas: vi.fn().mockResolvedValue({
+      maxFeePerGas: 20000000000n,
+      maxPriorityFeePerGas: 1000000000n,
+    }),
+  }),
+}));
+
 // Import mocked estimateGas
 import { estimateGas } from "viem/actions";
 

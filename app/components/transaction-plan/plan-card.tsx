@@ -1,9 +1,11 @@
-import { Check, Circle, ExternalLink, Loader2, X } from "lucide-react";
+import { Check, Circle, ExternalLink, Fuel, Loader2, X } from "lucide-react";
+import { formatUnits } from "viem";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
 import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "~/components/token";
+import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { chains } from "~/data/supported-chains";
-import { consolidateTokenAmounts } from "~/lib/tokens";
-import type { StepResult, TransactionStep } from "~/lib/types";
+import { consolidateTokenAmounts, formatUsd } from "~/lib/tokens";
+import type { StepGasEstimate, StepResult, TransactionStep } from "~/lib/types";
 import { ChainIcon } from "../chain/chain-icon";
 
 interface PlanCardProps {
@@ -178,6 +180,33 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
   }
 }
 
+function GasCostTooltip({ gas }: { gas: StepGasEstimate }) {
+  const nativeAmount = Number.parseFloat(formatUnits(gas.gasCostWei, 18));
+  const gweiPrice = Number.parseFloat(formatUnits(gas.maxFeePerGas, 9));
+  const hasUsd = gas.gasCostUsd > 0;
+
+  const ariaLabel = hasUsd
+    ? `Estimated gas: ${nativeAmount.toFixed(6)} ${gas.nativeSymbol} (~${formatUsd(gas.gasCostUsd)})`
+    : `Estimated gas: ${nativeAmount.toFixed(6)} ${gas.nativeSymbol}`;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex items-center cursor-help" aria-label={ariaLabel} role="img">
+          <Fuel className="w-3.5 h-3.5 text-muted-foreground" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="space-y-1">
+        <div className="font-medium">
+          ~{nativeAmount.toFixed(6)} {gas.nativeSymbol}
+        </div>
+        <div className="text-muted-foreground">{gweiPrice.toFixed(2)} gwei</div>
+        {hasUsd && <div className="text-muted-foreground">~{formatUsd(gas.gasCostUsd)}</div>}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
   const isPending = step.status === "pending";
   const isExecuting = step.status === "executing";
@@ -209,8 +238,9 @@ export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
         </div>
       </div>
 
-      {/* Right side: Transaction link or status */}
+      {/* Right side: Gas cost + Transaction link or status */}
       <div className="flex items-center gap-2 shrink-0 ml-4">
+        {step.estimatedGas && <GasCostTooltip gas={step.estimatedGas} />}
         {isSuccess && result?.transactionHash && (
           <a
             href={getExplorerUrl(step.chainId, result.transactionHash)}

@@ -1,32 +1,11 @@
-import { type Address, parseUnits, type Transport, zeroAddress } from "viem";
+import { type Address, parseUnits, type Transport } from "viem";
 import { mainnet, optimism } from "viem/chains";
 import { beforeAll, describe, expect, test } from "vitest";
 import { getTestClients } from "../integration-global-setup";
-import { ensureSufficientGas, getNativeBalance } from "../../app/lib/gas";
+import { getNativeBalance } from "../../app/lib/gas";
 
 const { testClient: mainnetTestClient, transport: mainnetTransport } = getTestClients(mainnet.id);
 const { testClient: optimismTestClient, transport: optimismTransport } = getTestClients(optimism.id);
-
-const transports: Record<number, Transport> = { [mainnet.id]: mainnetTransport, [optimism.id]: optimismTransport };
-
-const tokensIn = [
-  {
-    chainId: mainnet.id,
-    walletAddress: "0xc30b007BC349d52850207F78c63b4bd0c823F122" as Address,
-    token: zeroAddress,
-    amount: 0n,
-    symbol: "ETH",
-    decimals: 18,
-  },
-];
-const tokenOut = {
-  chainId: optimism.id,
-  walletAddress: "0x19afE793Fb51902883F68f06685aE5277aF13857" as Address,
-  token: zeroAddress,
-  amount: 0n,
-  symbol: "ETH",
-  decimals: 18,
-};
 
 describe("gas", () => {
   beforeAll(async () => {
@@ -56,14 +35,6 @@ describe("gas", () => {
         optimismTransport,
       );
       expect(balance3).toBe(parseUnits("0", 18));
-    });
-  });
-
-  describe("ensureSufficientGas", () => {
-    test("should not throw an error if the gas is sufficient", async () => {
-      const chainAddresses = tokensIn.map((token) => [token.chainId, token.walletAddress]) as [number, Address][];
-      chainAddresses.push([tokenOut.chainId, tokenOut.walletAddress]);
-      await expect(ensureSufficientGas(chainAddresses, transports)).resolves.not.toThrow();
     });
   });
 });

@@ -74,7 +74,7 @@ export function GatedConnectButton() {
 
   const handleChangeAddresses = async () => {
     try {
-      await window.ethereum.request({
+      await window.ethereum?.request({
         method: "wallet_requestPermissions",
         params: [{ eth_accounts: {} }],
       });

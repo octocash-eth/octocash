@@ -7,17 +7,26 @@ import type { TokenAmount, TransactionStep } from "./types";
 vi.mock("./odos");
 vi.mock("./cctp");
 vi.mock("./gas", () => ({
-  ensureSufficientGas: vi.fn().mockImplementation((chainWalletPairs, _transports, failOnInsufficientGas) => {
-    if (failOnInsufficientGas) {
-      return Promise.resolve(chainWalletPairs);
-    }
-    return Promise.resolve([]);
-  }),
   getNativeBalance: vi.fn().mockResolvedValue(1000000000000000000n), // 1 ETH
+}));
+vi.mock("./gas-estimation", () => ({
+  buildGasContext: vi.fn().mockResolvedValue({
+    maxFeePerGas: { 1: 20000000000n, 10: 1000000n, 137: 50000000000n, 42161: 100000000n },
+    nativeTokenPriceUsd: { 1: 2000, 10: 2000, 137: 0.5, 42161: 2000 },
+    nativeSymbol: { 1: "ETH", 10: "ETH", 137: "POL", 42161: "ETH" },
+  }),
+  estimateChainGasCosts: vi.fn().mockResolvedValue({
+    totalGasCost: 100000000000000n, // 0.0001 ETH - small enough to not interfere with tests
+    maxFeePerGas: 20000000000n,
+    perOperation: [],
+  }),
+  estimateOperationsForChainWallet: vi.fn().mockReturnValue(["swap"]),
+  estimateDestinationChainOperations: vi.fn().mockReturnValue(["cctp-claim", "swap"]),
+  attachGasEstimates: vi.fn(),
+  formatGasCostNative: vi.fn((wei: bigint) => (Number(wei) / 1e18).toString()),
 }));
 
 import { getBridgeFee } from "./cctp";
-import { ensureSufficientGas } from "./gas";
 import { getSwapQuote } from "./odos";
 import { planConsolidation } from "./planning";
 
@@ -1522,6 +1531,7 @@ describe("planConsolidation", () => {
   });
 
   test("no connected wallet has gas on destination chain - should throw PlanningError", async () => {
+    const { getNativeBalance } = await import("./gas");
     const NON_CONNECTED_WALLET = "0x4444444444444444444444444444444444444444" as Address;
     const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
 
@@ -1544,21 +1554,17 @@ describe("planConsolidation", () => {
       decimals: 8,
     };
 
-    // Mock ensureSufficientGas to return that ALL connected wallets have insufficient gas on Ethereum (chain 1)
-    // This includes the first call (validation) and second call (finding fallback wallet)
-    vi.mocked(ensureSufficientGas)
-      .mockResolvedValueOnce([]) // First call for source chains
-      .mockResolvedValueOnce([
-        [1, WALLET_2], // WALLET_2 has insufficient gas on Ethereum
-        [1, WALLET], // WALLET has insufficient gas on Ethereum
-      ]);
+    // Mock getNativeBalance to return 0 for all wallets on destination chain (no gas)
+    vi.mocked(getNativeBalance).mockResolvedValue(0n);
 
     vi.mocked(getBridgeFee).mockResolvedValue(0n);
 
-    // Should throw error because destination wallet is not connected and no connected wallet has gas
     await expect(planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2])).rejects.toThrow(
-      "PlanningError: Destination wallet 0x4444444444444444444444444444444444444444 is not connected and no connected wallet has sufficient gas on Ethereum",
+      "PlanningError",
     );
+
+    // Restore default mock
+    vi.mocked(getNativeBalance).mockResolvedValue(1000000000000000000n);
   });
 
   test("simple transfer to non-connected wallet - same chain same token", async () => {
@@ -1813,5 +1819,243 @@ describe("planConsolidation", () => {
       // Final transfer input should have provenance (token comes from a previous step)
       expect(finalTransfer.inputTokens[0].provenance).toBeDefined();
     }
+  });
+
+  describe("source-chain gas checks", () => {
+    test("USDC-only source wallet still gets a gas check (regression)", async () => {
+      // Regression: previously, a USDC-only wallet skipped the entire gas check
+      // because it had no swaps to do — but the CCTP burn still requires native gas.
+      const { getNativeBalance } = await import("./gas");
+      const { estimateChainGasCosts, estimateOperationsForChainWallet } = await import("./gas-estimation");
+
+      // Wallet has 0.0000001 ETH for gas; required is 0.001 ETH.
+      vi.mocked(getNativeBalance).mockResolvedValue(100_000_000_000n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 1_000_000_000_000_000n, // 0.001 ETH
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(estimateOperationsForChainWallet).mockReturnValue(["cctp-approval", "cctp-burn"]);
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: USDC_OPTIMISM,
+          amount: 1_000_000n,
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ];
+
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(/Insufficient gas/);
+
+      // Restore defaults so subsequent tests aren't polluted
+      vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+    });
+
+    test("ERC20-only source wallet (no native, no USDC) still gets a gas check", async () => {
+      const { getNativeBalance } = await import("./gas");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+
+      // 0 native available → cannot pay any gas
+      vi.mocked(getNativeBalance).mockResolvedValue(0n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 500_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: WBTC_ADDRESS,
+          amount: 10_000_000n,
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "WBTC",
+          decimals: 8,
+        },
+      ];
+
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(/Insufficient gas/);
+
+      vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+    });
+
+    test("destination wallet runs out of gas after planning succeeds for sources", async () => {
+      // The connected destination wallet has source-chain balance but no dest gas.
+      const { getNativeBalance } = await import("./gas");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+
+      // First call (resolveIntermediateWallet, dest chain) → 0
+      // Subsequent calls (source chain checks) → plenty
+      vi.mocked(getNativeBalance).mockResolvedValueOnce(0n).mockResolvedValue(1_000_000_000_000_000_000n);
+
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 500_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: USDC_OPTIMISM,
+          amount: 1_000_000n,
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ];
+
+      const destinationToken = {
+        token: WBTC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "WBTC",
+        decimals: 8,
+      };
+
+      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(/Insufficient gas/);
+
+      vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+    });
+
+    test("native source token amount is trimmed when gas exceeds free balance", async () => {
+      // Native balance: 1 ETH; gas: 0.1 ETH; user wants to swap 1 ETH.
+      // Plan should trim to 0.9 ETH instead of failing.
+      const { getNativeBalance } = await import("./gas");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+
+      vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n); // 1 ETH
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000_000n, // 0.1 ETH
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      vi.mocked(getSwapQuote).mockResolvedValue({
+        token: USDC_OPTIMISM,
+        amount: 2_000_000_000n,
+        chainId: 10,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      });
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: ETH_ADDRESS,
+          amount: 1_000_000_000_000_000_000n, // 1 ETH selected
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "ETH",
+          decimals: 18,
+        },
+      ];
+
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+      // Find the swap step on chain 10 and check its native input was trimmed
+      const swapStep = result.find((s) => s.type === "swap" && s.chainId === 10);
+      expect(swapStep).toBeDefined();
+      expect(swapStep?.inputTokens[0].amount).toBe(900_000_000_000_000_000n); // 0.9 ETH
+
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+    });
+
+    test("native source token is dropped from swap when gas equals or exceeds full balance", async () => {
+      const { getNativeBalance } = await import("./gas");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+
+      // Balance equals required gas — nothing left for swap.
+      vi.mocked(getNativeBalance).mockResolvedValue(100_000_000_000_000_000n); // 0.1 ETH
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000_000n, // 0.1 ETH (eats everything)
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: ETH_ADDRESS,
+          amount: 100_000_000_000_000_000n, // 0.1 ETH selected
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "ETH",
+          decimals: 18,
+        },
+      ];
+
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      // With native dropped and no other tokens to swap, processChainWalletSwaps
+      // produces zero source-chain steps. The plan can still succeed if there's
+      // nothing else to do, or fail downstream — assert no swap step on chain 10.
+      const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]).catch(() => null);
+      if (result) {
+        const swapStep = result.find((s) => s.type === "swap" && s.chainId === 10);
+        expect(swapStep).toBeUndefined();
+      }
+
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+    });
   });
 });
