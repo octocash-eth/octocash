@@ -3,12 +3,13 @@ import type { WaitForTransactionReceiptReturnType } from "viem/actions";
 import { beforeEach, describe, expect, type Mock, test, vi } from "vitest";
 import { prepareSendCalls, switchChain } from "./send-calls";
 
-// Mock the estimateGas function
+// Mock the estimateGas and getTransactionCount functions
 vi.mock("viem/actions", async () => {
   const actual = await vi.importActual("viem/actions");
   return {
     ...actual,
     estimateGas: vi.fn(),
+    getTransactionCount: vi.fn().mockResolvedValue(0),
   };
 });
 
@@ -22,8 +23,8 @@ vi.mock("./public-client", () => ({
   }),
 }));
 
-// Import mocked estimateGas
-import { estimateGas } from "viem/actions";
+// Import mocked actions
+import { estimateGas, getTransactionCount } from "viem/actions";
 
 // Mock wallet client helper
 const createMockWalletClient = () => {
@@ -98,6 +99,8 @@ describe("sendCalls", () => {
       mockWaitForReceipt = vi.fn();
       vi.mocked(estimateGas).mockReset();
       vi.mocked(estimateGas).mockResolvedValue(100000n);
+      vi.mocked(getTransactionCount).mockReset();
+      vi.mocked(getTransactionCount).mockResolvedValue(0);
     });
 
     describe("empty calls", () => {
@@ -576,6 +579,85 @@ describe("sendCalls", () => {
           // gas should not be set or be undefined
           const callArgs = vi.mocked(mockClient.sendTransaction).mock.calls[0][0];
           expect(callArgs.gas).toBeUndefined();
+        });
+
+        test("passes an explicit nonce fetched from our public RPC", async () => {
+          vi.mocked(getTransactionCount).mockResolvedValueOnce(7).mockResolvedValueOnce(8);
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xfirst").mockResolvedValueOnce("0xsecond");
+          mockWaitForReceipt
+            .mockResolvedValueOnce(createMockReceipt("success", []))
+            .mockResolvedValueOnce(createMockReceipt("success", []));
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [
+              { to: "0x1111111111111111111111111111111111111111", data: "0x" },
+              { to: "0x2222222222222222222222222222222222222222", data: "0x" },
+            ],
+            "atomic-steps",
+          );
+
+          expect(mockClient.sendTransaction).toHaveBeenNthCalledWith(1, expect.objectContaining({ nonce: 7 }));
+          expect(mockClient.sendTransaction).toHaveBeenNthCalledWith(2, expect.objectContaining({ nonce: 8 }));
+        });
+
+        test("retries once on nonce-too-low with a refreshed nonce", async () => {
+          vi.mocked(getTransactionCount)
+            .mockResolvedValueOnce(5) // initial nonce for the only call
+            .mockResolvedValueOnce(6); // refreshed nonce after retry
+          vi.mocked(mockClient.sendTransaction)
+            .mockRejectedValueOnce(new Error("nonce too low"))
+            .mockResolvedValueOnce("0xretried");
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+
+          const [tx] = await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+            "atomic-steps",
+          );
+
+          expect(tx).toBe("0xretried");
+          expect(mockClient.sendTransaction).toHaveBeenCalledTimes(2);
+          expect(mockClient.sendTransaction).toHaveBeenNthCalledWith(1, expect.objectContaining({ nonce: 5 }));
+          expect(mockClient.sendTransaction).toHaveBeenNthCalledWith(2, expect.objectContaining({ nonce: 6 }));
+        });
+
+        test("rethrows nonce-too-low when refreshed nonce did not advance", async () => {
+          vi.mocked(getTransactionCount).mockResolvedValue(5);
+          vi.mocked(mockClient.sendTransaction).mockRejectedValueOnce(new Error("nonce too low"));
+
+          await expect(
+            prepareSendCalls(mockClient, mockWaitForReceipt)(
+              "test",
+              1,
+              "0x0000000000000000000000000000000000000000",
+              [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+              "atomic-steps",
+            ),
+          ).rejects.toThrow("nonce too low");
+
+          expect(mockClient.sendTransaction).toHaveBeenCalledTimes(1);
+        });
+
+        test("does not retry on non-nonce errors", async () => {
+          vi.mocked(getTransactionCount).mockResolvedValue(5);
+          vi.mocked(mockClient.sendTransaction).mockRejectedValueOnce(new Error("user rejected"));
+
+          await expect(
+            prepareSendCalls(mockClient, mockWaitForReceipt)(
+              "test",
+              1,
+              "0x0000000000000000000000000000000000000000",
+              [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+              "atomic-steps",
+            ),
+          ).rejects.toThrow("user rejected");
+
+          expect(mockClient.sendTransaction).toHaveBeenCalledTimes(1);
         });
       });
 

@@ -1,8 +1,45 @@
-import type { Account, Address, Call, Chain, Hex, HttpTransport, WalletClient } from "viem";
-import { encodeFunctionData, parseAbi } from "viem";
-import { estimateGas, waitForTransactionReceipt } from "viem/actions";
+import type { Account, Address, Call, Chain, Client, Hex, HttpTransport, WalletClient } from "viem";
+import { BaseError, encodeFunctionData, parseAbi } from "viem";
+import { estimateGas, getTransactionCount, waitForTransactionReceipt } from "viem/actions";
 import { chains } from "~/data/supported-chains";
 import { getPublicClient } from "./public-client";
+
+/**
+ * Detects "nonce too low" errors thrown by the wallet/RPC.
+ * Walks viem's error cause chain so wrapped errors (TransactionExecutionError ->
+ * RpcRequestError -> NonceTooLowError) are correctly recognized.
+ */
+const isNonceTooLowError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) return false;
+  if (error instanceof BaseError) {
+    const found = error.walk((e) => (e as { name?: string }).name === "NonceTooLowError");
+    if (found) return true;
+  }
+  // Fallback to message inspection (covers RpcError shapes coming from wallet
+  // providers that viem hasn't wrapped into NonceTooLowError).
+  const msg = (error.message ?? "").toLowerCase();
+  return /nonce too low|transaction already imported|already known/.test(msg);
+};
+
+/**
+ * Fetches the next pending nonce for `account` via the wallet client's own
+ * transport. Using the wallet client (rather than a separately-configured
+ * public RPC) guarantees we query the same RPC that will process the send,
+ * which avoids divergence in test environments (e.g. local Anvil) and still
+ * bypasses the wallet's internal nonce cache in production by going straight
+ * to `eth_getTransactionCount`.
+ */
+const getNextNonce = async (
+  client: Client<HttpTransport, Chain, Account>,
+  account: Address,
+): Promise<number | undefined> => {
+  try {
+    return await getTransactionCount(client, { address: account, blockTag: "pending" });
+  } catch {
+    // If we can't fetch the nonce, fall back to letting the wallet pick it.
+    return undefined;
+  }
+};
 
 /**
  * Multicall3 contract address (same across all chains)
@@ -27,6 +64,13 @@ export const switchChain = async (client: WalletClient<HttpTransport, Chain, Acc
  * Estimates gas for a transaction and sends it with a 20% buffer.
  * Also sets explicit maxFeePerGas/maxPriorityFeePerGas for precise cost control.
  * If gas estimation fails, continues without explicit gas limit.
+ *
+ * Manages the nonce explicitly via `eth_getTransactionCount` against the
+ * wallet client's own transport (bypassing any wallet-internal nonce cache),
+ * and retries once on "nonce too low" errors with a freshly-fetched nonce.
+ * This defends against the race where back-to-back sends (e.g. approve +
+ * bridge) reuse the same nonce because the wallet hasn't yet seen the
+ * previously-included transaction.
  */
 const estimateAndSendTransaction = async (
   client: WalletClient<HttpTransport, Chain, Account>,
@@ -63,16 +107,36 @@ const estimateAndSendTransaction = async (
     // Fall back to wallet/RPC defaults
   }
 
-  return await client.sendTransaction({
-    account: params.account,
-    to: params.to,
-    data: params.data,
-    value: params.value,
-    gas,
-    maxFeePerGas,
-    maxPriorityFeePerGas,
-    chain: params.chain,
-  });
+  const send = (nonce: number | undefined) =>
+    client.sendTransaction({
+      account: params.account,
+      to: params.to,
+      data: params.data,
+      value: params.value,
+      gas,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+      nonce,
+      chain: params.chain,
+    });
+
+  let nonce = await getNextNonce(client, params.account);
+
+  try {
+    return await send(nonce);
+  } catch (error) {
+    if (!isNonceTooLowError(error)) throw error;
+    // Refresh nonce and retry once. The wallet's view (or our RPC's mempool
+    // view) may have been a fraction of a second behind a just-included tx.
+    const refreshed = await getNextNonce(client, params.account);
+    // Only retry if we actually got a strictly newer nonce; otherwise rethrow
+    // to avoid an infinite "nonce too low" loop against a stuck RPC.
+    if (refreshed === undefined || (nonce !== undefined && refreshed <= nonce)) {
+      throw error;
+    }
+    nonce = refreshed;
+    return await send(nonce);
+  }
 };
 
 export type SendCallsMode =
