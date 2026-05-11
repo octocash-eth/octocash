@@ -8,9 +8,33 @@ vi.mock("./odos");
 vi.mock("./cctp");
 vi.mock("./send-calls");
 
+// `validateInputBalances` (introduced for the unified-stall-CTA work) reads
+// on-chain balances via `getPublicClient(...).readContract` and
+// `getNativeBalance`. The unit suite isn't supposed to hit any RPC, and the
+// test wallet has zero balance on the real chain, so we stub both balance
+// sources to return arbitrarily large values. Tests that specifically want
+// to exercise the insufficient-balance path can override these per-test.
+vi.mock("./public-client", () => ({
+  getPublicClient: vi.fn(() => ({
+    readContract: vi.fn().mockResolvedValue(2n ** 128n),
+  })),
+}));
+vi.mock("./gas", () => ({
+  getNativeBalance: vi.fn().mockResolvedValue(2n ** 128n),
+}));
+
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
-import { executeConsolidationPlan, shouldSkipStep } from "./execution";
+import {
+  executeConsolidationPlan,
+  InsufficientInputBalanceError,
+  refreshPendingSteps,
+  refreshStep,
+  shouldSkipStep,
+  validateInputBalances,
+} from "./execution";
+import { getNativeBalance } from "./gas";
 import { executeOdosSwap, getSwapQuote } from "./odos";
+import { getPublicClient } from "./public-client";
 import { prepareSendCalls } from "./send-calls";
 
 describe("executeConsolidationPlan", () => {
@@ -28,8 +52,15 @@ describe("executeConsolidationPlan", () => {
       chain: { id: 1 } as Chain,
     } as WalletClient<HttpTransport, Chain, Account>;
 
-    // Default mock for getSwapQuote (used in recalculation)
-    vi.mocked(getSwapQuote).mockResolvedValue(makeToken(USDC_ADDRESS, 1000000n, 1));
+    // Default mock for getSwapQuote: return the requested output token
+    // unchanged. This makes the always-on `refreshStep` (called right
+    // before broadcast as part of the unified-stall-CTA work) a no-op, so
+    // tests that mock `getSwapQuote` ONCE for an explicit recalculation
+    // path keep seeing the expected single call against the recalculated
+    // amount. Tests that need different behavior override this per-call.
+    vi.mocked(getSwapQuote).mockImplementation(async (_inputs, output) => ({
+      ...(output as TokenAmount),
+    }));
 
     // Default execution mocks
     vi.mocked(executeOdosSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap123" });
@@ -212,8 +243,18 @@ describe("executeConsolidationPlan", () => {
       transactionHash: "0xswap1",
     });
 
-    // Mock recalculation quote for step 2
-    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(DAI_ADDRESS, 3100000000000000000000n, 1)); // 3100 DAI
+    // Recalculation quote for step 2: return 3100 DAI when re-quoting the
+    // DAI step. We use a smart implementation rather than `mockResolvedValueOnce`
+    // because the always-on `refreshStep` (introduced for the unified-stall-CTA
+    // work) calls `getSwapQuote` at every swap step's entry; we want this
+    // override to apply specifically to the DAI step's recalculation, not
+    // accidentally to step-1's WETH->USDC refresh.
+    vi.mocked(getSwapQuote).mockImplementation(async (_inputs, output) => {
+      if (output.token === DAI_ADDRESS) {
+        return makeToken(DAI_ADDRESS, 3100000000000000000000n, 1);
+      }
+      return { ...(output as TokenAmount) };
+    });
 
     // Mock swap 2: USDC -> DAI
     vi.mocked(executeOdosSwap).mockResolvedValueOnce({
@@ -748,7 +789,11 @@ describe("recalculatePlan - comprehensive coverage", () => {
       chain: { id: 1 } as Chain,
     } as WalletClient<HttpTransport, Chain, Account>;
 
-    vi.mocked(getSwapQuote).mockResolvedValue(makeToken(USDC_ADDRESS, 1000000n, 1));
+    // Same rationale as the outer beforeEach: return the requested output
+    // unchanged so the always-on `refreshStep` is a no-op.
+    vi.mocked(getSwapQuote).mockImplementation(async (_inputs, output) => ({
+      ...(output as TokenAmount),
+    }));
     vi.mocked(executeOdosSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap" });
     vi.mocked(executeCCTPBurn).mockResolvedValue(["0xburn", 1]);
     vi.mocked(retrieveAttestations).mockResolvedValue([
@@ -1671,7 +1716,11 @@ describe("Additional edge cases for complete coverage", () => {
       chain: { id: 1 } as Chain,
     } as WalletClient<HttpTransport, Chain, Account>;
 
-    vi.mocked(getSwapQuote).mockResolvedValue(makeToken(USDC_ADDRESS, 1000000n, 1));
+    // Same rationale as the outer beforeEach: return the requested output
+    // unchanged so the always-on `refreshStep` is a no-op.
+    vi.mocked(getSwapQuote).mockImplementation(async (_inputs, output) => ({
+      ...(output as TokenAmount),
+    }));
     vi.mocked(executeOdosSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap" });
     vi.mocked(executeCCTPBurn).mockResolvedValue(["0xburn", 1]);
     vi.mocked(retrieveAttestations).mockResolvedValue([
@@ -2121,19 +2170,24 @@ describe("Additional edge cases for complete coverage", () => {
     expect(finalState.results["step-1"].status).toBe("success");
   });
 
-  test("swap quote is NOT refreshed when quote is fresh and not retrying", async () => {
+  test("swap quote is ALWAYS refreshed right before broadcast (even when fresh and not retrying)", async () => {
+    // The unified-stall-CTA work replaces the old "refresh only when stale"
+    // behavior with an unconditional pre-broadcast refresh: the quote the
+    // user is about to sign against is always recently re-fetched, so the
+    // simulation that decides Resend vs Retry on a later stall is
+    // discriminating against an up-to-date original.
     const step1 = makeStep({
       id: "step-1",
       status: "pending",
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
-      quotedAt: Date.now(), // Fresh quote
+      quotedAt: Date.now(),
     });
 
     const state = makeState({
       plan: [step1],
       currentStepIndex: 0,
-      status: "ready", // Not retrying
+      status: "ready", // not retrying — the old gate would have skipped
       results: {},
       sourceTokens: [],
       destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
@@ -2144,8 +2198,9 @@ describe("Additional edge cases for complete coverage", () => {
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
-    // getSwapQuote should NOT be called (quote is fresh and not retrying)
-    expect(getSwapQuote).not.toHaveBeenCalled();
+    // getSwapQuote IS called now: refreshStep runs unconditionally on entry.
+    expect(getSwapQuote).toHaveBeenCalledTimes(1);
+    expect(getSwapQuote).toHaveBeenCalledWith(step1.inputTokens, step1.outputToken);
 
     expect(finalState.status).toBe("completed");
     expect(finalState.results["step-1"].status).toBe("success");
@@ -2196,5 +2251,456 @@ describe("Additional edge cases for complete coverage", () => {
     expect(stateAfterRefresh?.plan[1].outputToken.amount).toBe(750000n); // Bridge 1:1
 
     expect(finalState.status).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unified-stall-CTA additions: validateInputBalances + refreshPendingSteps.
+// ---------------------------------------------------------------------------
+
+describe("validateInputBalances", () => {
+  const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+  const WBTC_ADDRESS = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599" as Address;
+  const NATIVE = "0x0000000000000000000000000000000000000000" as Address;
+
+  const baseState = (): ConsolidationState => ({
+    id: "balance-test",
+    plan: [],
+    currentStepIndex: 0,
+    status: "ready",
+    results: {},
+    sourceTokens: [],
+    destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    hasSubsequentExecution: false,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("resolves when wallet holds at least the required ERC20 amount", async () => {
+    const step: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken(USDC_ADDRESS, 1_000_000n, 1, { walletAddress: WALLET }),
+        makeToken(WBTC_ADDRESS, 1_00000000n, 1, { walletAddress: WALLET }),
+      ],
+      outputToken: makeToken(NATIVE, 1n, 1),
+    };
+    // Simulate a wallet with ample balance for both tokens.
+    vi.mocked(getPublicClient).mockReturnValue({
+      readContract: vi.fn().mockResolvedValue(2n ** 96n),
+    } as never);
+
+    await expect(validateInputBalances(step, baseState())).resolves.toBeUndefined();
+  });
+
+  test("throws InsufficientInputBalanceError naming the short token + wallet + shortfall", async () => {
+    const step: TransactionStep = {
+      id: "swap-2",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1_000_000n, 1, { walletAddress: WALLET })],
+      outputToken: makeToken(NATIVE, 1n, 1),
+    };
+    vi.mocked(getPublicClient).mockReturnValue({
+      readContract: vi.fn().mockResolvedValue(500_000n), // half of required
+    } as never);
+
+    await expect(validateInputBalances(step, baseState())).rejects.toMatchObject({
+      name: "InsufficientInputBalanceError",
+      token: USDC_ADDRESS,
+      required: 1_000_000n,
+      actual: 500_000n,
+    });
+    await expect(validateInputBalances(step, baseState())).rejects.toBeInstanceOf(InsufficientInputBalanceError);
+  });
+
+  test("aggregates multiple rows of the same (chain, wallet, token) before checking — two 0.6 USDC rows need 1.2 USDC, not 0.6", async () => {
+    const step: TransactionStep = {
+      id: "swap-agg",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken(USDC_ADDRESS, 600_000n, 1, { walletAddress: WALLET }),
+        makeToken(USDC_ADDRESS, 600_000n, 1, { walletAddress: WALLET }),
+      ],
+      outputToken: makeToken(NATIVE, 1n, 1),
+    };
+    // Wallet has 1.0 USDC — enough per-row but NOT enough for the aggregated 1.2 USDC.
+    vi.mocked(getPublicClient).mockReturnValue({
+      readContract: vi.fn().mockResolvedValue(1_000_000n),
+    } as never);
+
+    await expect(validateInputBalances(step, baseState())).rejects.toMatchObject({
+      name: "InsufficientInputBalanceError",
+      required: 1_200_000n,
+      actual: 1_000_000n,
+    });
+  });
+
+  test("checks the native (zero-address) input via getNativeBalance, not readContract", async () => {
+    const step: TransactionStep = {
+      id: "swap-native",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(NATIVE, 5n * 10n ** 17n, 1, { walletAddress: WALLET })],
+      outputToken: makeToken(USDC_ADDRESS, 1n, 1),
+    };
+    const readContract = vi.fn().mockResolvedValue(0n);
+    vi.mocked(getPublicClient).mockReturnValue({ readContract } as never);
+    vi.mocked(getNativeBalance).mockResolvedValueOnce(10n ** 18n); // 1 ETH > 0.5 ETH required
+
+    await expect(validateInputBalances(step, baseState())).resolves.toBeUndefined();
+    expect(readContract).not.toHaveBeenCalled();
+    expect(getNativeBalance).toHaveBeenCalled();
+  });
+
+  test("skips entirely for `claim` and `attestation` steps (no wallet-held inputs)", async () => {
+    const claim: TransactionStep = {
+      id: "claim-1",
+      type: "claim",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1_000_000n, 1, { walletAddress: WALLET })],
+      outputToken: makeToken(USDC_ADDRESS, 1n, 1),
+    };
+    const attestation: TransactionStep = {
+      ...claim,
+      id: "attestation-1",
+      type: "attestation",
+    };
+    const readContract = vi.fn().mockResolvedValue(0n);
+    vi.mocked(getPublicClient).mockReturnValue({ readContract } as never);
+
+    await expect(validateInputBalances(claim, baseState())).resolves.toBeUndefined();
+    await expect(validateInputBalances(attestation, baseState())).resolves.toBeUndefined();
+    // Neither type should hit the balance reader.
+    expect(readContract).not.toHaveBeenCalled();
+  });
+
+  test("RPC failure during balance read does NOT synthesize a shortfall (logged + skipped)", async () => {
+    const step: TransactionStep = {
+      id: "swap-rpc",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1_000_000n, 1, { walletAddress: WALLET })],
+      outputToken: makeToken(NATIVE, 1n, 1),
+    };
+    vi.mocked(getPublicClient).mockReturnValue({
+      readContract: vi.fn().mockRejectedValue(new Error("rpc unreachable")),
+    } as never);
+
+    // Per the lib's "fall through" philosophy: probe failure shouldn't block
+    // execution — the actual broadcast surfaces a meaningful error if funds
+    // are genuinely missing.
+    await expect(validateInputBalances(step, baseState())).resolves.toBeUndefined();
+  });
+});
+
+describe("refreshPendingSteps", () => {
+  const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+  const WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as Address;
+  const DAI_ADDRESS = "0x6B175474E89094C44Da98b954EedeAC495271d0F" as Address;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSwapQuote).mockImplementation(async (_inputs, output) => ({
+      ...(output as TokenAmount),
+    }));
+  });
+
+  test("re-quotes a single pending swap step and updates its outputToken + quotedAt", async () => {
+    const step1: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(WETH_ADDRESS, 10n ** 18n, 1)],
+      outputToken: { ...makeToken(USDC_ADDRESS, 3_000_000_000n, 1), provenance: "step-1" },
+      quotedAt: 0,
+    };
+    const state: ConsolidationState = {
+      id: "refresh-test",
+      plan: [step1],
+      currentStepIndex: 0,
+      status: "executing",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    // Market moved: the same WETH now quotes at 3050 USDC.
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 3_050_000_000n, 1));
+
+    const refreshed = await refreshPendingSteps(state);
+
+    expect(refreshed).not.toBe(state);
+    expect(refreshed.plan[0].outputToken.amount).toBe(3_050_000_000n);
+    expect(refreshed.plan[0].outputToken.provenance).toBe("step-1");
+    expect(refreshed.plan[0].quotedAt).toBeGreaterThan(0);
+  });
+
+  test("returns the SAME state reference when nothing changed (cheap noop signal for the hook)", async () => {
+    const step: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(WETH_ADDRESS, 10n ** 18n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 3_000_000_000n, 1),
+    };
+    const state: ConsolidationState = {
+      id: "refresh-noop",
+      plan: [step],
+      currentStepIndex: 0,
+      status: "executing",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+    // Default mock returns output unchanged — refresh must be a no-op AND
+    // the same state object must come back so the hook can use referential
+    // equality to skip a setState/save.
+    const result = await refreshPendingSteps(state);
+    expect(result).toBe(state);
+  });
+
+  test("does NOT touch non-swap pending steps (bridge / claim / transfer / attestation are no-ops today)", async () => {
+    const bridgeStep: TransactionStep = {
+      id: "bridge-1",
+      type: "bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1_000_000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1_000_000n, 10),
+    };
+    const transferStep: TransactionStep = {
+      id: "transfer-1",
+      type: "transfer",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 500_000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 500_000n, 1),
+    };
+    const state: ConsolidationState = {
+      id: "non-swap",
+      plan: [bridgeStep, transferStep],
+      currentStepIndex: 0,
+      status: "executing",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    const result = await refreshPendingSteps(state);
+    expect(result).toBe(state);
+    expect(getSwapQuote).not.toHaveBeenCalled();
+  });
+
+  test("blocks refresh of a downstream step whose dependency is still in-flight (executing/pending)", async () => {
+    // step-1 still executing → step-2 (depends on step-1's provenance) is
+    // NOT a candidate for refresh because its inputTokens.amount may not
+    // reflect the eventual actuals yet.
+    const step1: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "executing",
+      chainId: 1,
+      inputTokens: [makeToken(WETH_ADDRESS, 10n ** 18n, 1)],
+      outputToken: { ...makeToken(USDC_ADDRESS, 3_000_000_000n, 1), provenance: "step-1" },
+    };
+    const step2: TransactionStep = {
+      id: "step-2",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 3_000_000_000n, 1, { provenance: "step-1" })],
+      outputToken: { ...makeToken(DAI_ADDRESS, 3_000_000_000_000_000_000_000n, 1), provenance: "step-2" },
+    };
+    const state: ConsolidationState = {
+      id: "blocked-refresh",
+      plan: [step1, step2],
+      currentStepIndex: 0,
+      status: "executing",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+    // If step-2 ever asked for a quote, this would surface as a call.
+    const quoteSpy = vi.mocked(getSwapQuote);
+
+    const result = await refreshPendingSteps(state);
+    expect(result).toBe(state);
+    expect(quoteSpy).not.toHaveBeenCalled();
+  });
+
+  test("refreshing a swap step whose output amount changes cascades via recalculatePlan to downstream pending steps", async () => {
+    // Upstream step-1 already success → step-2 (pending, depends on it) is
+    // eligible for refresh; step-3 (pending bridge, depends on step-2) gets
+    // its inputs cascaded.
+    const successStep: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "success",
+      chainId: 1,
+      inputTokens: [makeToken(WETH_ADDRESS, 10n ** 18n, 1)],
+      outputToken: { ...makeToken(USDC_ADDRESS, 3_000_000_000n, 1), provenance: "step-1" },
+    };
+    const step2: TransactionStep = {
+      id: "step-2",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 3_000_000_000n, 1, { provenance: "step-1" })],
+      outputToken: { ...makeToken(DAI_ADDRESS, 3_000_000_000_000_000_000_000n, 1), provenance: "step-2" },
+    };
+    const step3: TransactionStep = {
+      id: "step-3",
+      type: "bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(DAI_ADDRESS, 3_000_000_000_000_000_000_000n, 1, { provenance: "step-2" })],
+      outputToken: makeToken(DAI_ADDRESS, 3_000_000_000_000_000_000_000n, 10),
+    };
+    const state: ConsolidationState = {
+      id: "cascade",
+      plan: [successStep, step2, step3],
+      currentStepIndex: 1,
+      status: "executing",
+      results: {
+        "step-1": {
+          stepId: "step-1",
+          chainId: 1,
+          status: "success",
+          actualOutput: successStep.outputToken,
+          transactionHash: "0xstep1",
+        },
+      },
+      sourceTokens: [],
+      destinationToken: makeToken(DAI_ADDRESS, 0n, 10),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    // refreshStep(step-2) -> 3050 DAI; recalculate cascades step-3 to 3050.
+    vi.mocked(getSwapQuote).mockImplementation(async (_inputs, output) => {
+      if (output.token === DAI_ADDRESS) return makeToken(DAI_ADDRESS, 3_050_000_000_000_000_000_000n, 1);
+      return { ...(output as TokenAmount) };
+    });
+
+    const result = await refreshPendingSteps(state);
+    expect(result).not.toBe(state);
+    expect(result.plan[1].outputToken.amount).toBe(3_050_000_000_000_000_000_000n);
+    // Bridge sums its inputs 1:1, so step-3's input + output should both
+    // reflect the refreshed step-2 amount.
+    expect(result.plan[2].inputTokens[0].amount).toBe(3_050_000_000_000_000_000_000n);
+    expect(result.plan[2].outputToken.amount).toBe(3_050_000_000_000_000_000_000n);
+  });
+});
+
+describe("refreshStep (single-step quote refresh)", () => {
+  const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+  const WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as Address;
+
+  const emptyState = (): ConsolidationState => ({
+    id: "single",
+    plan: [],
+    currentStepIndex: 0,
+    status: "executing",
+    results: {},
+    sourceTokens: [],
+    destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    hasSubsequentExecution: false,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("swap step: returns updated step with new outputToken amount + bumped quotedAt when the quote changes", async () => {
+    const step: TransactionStep = {
+      id: "swap-x",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(WETH_ADDRESS, 10n ** 18n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 3_000_000_000n, 1),
+      quotedAt: 0,
+    };
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 3_100_000_000n, 1));
+
+    const result = await refreshStep(step, emptyState());
+    expect(result).not.toBe(step);
+    expect(result.outputToken.amount).toBe(3_100_000_000n);
+    expect(result.quotedAt).toBeGreaterThan(0);
+    expect(result.outputToken.provenance).toBe(step.id);
+  });
+
+  test("swap step: returns the SAME reference when the quote is unchanged (no allocation, no setState churn)", async () => {
+    const step: TransactionStep = {
+      id: "swap-y",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(WETH_ADDRESS, 10n ** 18n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 3_000_000_000n, 1),
+    };
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 3_000_000_000n, 1));
+
+    const result = await refreshStep(step, emptyState());
+    expect(result).toBe(step);
+  });
+
+  test("non-swap steps are returned unchanged (bridge / claim / transfer / attestation)", async () => {
+    const bridge: TransactionStep = {
+      id: "b",
+      type: "bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1_000_000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1_000_000n, 10),
+    };
+    expect(await refreshStep(bridge, emptyState())).toBe(bridge);
+    expect(getSwapQuote).not.toHaveBeenCalled();
+  });
+
+  test("swap step: soft-fails on quote errors and returns the original step (no throw, retry happens later via executor)", async () => {
+    const step: TransactionStep = {
+      id: "swap-fail",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(WETH_ADDRESS, 10n ** 18n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 3_000_000_000n, 1),
+    };
+    vi.mocked(getSwapQuote).mockRejectedValueOnce(new Error("Odos down"));
+
+    const result = await refreshStep(step, emptyState());
+    expect(result).toBe(step);
   });
 });

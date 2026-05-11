@@ -20,7 +20,7 @@ export type Attestation = {
   };
 };
 
-const getApproveAndBurnUsdcCalls = async (
+export const getApproveAndBurnUsdcCalls = async (
   sourceChainId: number,
   amount: bigint,
   destinationChainId: number,

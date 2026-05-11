@@ -1,7 +1,13 @@
-import type { Account, Chain, HttpTransport, WalletClient } from "viem";
-import { type Call, encodeFunctionData, isAddressEqual, parseAbi, zeroAddress } from "viem";
+import type { Account, Address, Chain, Hex, HttpTransport, WalletClient } from "viem";
+import { type Call, encodeFunctionData, erc20Abi, getAddress, isAddressEqual, parseAbi, zeroAddress } from "viem";
 import { chains, transports } from "~/data/supported-chains";
-import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
+import {
+  executeCCTPBurn,
+  executeCCTPMint,
+  getApproveAndBurnUsdcCalls,
+  getMintUsdcCalls,
+  retrieveAttestations,
+} from "./cctp";
 import { createTransactionError } from "./errors";
 import { getNativeBalance } from "./gas";
 import {
@@ -10,20 +16,233 @@ import {
   InsufficientNativeForGasError,
   type OperationType,
 } from "./gas-estimation";
-import { executeOdosSwap, getSwapQuote } from "./odos";
-import { prepareSendCalls } from "./send-calls";
+import { buildOdosCalls, executeOdosSwap, getSwapQuote } from "./odos";
+import { getPublicClient } from "./public-client";
+import type { SendCallsFn, SendCallsOptions, StallInfo } from "./send-calls";
+import { encodeMulticall3Aggregate3, MULTICALL3_ADDRESS, prepareSendCalls } from "./send-calls";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
+
+/**
+ * Thrown when a step's preflight balance check finds the wallet doesn't hold
+ * enough of one of the input tokens. Surfaced before any signing prompt so
+ * the user knows exactly which token / wallet is short rather than seeing a
+ * cryptic on-chain revert.
+ */
+export class InsufficientInputBalanceError extends Error {
+  override name = "InsufficientInputBalanceError" as const;
+  chainId: number;
+  walletAddress: Address;
+  token: Address;
+  required: bigint;
+  actual: bigint;
+  constructor(chainId: number, walletAddress: Address, token: Address, required: bigint, actual: bigint) {
+    super(
+      `Insufficient balance for ${token} on chain ${chainId} for wallet ${walletAddress}: required ${required}, have ${actual}.`,
+    );
+    this.chainId = chainId;
+    this.walletAddress = walletAddress;
+    this.token = token;
+    this.required = required;
+    this.actual = actual;
+  }
+}
+
+/**
+ * Aggregates required amounts per `(chainId, wallet, token)` and verifies the
+ * wallet holds at least that much. Throws {@link InsufficientInputBalanceError}
+ * on shortfall. RPC failures during balance reads are logged and skipped —
+ * the broadcast itself will surface the failure if the chain genuinely lacks
+ * the funds.
+ *
+ * Skipped entirely for `claim` and `attestation` steps (no wallet-held inputs).
+ * Aggregation happens BEFORE the per-token check so e.g. two `0.6 USDC` rows
+ * from the same wallet require `1.2 USDC` (not `0.6 USDC` per row).
+ *
+ * For native (zero-address) inputs, the caller is responsible for running
+ * `adjustNativeTokenForGas` first; this validator checks the post-adjustment
+ * amount directly against the wallet balance.
+ */
+export async function validateInputBalances(step: TransactionStep, _state: ConsolidationState): Promise<void> {
+  if (step.type === "claim" || step.type === "attestation") return;
+
+  const required = new Map<string, { chainId: number; wallet: Address; token: Address; amount: bigint }>();
+  for (const input of step.inputTokens) {
+    const tokenAddr = getAddress(input.token);
+    const walletAddr = getAddress(input.walletAddress);
+    const key = `${input.chainId}:${walletAddr}:${tokenAddr}`;
+    const existing = required.get(key);
+    if (existing) {
+      existing.amount += input.amount;
+    } else {
+      required.set(key, { chainId: input.chainId, wallet: walletAddr, token: tokenAddr, amount: input.amount });
+    }
+  }
+
+  for (const { chainId, wallet, token, amount } of required.values()) {
+    if (amount === 0n) continue;
+    let balance: bigint;
+    try {
+      if (isAddressEqual(token, zeroAddress)) {
+        const chain = chains[chainId as keyof typeof chains];
+        balance = await getNativeBalance(chain, wallet, transports?.[chainId as keyof typeof transports]);
+      } else {
+        const publicClient = getPublicClient(chainId);
+        balance = await publicClient.readContract({
+          address: token,
+          abi: erc20Abi,
+          functionName: "balanceOf",
+          args: [wallet],
+        });
+      }
+    } catch (err) {
+      // RPC failure: don't synthesize a balance shortfall — let the actual
+      // broadcast surface a meaningful error if the funds really are missing.
+      console.warn(`[validateInputBalances] balance read failed for ${token} on chain ${chainId}:`, err);
+      continue;
+    }
+    if (balance < amount) {
+      throw new InsufficientInputBalanceError(chainId, wallet, token, amount, balance);
+    }
+  }
+}
+
+/**
+ * Re-prepares a single pending step against current chain / market state.
+ * Returns either the same step reference (no change) or a new step with
+ * refreshed `outputToken` (and `quotedAt` for swap).
+ *
+ * - `swap`: re-quote via Odos and update the output amount.
+ * - `bridge`/`claim`/`transfer`/`attestation`: no-op (deterministic enough
+ *   that there is nothing to refresh today; structure preserved so future
+ *   per-type refreshes plug in cleanly).
+ *
+ * Soft-fails on quote errors: returns the original step rather than
+ * propagating the error, mirroring the existing
+ * `refreshSwapQuoteIfNeeded` philosophy. The actual failure surfaces only
+ * if/when the step reaches `executeStep` and broadcast is attempted.
+ */
+export async function refreshStep(step: TransactionStep, _state: ConsolidationState): Promise<TransactionStep> {
+  if (step.type !== "swap") return step;
+  try {
+    const fresh = await getSwapQuote(step.inputTokens, step.outputToken);
+    if (fresh.amount === step.outputToken.amount) return step;
+    return {
+      ...step,
+      outputToken: { ...fresh, provenance: step.outputToken.provenance ?? step.id },
+      quotedAt: Date.now(),
+    };
+  } catch {
+    return step;
+  }
+}
+
+/**
+ * Walks every step with `status === "pending"` whose upstream dependencies
+ * are settled (so its `inputTokens` are stable) and runs `refreshStep` on
+ * each. When a swap step's quote shifts, cascades via `recalculatePlan` so
+ * downstream steps' input amounts stay in sync.
+ *
+ * Returns the same state reference when nothing changed — the hook can use
+ * referential equality to skip an unnecessary `setState` / save.
+ */
+export async function refreshPendingSteps(state: ConsolidationState): Promise<ConsolidationState> {
+  const settled = new Set<string>();
+  for (const s of state.plan) {
+    if (s.status === "success" || s.status === "skipped" || s.status === "failed") {
+      settled.add(s.id);
+    }
+  }
+
+  let working: ConsolidationState | null = null;
+
+  for (let i = 0; i < state.plan.length; i++) {
+    const step = (working ?? state).plan[i];
+    if (step.status !== "pending") continue;
+
+    // Skip refresh while the step still depends on an in-flight upstream:
+    // its `inputTokens.amount` may not reflect the eventual actuals.
+    const provs = new Set(step.inputTokens.map((t) => t.provenance).filter((p): p is string => p !== undefined));
+    let depsSettled = true;
+    for (const p of provs) {
+      if (!settled.has(p)) {
+        depsSettled = false;
+        break;
+      }
+    }
+    if (!depsSettled) continue;
+
+    const refreshed = await refreshStep(step, working ?? state);
+    if (refreshed === step) continue;
+
+    if (!working) {
+      working = { ...state, plan: [...state.plan] };
+    }
+    working.plan[i] = refreshed;
+
+    if (refreshed.outputToken.amount !== step.outputToken.amount) {
+      await recalculatePlan(working, i, refreshed.outputToken);
+    }
+  }
+
+  if (!working) return state;
+  return { ...working, updatedAt: Date.now() };
+}
+
+/**
+ * Information passed to `onStepStall` when an in-flight step's transaction
+ * appears stuck in the wallet's internal pool (e.g. a wallet/relayer is
+ * holding it and not broadcasting). Same shape as the underlying
+ * {@link StallInfo} but with the step-level `stepId` so UIs can correlate
+ * to the plan.
+ */
+export interface StepStallInfo extends StallInfo {
+  /** ID of the {@link TransactionStep} whose tx has stalled. */
+  stepId: string;
+}
+
+/**
+ * Information passed to `onStepHashSent` each time the wallet returns a hash
+ * for a step's transaction — fired for the original send and for each resend.
+ * Used by the hook to persist the full attempt history.
+ */
+export interface StepHashSentInfo {
+  /** ID of the {@link TransactionStep} whose tx was just sent. */
+  stepId: string;
+  hash: Hex;
+  nonce: number | undefined;
+  account: Address;
+  chainId: number;
+}
+
+/**
+ * Optional callbacks the executor can use to report soft execution events
+ * that don't change the plan's status (e.g. a stalled tx that is still
+ * recoverable via resend, or a hash that was just broadcast).
+ */
+export interface ExecutionCallbacks {
+  onStepStall?: (info: StepStallInfo) => void;
+  onStepHashSent?: (info: StepHashSentInfo) => void;
+  /**
+   * Optional accessor for the hook's latest known state. Lets the executor
+   * pick up downstream-step refreshes done by the hook's 30s background
+   * timer without overwriting in-flight progress. The hook keeps a ref
+   * mirror of its React state and exposes it through this getter.
+   */
+  getLatestStateRef?: () => ConsolidationState | null;
+}
 
 /**
  * Execute consolidation plan with dependency tracking and error handling (T014)
  * Yields state after each significant change for progress tracking and persistence.
  * @param state - Consolidation state
  * @param walletClient - Wallet client for transaction execution
+ * @param callbacks - Optional soft-event callbacks (e.g. stall detection)
  * @yields Updated consolidation state after each step change
  */
 export async function* executeConsolidationPlan(
   state: ConsolidationState,
   walletClient: WalletClient<HttpTransport, Chain, Account>,
+  callbacks?: ExecutionCallbacks,
 ): AsyncGenerator<ConsolidationState, void, void> {
   // Validate initial state - allow ready, paused, or executing (for recovery scenarios)
   if (state.status !== "ready" && state.status !== "paused" && state.status !== "executing") {
@@ -82,20 +301,46 @@ export async function* executeConsolidationPlan(
       continue;
     }
 
-    // Refresh swap quote if stale or retrying after failure
-    if (step.type === "swap") {
-      const isRetrying = state.status === "paused";
-      const refreshedStep = await refreshSwapQuoteIfNeeded(step, isRetrying);
-      if (refreshedStep.outputToken.amount !== step.outputToken.amount) {
-        // Quote changed - update plan and recalculate downstream steps
+    // Adopt any background refresh the hook performed against this step
+    // before we fall through to the on-entry refresh. The hook's 30s timer
+    // only ever rewrites pending downstream steps' `outputToken`/`quotedAt`
+    // (via `refreshPendingSteps`), so it's safe to merge those fields into
+    // workingState even though the generator owns `status`/`results`/etc.
+    const latest = callbacks?.getLatestStateRef?.();
+    if (latest) {
+      const latestStep = latest.plan[i];
+      const ws = workingState.plan[i];
+      if (
+        latestStep &&
+        latestStep.id === ws.id &&
+        ws.status === "pending" &&
+        latestStep.status === "pending" &&
+        (latestStep.quotedAt ?? 0) > (ws.quotedAt ?? 0)
+      ) {
+        workingState.plan = [...workingState.plan];
+        workingState.plan[i] = {
+          ...ws,
+          inputTokens: latestStep.inputTokens,
+          outputToken: latestStep.outputToken,
+          quotedAt: latestStep.quotedAt,
+        };
+      }
+    }
+
+    // Right-before-broadcast refresh: replaces the old conditional
+    // `refreshSwapQuoteIfNeeded` so the executor's last view of the quote
+    // (the one the user is about to sign against) is always recently
+    // re-quoted, regardless of what the background timer did.
+    {
+      const currentStep = workingState.plan[i];
+      const refreshedStep = await refreshStep(currentStep, workingState);
+      if (refreshedStep !== currentStep) {
         workingState.plan = [...workingState.plan];
         workingState.plan[i] = refreshedStep;
-
-        // Recalculate downstream steps with new quote estimate
-        await recalculatePlan(workingState, i, refreshedStep.outputToken);
+        if (refreshedStep.outputToken.amount !== currentStep.outputToken.amount) {
+          await recalculatePlan(workingState, i, refreshedStep.outputToken);
+        }
         workingState.updatedAt = Date.now();
-
-        // Yield state after quote refresh so UI updates with new estimates
         yield structuredClone(workingState);
       }
     }
@@ -110,7 +355,7 @@ export async function* executeConsolidationPlan(
     yield structuredClone(workingState);
 
     try {
-      const result = await executeStep(executingStep, workingState, walletClient);
+      const result = await executeStep(executingStep, workingState, walletClient, callbacks);
 
       // Success - create new step reference with success status
       const successStep = {
@@ -207,46 +452,6 @@ function filterZeroAmounts(
   }
 
   return nonZeroTokens as [TokenAmount, ...TokenAmount[]];
-}
-
-/** Quote staleness threshold: 55 seconds */
-const QUOTE_STALENESS_MS = 55 * 1000;
-
-/**
- * Refresh swap quote if stale or previously failed
- * @param step - The swap step to potentially refresh
- * @param isRetrying - Whether we're retrying after a failure (paused state)
- * @returns Updated step with fresh quote, or original step if no refresh needed
- */
-async function refreshSwapQuoteIfNeeded(step: TransactionStep, isRetrying: boolean): Promise<TransactionStep> {
-  // Only refresh swap steps
-  if (step.type !== "swap") {
-    return step;
-  }
-
-  const now = Date.now();
-  // Only check staleness if quotedAt is set (backward compatibility)
-  const isStale = step.quotedAt !== undefined && now - step.quotedAt > QUOTE_STALENESS_MS;
-
-  // Refresh if stale or retrying after failure
-  if (!isStale && !isRetrying) {
-    return step;
-  }
-
-  try {
-    const freshQuote = await getSwapQuote(step.inputTokens, step.outputToken);
-    return {
-      ...step,
-      outputToken: {
-        ...freshQuote,
-        provenance: step.id,
-      },
-      quotedAt: now,
-    };
-  } catch {
-    // On failure, return original step - execution will proceed with existing quote
-    return step;
-  }
 }
 
 /**
@@ -358,18 +563,56 @@ function estimateRemainingChainOps(currentStep: TransactionStep, state: Consolid
  * @param step - Transaction step
  * @param state - Consolidation state
  * @param walletClient - Wallet client
+ * @param callbacks - Optional soft-event callbacks (e.g. stall detection)
  * @returns Step result
  */
 async function executeStep(
   step: TransactionStep,
   state: ConsolidationState,
   walletClient: WalletClient<HttpTransport, Chain, Account>,
+  callbacks?: ExecutionCallbacks,
 ): Promise<StepResult> {
-  const sendCalls = prepareSendCalls(walletClient);
+  // Tag any stall/hash-sent events fired by the underlying send-calls layer
+  // with this step's id so the UI can correlate. We only build the base
+  // options object when at least one callback is provided; otherwise we
+  // leave it undefined so the default behavior is unchanged.
+  const onStall = callbacks?.onStepStall;
+  const onHashSent = callbacks?.onStepHashSent;
+  const baseSendCallsOptions: SendCallsOptions | undefined =
+    onStall || onHashSent
+      ? {
+          ...(onStall ? { onStall: (info) => onStall({ ...info, stepId: step.id }) } : {}),
+          ...(onHashSent
+            ? {
+                onHashSent: (info) =>
+                  onHashSent({
+                    stepId: step.id,
+                    hash: info.hash,
+                    nonce: info.nonce,
+                    account: info.account,
+                    chainId: info.chainId,
+                  }),
+              }
+            : {}),
+        }
+      : undefined;
+  /**
+   * Per-branch prepareSendCalls factory. Folds in the (optional) per-step
+   * `rebuildCall` so the lib can re-broadcast freshly-built calldata at the
+   * stuck nonce when the user clicks the Retry CTA. Each step type's
+   * branch builds its own rebuild closure that knows how to re-quote /
+   * re-build the relevant call.
+   */
+  const buildSendCalls = (rebuildCall?: SendCallsOptions["rebuildCall"]): SendCallsFn => {
+    const opts: SendCallsOptions | undefined = rebuildCall
+      ? { ...(baseSendCallsOptions ?? {}), rebuildCall }
+      : baseSendCallsOptions;
+    return prepareSendCalls(walletClient, undefined, undefined, opts);
+  };
 
   switch (step.type) {
     case "swap": {
-      // Filter out tokens with zero amounts
+      // Filter out tokens with zero amounts.
       let nonZeroTokens = filterZeroAmounts(step.inputTokens, step.id, "swap");
 
       // Re-adjust native token amount at execution time if needed (gas prices may
@@ -380,6 +623,27 @@ async function executeStep(
         nonZeroTokens = adjustedTokens;
         step.inputTokens = adjustedTokens;
       }
+
+      // Preflight: confirm the wallet actually holds what we're about to swap,
+      // including the post-adjustment native amount.
+      await validateInputBalances(step, state);
+
+      // Rebuild closure: invoked by the lib when the user clicks a Retry CTA
+      // (sim of the original swap calldata reverted — quote went stale).
+      // Re-runs the input-balance check and re-quotes via Odos. We always
+      // return the fresh swap call (the LAST entry in buildOdosCalls's
+      // result); for the rare case where an approval at a lower stepIndex
+      // is the one that stalled, the lib would replace it with the swap
+      // calldata at the same nonce — which reverts because the allowance
+      // hasn't been set yet, and the user recovers via the PausedActions
+      // Skip / Retry buttons.
+      const rebuildCall: SendCallsOptions["rebuildCall"] = async (_stepIndex) => {
+        await validateInputBalances(step, state);
+        const newCalls = await buildOdosCalls(nonZeroTokens, step.outputToken);
+        const swap = newCalls[newCalls.length - 1];
+        return swap ? { to: swap.to, data: swap.data, value: swap.value } : null;
+      };
+      const sendCalls = buildSendCalls(rebuildCall);
 
       // Execute swap using Odos with non-zero tokens
       const { amount: actualAmount, transactionHash } = await executeOdosSwap(
@@ -429,6 +693,28 @@ async function executeStep(
       // Sum all non-zero input amounts (bridge may have multiple USDC sources)
       const totalAmount = nonZeroTokens.reduce((sum, t) => sum + t.amount, 0n);
       const combinedInput = { ...nonZeroTokens[0], amount: totalAmount };
+
+      await validateInputBalances(step, state);
+
+      // Rebuild closure: bridge calls are deterministic given (amount, dest,
+      // address) so re-running `getApproveAndBurnUsdcCalls` produces the
+      // same burn call. We still re-run it (cheap) so the structure plugs
+      // in the same as swap and so any future fee-refresh inside CCTP
+      // surfaces here automatically. Approvals (lower stepIndex) return
+      // null — they're idempotent and a stuck approval should Resend.
+      const rebuildCall: SendCallsOptions["rebuildCall"] = async (_stepIndex) => {
+        await validateInputBalances(step, state);
+        const newCalls = await getApproveAndBurnUsdcCalls(
+          combinedInput.chainId,
+          combinedInput.amount,
+          step.outputToken.chainId,
+          step.outputToken.walletAddress,
+          combinedInput.walletAddress,
+        );
+        const burn = newCalls[newCalls.length - 1];
+        return burn ? { to: burn.to, data: burn.data, value: burn.value } : null;
+      };
+      const sendCalls = buildSendCalls(rebuildCall);
 
       // Execute CCTP burn
       const [burnTx] = await executeCCTPBurn(combinedInput, step.outputToken, sendCalls);
@@ -497,6 +783,27 @@ async function executeStep(
         throw new Error("No attestations found for claim");
       }
 
+      // Claim has no wallet-held inputs so validateInputBalances is a no-op
+      // for it; we still call it for symmetry / future-proofing.
+      await validateInputBalances(step, state);
+
+      // Rebuild closure: `executeCCTPMint` uses `atomic-multicall` mode, so
+      // the underlying lib sees a single transaction at stepIndex 0 (the
+      // Multicall3 aggregate3 call). On Retry, re-run getMintUsdcCalls
+      // (which filters out attestations whose nonces are now used) and
+      // re-encode as aggregate3 calldata. Returns null if all the mints
+      // have been claimed already — at which point the original would
+      // also revert and the receipt-timeout path kicks in.
+      const rebuildCall: SendCallsOptions["rebuildCall"] = async (stepIndex) => {
+        if (stepIndex !== 0) return null;
+        const newMintCalls = await getMintUsdcCalls(step.chainId, attestations);
+        if (newMintCalls.length === 0) return null;
+        const allowFailure = false; // executeCCTPMint uses "atomic-multicall"
+        const callData = encodeMulticall3Aggregate3(newMintCalls, allowFailure);
+        return { to: MULTICALL3_ADDRESS, data: callData, value: 0n };
+      };
+      const sendCalls = buildSendCalls(rebuildCall);
+
       // Execute CCTP mint
       const [mintTx] = await executeCCTPMint(attestations, step.outputToken, sendCalls);
 
@@ -525,6 +832,10 @@ async function executeStep(
     }
 
     case "transfer": {
+      // Transfer is deterministic: no rebuild needed (a stuck transfer
+      // should always be Resend, not Retry — same calldata).
+      const sendCalls = buildSendCalls();
+
       // Execute simple token transfer
       if (step.inputTokens.length === 0) {
         throw new Error("Transfer step must have at least one input token");
@@ -548,6 +859,8 @@ async function executeStep(
           throw new Error("All transfer input tokens must be from the same wallet");
         }
       }
+
+      await validateInputBalances(step, state);
 
       // Calculate total amount to transfer
       const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);

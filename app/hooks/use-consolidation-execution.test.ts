@@ -22,8 +22,10 @@ vi.mock("./use-consolidation-records", () => ({
 
 // Mock execution module
 const mockExecuteConsolidationPlan = vi.fn();
+const mockRefreshPendingSteps = vi.fn();
 vi.mock("~/lib/execution", () => ({
   executeConsolidationPlan: (...args: unknown[]) => mockExecuteConsolidationPlan(...args),
+  refreshPendingSteps: (...args: unknown[]) => mockRefreshPendingSteps(...args),
 }));
 
 describe("useConsolidationExecution", () => {
@@ -79,6 +81,9 @@ describe("useConsolidationExecution", () => {
     mockUseConsolidationRecords.mockReturnValue({
       saveConsolidation: mockSaveConsolidation,
     });
+    // Default: refresh tick is a no-op (returns the snapshot unchanged so
+    // the hook's referential-equality check skips setState/save).
+    mockRefreshPendingSteps.mockImplementation(async (snapshot: ConsolidationState) => snapshot);
   });
 
   describe("initialization", () => {
@@ -235,7 +240,14 @@ describe("useConsolidationExecution", () => {
         expect(result.current.isExecuting).toBe(false);
       });
 
-      expect(mockExecuteConsolidationPlan).toHaveBeenCalledWith(mockState, mockWalletClient);
+      expect(mockExecuteConsolidationPlan).toHaveBeenCalledWith(
+        mockState,
+        mockWalletClient,
+        expect.objectContaining({
+          onStepStall: expect.any(Function),
+          onStepHashSent: expect.any(Function),
+        }),
+      );
     });
 
     test("updates state during execution", async () => {
@@ -514,6 +526,297 @@ describe("useConsolidationExecution", () => {
     });
   });
 
+  describe("stalledSteps / triggerStallAction", () => {
+    test("exposes empty stalledSteps initially", () => {
+      const { result } = renderHook(() => useConsolidationExecution({ state: createMockState() }));
+      expect(result.current.stalledSteps).toEqual({});
+    });
+
+    test("captures the unified {kind, trigger} handle when the executor reports a stall", async () => {
+      const mockState = createMockState();
+      const triggerFn = vi.fn();
+
+      // Generator yields executing, fires onStepStall, then hangs on a
+      // never-resolving promise. This keeps `isExecuting = true` so we can
+      // observe the stalled state before the hook's finally-block clears it.
+      mockExecuteConsolidationPlan.mockImplementation(
+        (_state: unknown, _wallet: unknown, callbacks?: { onStepStall?: (info: unknown) => void }) =>
+          (async function* () {
+            yield createMockState({ status: "executing" });
+            callbacks?.onStepStall?.({
+              stepId: "step-1",
+              txId: "step-1",
+              stepIndex: 0,
+              hash: "0xstuck",
+              nonce: 5,
+              kind: "resend",
+              trigger: triggerFn,
+            });
+            await new Promise(() => {}); // never resolves; keeps the loop alive
+          })(),
+      );
+
+      const { result } = renderHook(() => useConsolidationExecution({ state: mockState }));
+
+      act(() => {
+        result.current.executeOrResume();
+      });
+
+      await waitFor(() => {
+        expect(result.current.stalledSteps["step-1"]).toBeDefined();
+      });
+
+      expect(result.current.stalledSteps["step-1"].kind).toBe("resend");
+
+      // triggerStallAction should invoke the captured handle.
+      act(() => {
+        result.current.triggerStallAction("step-1");
+      });
+      expect(triggerFn).toHaveBeenCalledTimes(1);
+
+      // After the trigger fires, the stall handle is optimistically cleared
+      // so the UI hides the CTA until another stall fires.
+      expect(result.current.stalledSteps["step-1"]).toBeUndefined();
+    });
+
+    test("captures kind='retry' for sim-reverts stalls", async () => {
+      const mockState = createMockState();
+      const triggerFn = vi.fn();
+
+      mockExecuteConsolidationPlan.mockImplementation(
+        (_state: unknown, _wallet: unknown, callbacks?: { onStepStall?: (info: unknown) => void }) =>
+          (async function* () {
+            yield createMockState({ status: "executing" });
+            callbacks?.onStepStall?.({
+              stepId: "step-1",
+              txId: "step-1",
+              stepIndex: 0,
+              hash: "0xstuck",
+              nonce: 5,
+              kind: "retry",
+              trigger: triggerFn,
+            });
+            await new Promise(() => {});
+          })(),
+      );
+
+      const { result } = renderHook(() => useConsolidationExecution({ state: mockState }));
+
+      act(() => {
+        result.current.executeOrResume();
+      });
+
+      await waitFor(() => {
+        expect(result.current.stalledSteps["step-1"]).toBeDefined();
+      });
+
+      // The hook surfaces the kind discriminator as-is so the UI can pick a
+      // label/icon ("Retry") without re-deriving it.
+      expect(result.current.stalledSteps["step-1"].kind).toBe("retry");
+    });
+
+    test("triggerStallAction is a no-op when no handle is active for stepId", () => {
+      const { result } = renderHook(() => useConsolidationExecution({ state: createMockState() }));
+      expect(() => result.current.triggerStallAction("nonexistent")).not.toThrow();
+    });
+
+    test("clears stalled handles after execution finishes", async () => {
+      const mockState = createMockState();
+      const triggerFn = vi.fn();
+
+      mockExecuteConsolidationPlan.mockImplementation(
+        (_state: unknown, _wallet: unknown, callbacks?: { onStepStall?: (info: unknown) => void }) =>
+          (async function* () {
+            yield createMockState({ status: "executing" });
+            callbacks?.onStepStall?.({
+              stepId: "step-1",
+              txId: "step-1",
+              stepIndex: 0,
+              hash: "0xstuck",
+              nonce: 5,
+              kind: "resend",
+              trigger: triggerFn,
+            });
+            yield createMockState({ status: "completed" });
+          })(),
+      );
+
+      const { result } = renderHook(() => useConsolidationExecution({ state: mockState }));
+
+      act(() => {
+        result.current.executeOrResume();
+      });
+
+      await waitFor(() => {
+        expect(result.current.isExecuting).toBe(false);
+      });
+
+      // After execution wraps up, handles are dropped so the UI never shows
+      // a stale Resend / Retry CTA on a finished step.
+      expect(result.current.stalledSteps).toEqual({});
+    });
+
+    test("does NOT capture the stall handle when nonce is undefined (parallel-send guard)", async () => {
+      const mockState = createMockState();
+      const triggerFn = vi.fn();
+
+      mockExecuteConsolidationPlan.mockImplementation(
+        (_state: unknown, _wallet: unknown, callbacks?: { onStepStall?: (info: unknown) => void }) =>
+          (async function* () {
+            yield createMockState({ status: "executing" });
+            callbacks?.onStepStall?.({
+              stepId: "step-1",
+              txId: "step-1",
+              stepIndex: 0,
+              hash: "0xstuck",
+              nonce: undefined,
+              kind: "resend",
+              trigger: triggerFn,
+            });
+            await new Promise(() => {});
+          })(),
+      );
+
+      // Silence the warning the hook emits in this case.
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { result } = renderHook(() => useConsolidationExecution({ state: mockState }));
+
+      act(() => {
+        result.current.executeOrResume();
+      });
+
+      await waitFor(() => {
+        expect(result.current.isExecuting).toBe(true);
+      });
+
+      // Without a known nonce, the hook refuses to expose a CTA: a
+      // replacement would create a parallel tx rather than replace the
+      // stuck one.
+      expect(result.current.stalledSteps["step-1"]).toBeUndefined();
+      // triggerStallAction is a no-op (the underlying trigger never fires).
+      act(() => {
+        result.current.triggerStallAction("step-1");
+      });
+      expect(triggerFn).not.toHaveBeenCalled();
+
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe("pendingTx persistence (audit trail)", () => {
+    test("appends each broadcast hash to the step's pendingTx and persists immediately", async () => {
+      const mockState = createMockState();
+
+      mockExecuteConsolidationPlan.mockImplementation(
+        (
+          _state: unknown,
+          _wallet: unknown,
+          callbacks?: {
+            onStepHashSent?: (info: {
+              stepId: string;
+              hash: `0x${string}`;
+              nonce: number | undefined;
+              account: `0x${string}`;
+              chainId: number;
+            }) => void;
+          },
+        ) =>
+          (async function* () {
+            yield createMockState({ status: "executing" });
+            callbacks?.onStepHashSent?.({
+              stepId: "step-1",
+              hash: "0xfirst",
+              nonce: 7,
+              account: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+              chainId: 1,
+            });
+            callbacks?.onStepHashSent?.({
+              stepId: "step-1",
+              hash: "0xsecond",
+              nonce: 7,
+              account: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+              chainId: 1,
+            });
+            await new Promise(() => {});
+          })(),
+      );
+
+      const { result } = renderHook(() => useConsolidationExecution({ state: mockState }));
+
+      act(() => {
+        result.current.executeOrResume();
+      });
+
+      await waitFor(() => {
+        const step = result.current.state?.plan.find((s) => s.id === "step-1");
+        expect(step?.pendingTx?.hashes).toEqual(["0xfirst", "0xsecond"]);
+      });
+
+      // The latest persisted state should include both hashes — verifying
+      // synchronous save-on-broadcast (the user could close the tab right
+      // after this).
+      const lastSave = mockSaveConsolidation.mock.calls[mockSaveConsolidation.mock.calls.length - 1][0];
+      const persistedStep = lastSave.plan.find((s: { id: string }) => s.id === "step-1");
+      expect(persistedStep?.pendingTx?.hashes).toEqual(["0xfirst", "0xsecond"]);
+      expect(persistedStep?.pendingTx?.nonce).toBe(7);
+      expect(persistedStep?.pendingTx?.account).toBe("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd");
+    });
+
+    test("preserves pendingTx on the step after the generator yields a success state", async () => {
+      const mockState = createMockState();
+
+      mockExecuteConsolidationPlan.mockImplementation(
+        (
+          _state: unknown,
+          _wallet: unknown,
+          callbacks?: {
+            onStepHashSent?: (info: {
+              stepId: string;
+              hash: `0x${string}`;
+              nonce: number | undefined;
+              account: `0x${string}`;
+              chainId: number;
+            }) => void;
+          },
+        ) =>
+          (async function* () {
+            yield createMockState({ status: "executing" });
+            callbacks?.onStepHashSent?.({
+              stepId: "step-1",
+              hash: "0xattempt1",
+              nonce: 5,
+              account: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+              chainId: 1,
+            });
+            callbacks?.onStepHashSent?.({
+              stepId: "step-1",
+              hash: "0xattempt2",
+              nonce: 5,
+              account: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+              chainId: 1,
+            });
+            // Generator yields its own state next (without pendingTx); the
+            // hook MUST merge our in-flight ref so the audit trail survives.
+            yield createMockState({ status: "completed" });
+          })(),
+      );
+
+      const { result } = renderHook(() => useConsolidationExecution({ state: mockState }));
+
+      act(() => {
+        result.current.executeOrResume();
+      });
+
+      await waitFor(() => {
+        expect(result.current.isExecuting).toBe(false);
+      });
+
+      const step = result.current.state?.plan.find((s) => s.id === "step-1");
+      expect(step?.pendingTx?.hashes).toEqual(["0xattempt1", "0xattempt2"]);
+    });
+  });
+
   describe("skipFailedStep", () => {
     test("skips the most recent failed step", async () => {
       const step1 = createMockStep({ id: "step-1", status: "success" });
@@ -576,6 +879,154 @@ describe("useConsolidationExecution", () => {
       });
 
       expect(mockExecuteConsolidationPlan).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("proactive 30s refresh tick", () => {
+    test("fires refreshPendingSteps roughly every 30s while the generator is mid-execution", async () => {
+      const mockState = createMockState();
+
+      // Generator parks on a never-resolving await so we can step the timer
+      // forward and observe the background tick firing.
+      mockExecuteConsolidationPlan.mockImplementation(() =>
+        (async function* () {
+          yield createMockState({ status: "executing" });
+          await new Promise(() => {}); // keep isExecuting=true forever
+        })(),
+      );
+
+      vi.useFakeTimers();
+
+      const { result, unmount } = renderHook(() => useConsolidationExecution({ state: mockState }));
+
+      await act(async () => {
+        result.current.executeOrResume();
+      });
+      // Let the generator's first yield + the hook's setInterval setup run.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(mockRefreshPendingSteps).not.toHaveBeenCalled();
+
+      // Cross the 30s boundary → exactly one tick.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(mockRefreshPendingSteps).toHaveBeenCalledTimes(1);
+
+      // Cross a second boundary → tick again.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(mockRefreshPendingSteps).toHaveBeenCalledTimes(2);
+
+      unmount();
+      vi.useRealTimers();
+    });
+
+    test("clears the interval when the generator finishes (no further refresh ticks once isExecuting=false)", async () => {
+      const mockState = createMockState();
+
+      // Generator yields a single completed state and returns; the hook's
+      // finally-block must clearInterval so subsequent setTimeout advances
+      // do NOT fire another refreshPendingSteps.
+      mockExecuteConsolidationPlan.mockImplementation(() =>
+        (async function* () {
+          yield createMockState({ status: "completed" });
+        })(),
+      );
+
+      vi.useFakeTimers();
+
+      const { result } = renderHook(() => useConsolidationExecution({ state: mockState }));
+
+      await act(async () => {
+        result.current.executeOrResume();
+      });
+      // Let the generator drain.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(result.current.isExecuting).toBe(false);
+      mockRefreshPendingSteps.mockClear();
+
+      // Even after several minutes, no more refresh ticks.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+      expect(mockRefreshPendingSteps).not.toHaveBeenCalled();
+
+      vi.useRealTimers();
+    });
+
+    test("commits a refreshed snapshot via setState + saveConsolidation when refreshPendingSteps returns a NEW state object", async () => {
+      const mockState = createMockState();
+      const refreshedState = createMockState({ status: "executing", updatedAt: 99999999 });
+
+      mockExecuteConsolidationPlan.mockImplementation(() =>
+        (async function* () {
+          yield createMockState({ status: "executing" });
+          await new Promise(() => {});
+        })(),
+      );
+      mockRefreshPendingSteps.mockResolvedValueOnce(refreshedState);
+
+      vi.useFakeTimers();
+      const { result, unmount } = renderHook(() => useConsolidationExecution({ state: mockState }));
+
+      await act(async () => {
+        result.current.executeOrResume();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(result.current.state?.updatedAt).toBe(99999999);
+      // Persisted at least once with the refreshed snapshot.
+      const persistedUpdatedAts = mockSaveConsolidation.mock.calls.map(
+        (args) => (args[0] as ConsolidationState).updatedAt,
+      );
+      expect(persistedUpdatedAts).toContain(99999999);
+
+      unmount();
+      vi.useRealTimers();
+    });
+
+    test("does NOT commit when refreshPendingSteps returns the SAME state object (referential noop)", async () => {
+      const mockState = createMockState();
+
+      mockExecuteConsolidationPlan.mockImplementation(() =>
+        (async function* () {
+          yield createMockState({ status: "executing" });
+          await new Promise(() => {});
+        })(),
+      );
+      // Default mock returns the snapshot reference unchanged: hook should
+      // skip setState/saveConsolidation entirely.
+
+      vi.useFakeTimers();
+      const { result, unmount } = renderHook(() => useConsolidationExecution({ state: mockState }));
+
+      await act(async () => {
+        result.current.executeOrResume();
+      });
+      // Let the generator's first yield + the hook's setInterval setup run.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const savesBefore = mockSaveConsolidation.mock.calls.length;
+
+      // Trigger the 30s tick (refresh-tick is no-op against this default).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(mockRefreshPendingSteps).toHaveBeenCalled();
+      expect(mockSaveConsolidation.mock.calls.length).toBe(savesBefore);
+
+      unmount();
+      vi.useRealTimers();
     });
   });
 });

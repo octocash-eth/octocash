@@ -1,4 +1,4 @@
-import type { Address } from "viem";
+import type { Address, Hex } from "viem";
 import type { Attestation } from "./cctp";
 
 // ============================================================================
@@ -82,6 +82,23 @@ export interface TransactionStep {
   error?: TransactionError; // Error details if failed
   executedAt?: number; // Timestamp of execution
   quotedAt?: number; // When the quote was obtained (for swap steps)
+
+  /**
+   * Audit trail of every hash the wallet returned for this step's transaction,
+   * including the original send and any same-nonce, gas-bumped resends. Kept
+   * even after the step completes so a user (or a developer) can verify on a
+   * block explorer which (if any) of the in-flight attempts confirmed,
+   * especially after a tab close/reopen.
+   *
+   * `nonce` is best-effort: when we couldn't fetch a nonce from the RPC, the
+   * wallet picked one internally and we record `undefined`.
+   */
+  pendingTx?: {
+    account: Address;
+    nonce?: number;
+    /** Chronological: [initial, resend1, resend2, ...]. */
+    hashes: Hex[];
+  };
 }
 
 // ============================================================================
@@ -168,9 +185,12 @@ export interface TransactionError {
 export const ERROR_CODES = {
   USER_REJECTED: "USER_REJECTED",
   INSUFFICIENT_GAS: "INSUFFICIENT_GAS",
+  INSUFFICIENT_INPUT_BALANCE: "INSUFFICIENT_INPUT_BALANCE",
+  NONCE_CONSUMED_BY_FOREIGN_TX: "NONCE_CONSUMED_BY_FOREIGN_TX",
   SLIPPAGE_EXCEEDED: "SLIPPAGE_EXCEEDED",
   RPC_ERROR: "RPC_ERROR",
   TIMEOUT: "TIMEOUT",
+  TX_STUCK: "TX_STUCK",
   ATTESTATION_TIMEOUT: "ATTESTATION_TIMEOUT",
   PLANNING_ERROR: "PLANNING_ERROR",
   UNSUPPORTED_ROUTE: "UNSUPPORTED_ROUTE",

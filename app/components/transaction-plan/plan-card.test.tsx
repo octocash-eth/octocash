@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { makeStep, makeToken, USDC_ETHEREUM, WALLET } from "test/test-helpers";
 import { describe, expect, test, vi } from "vitest";
 import type { StepResult, TransactionStep } from "~/lib/types";
@@ -170,5 +170,110 @@ describe("PlanCard", () => {
 
     const fuelIcon = container.querySelector("svg.lucide-fuel");
     expect(fuelIcon).not.toBeInTheDocument();
+  });
+
+  // The per-step in-flight hash audit trail (`step.pendingTx.hashes`) is
+  // intentionally not surfaced in the UI — multi-call steps (approval +
+  // swap, approval + bridge) would otherwise read like multiple "attempts"
+  // of the same op even when nothing went wrong. The data is still
+  // persisted by `useConsolidationExecution` for debugging.
+  describe("unified stall CTA (Resend / Retry)", () => {
+    const executingStep: TransactionStep = { ...mockStep, status: "executing" };
+
+    test("renders the Resend CTA when stallKind is 'resend' and the step is executing", () => {
+      const onStallAction = vi.fn();
+
+      render(<PlanCard step={executingStep} stepNumber={1} stallKind="resend" onStallAction={onStallAction} />);
+
+      const btn = screen.getByRole("button", { name: /Resend transaction with bumped gas/i });
+      expect(btn).toBeInTheDocument();
+      // Only one CTA button is rendered — the Retry label is gone.
+      expect(
+        screen.queryByRole("button", { name: /Retry transaction with refreshed calldata/i }),
+      ).not.toBeInTheDocument();
+      // The visible label is "Resend".
+      expect(btn).toHaveTextContent(/Resend/i);
+    });
+
+    test("renders the Retry CTA (different label/aria-label) when stallKind is 'retry'", () => {
+      const onStallAction = vi.fn();
+
+      render(<PlanCard step={executingStep} stepNumber={1} stallKind="retry" onStallAction={onStallAction} />);
+
+      const btn = screen.getByRole("button", { name: /Retry transaction with refreshed calldata/i });
+      expect(btn).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Resend transaction with bumped gas/i })).not.toBeInTheDocument();
+      expect(btn).toHaveTextContent(/Retry/i);
+    });
+
+    test("clicking the CTA fires onStallAction once, regardless of kind", () => {
+      const onStallAction = vi.fn();
+
+      const { rerender } = render(
+        <PlanCard step={executingStep} stepNumber={1} stallKind="resend" onStallAction={onStallAction} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /Resend/i }));
+      expect(onStallAction).toHaveBeenCalledTimes(1);
+
+      rerender(<PlanCard step={executingStep} stepNumber={1} stallKind="retry" onStallAction={onStallAction} />);
+      fireEvent.click(screen.getByRole("button", { name: /Retry/i }));
+      expect(onStallAction).toHaveBeenCalledTimes(2);
+    });
+
+    test("does NOT render the CTA when the step is not executing (pending / success / failed)", () => {
+      const onStallAction = vi.fn();
+
+      // Pending: stalls are only meaningful for the active step.
+      const { rerender } = render(
+        <PlanCard step={mockStep} stepNumber={1} stallKind="resend" onStallAction={onStallAction} />,
+      );
+      expect(screen.queryByRole("button", { name: /Resend|Retry/i })).not.toBeInTheDocument();
+
+      const successStep: TransactionStep = { ...mockStep, status: "success", transactionHash: "0xabc" };
+      rerender(<PlanCard step={successStep} stepNumber={1} stallKind="resend" onStallAction={onStallAction} />);
+      expect(screen.queryByRole("button", { name: /Resend|Retry/i })).not.toBeInTheDocument();
+
+      const failedStep: TransactionStep = {
+        ...mockStep,
+        status: "failed",
+        error: {
+          code: ERROR_CODES.USER_REJECTED,
+          title: "x",
+          message: "y",
+          recoverable: true,
+          timestamp: Date.now(),
+        },
+      };
+      rerender(<PlanCard step={failedStep} stepNumber={1} stallKind="resend" onStallAction={onStallAction} />);
+      expect(screen.queryByRole("button", { name: /Resend|Retry/i })).not.toBeInTheDocument();
+    });
+
+    test("does NOT render the CTA when only stallKind OR only onStallAction is provided", () => {
+      const onStallAction = vi.fn();
+
+      const { rerender } = render(<PlanCard step={executingStep} stepNumber={1} stallKind="resend" />);
+      expect(screen.queryByRole("button", { name: /Resend|Retry/i })).not.toBeInTheDocument();
+
+      rerender(<PlanCard step={executingStep} stepNumber={1} onStallAction={onStallAction} />);
+      expect(screen.queryByRole("button", { name: /Resend|Retry/i })).not.toBeInTheDocument();
+    });
+  });
+
+  test("never renders an Attempts disclosure, even when pendingTx records multiple hashes", () => {
+    const stepWithHistory: TransactionStep = {
+      ...mockStep,
+      status: "executing",
+      pendingTx: {
+        account: WALLET,
+        nonce: 7,
+        hashes: ["0xoriginalhash" as const, "0xresendhash" as const],
+      },
+    };
+
+    render(<PlanCard step={stepWithHistory} stepNumber={1} />);
+
+    expect(screen.queryByText(/^Attempts:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^#1\b/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^#2\b/)).not.toBeInTheDocument();
   });
 });

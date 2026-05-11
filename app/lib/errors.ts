@@ -7,9 +7,18 @@ import { ERROR_CODES } from "./types";
 export const ERROR_MESSAGES: Record<ErrorCode, [string, string]> = {
   [ERROR_CODES.USER_REJECTED]: ["Transaction cancelled", "Click retry to try again."],
   [ERROR_CODES.INSUFFICIENT_GAS]: ["Insufficient funds for gas", "Add more ETH and retry."],
+  [ERROR_CODES.INSUFFICIENT_INPUT_BALANCE]: [
+    "Not enough tokens to execute this step",
+    "The wallet's balance is below the planned input amount. Top up and retry, or skip this step.",
+  ],
+  [ERROR_CODES.NONCE_CONSUMED_BY_FOREIGN_TX]: [
+    "Wallet sent a different transaction first",
+    "Another transaction from this wallet used the nonce we were waiting for. Re-plan and try again.",
+  ],
   [ERROR_CODES.SLIPPAGE_EXCEEDED]: ["Price changed too much", "Retry for new quote."],
   [ERROR_CODES.RPC_ERROR]: ["Network error", "Check connection and retry."],
   [ERROR_CODES.TIMEOUT]: ["Transaction took too long", "It may still be processing - check your wallet."],
+  [ERROR_CODES.TX_STUCK]: ["Wallet is holding the transaction", "Tap Resend to broadcast it with bumped gas."],
   [ERROR_CODES.ATTESTATION_TIMEOUT]: [
     "Bridge attestation not received within 1 minute",
     "The money may be stuck in CCTPv2, use the history page to resume the transaction.",
@@ -48,7 +57,23 @@ export function createTransactionError(
 
   const messageIncludes = (str: string) => errMessage.toLowerCase().includes(str.toLowerCase());
 
-  if (messageIncludes("USER_REJECTED") || messageIncludes("user rejected")) {
+  // StuckTransactionError carries an explicit name; check before the
+  // broader "timeout"/"timed out" heuristic so the stuck-tx case wins.
+  const errName = (error as { name?: string } | null | undefined)?.name;
+  if (errName === "InsufficientInputBalanceError") {
+    code = ERROR_CODES.INSUFFICIENT_INPUT_BALANCE;
+  } else if (errName === "NonceConsumedByForeignTxError") {
+    code = ERROR_CODES.NONCE_CONSUMED_BY_FOREIGN_TX;
+    recoverable = false; // Plan must be regenerated; in-place retry won't help.
+  } else if (
+    errName === "StuckTransactionError" ||
+    messageIncludes("TX_STUCK") ||
+    messageIncludes("transaction may be stuck") ||
+    errName === "WaitForTransactionReceiptTimeoutError" ||
+    errName === "WaitForCallsStatusTimeoutError"
+  ) {
+    code = ERROR_CODES.TX_STUCK;
+  } else if (messageIncludes("USER_REJECTED") || messageIncludes("user rejected")) {
     code = ERROR_CODES.USER_REJECTED;
   } else if (messageIncludes("INSUFFICIENT_GAS") || messageIncludes("insufficient funds")) {
     code = ERROR_CODES.INSUFFICIENT_GAS;
