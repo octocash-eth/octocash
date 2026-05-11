@@ -96,32 +96,75 @@ vi.mock("~/data/supported-chains", () => ({
   },
 }));
 
-import { executeCCTPBurn, executeCCTPMint, getBridgeFee, getMintUsdcCalls, retrieveAttestations } from "./cctp";
+import {
+  _clearFeeCacheForTests,
+  AttestationTimeoutError,
+  executeCCTPBurn,
+  executeCCTPMint,
+  getBridgeFee,
+  getMintUsdcCalls,
+  retrieveAttestations,
+} from "./cctp";
 import { getPublicClient } from "./public-client";
+
+/** Mock Circle's fee endpoint to return a fixed bps for fast/standard. */
+const mockCircleFeeApi = (fastBps = 1, standardBps = 0) => {
+  global.fetch = vi.fn().mockImplementation((url: string) => {
+    if (url.includes("/v2/burn/USDC/fees/")) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [
+            { finalityThreshold: 1000, minimumFee: fastBps },
+            { finalityThreshold: 2000, minimumFee: standardBps },
+          ],
+        }),
+      } as Response);
+    }
+    return Promise.reject(new Error(`unexpected fetch ${url}`));
+  });
+};
 
 describe("cctp", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _clearFeeCacheForTests();
     // Reset fetch mock
     global.fetch = vi.fn();
   });
 
   describe("getBridgeFee", () => {
-    test("returns 0 for bridge fee", async () => {
-      const fee = await getBridgeFee(1000000n, 1, 137);
+    test("returns 0 when source and destination chains match", async () => {
+      const fee = await getBridgeFee(1_000_000n, 1, 1);
       expect(fee).toBe(0n);
     });
 
-    test("returns 0 regardless of amount or chains", async () => {
-      const fee1 = await getBridgeFee(999999999999n, 10, 42161);
-      const fee2 = await getBridgeFee(1n, 1, 1);
-      expect(fee1).toBe(0n);
-      expect(fee2).toBe(0n);
+    test("applies the bps fee from Circle's fee endpoint", async () => {
+      mockCircleFeeApi(1 /* 0.01% */);
+      const fee = await getBridgeFee(1_000_000n, 1, 137);
+      // 1_000_000 * 1 / 10000 = 100
+      expect(fee).toBe(100n);
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/v2/burn/USDC/fees/0/7"));
+    });
+
+    test("caches per-route within the TTL", async () => {
+      mockCircleFeeApi(2);
+      await getBridgeFee(1_000_000n, 10, 42161);
+      await getBridgeFee(2_000_000n, 10, 42161);
+      // Only the first call should have hit the API
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    test("throws when Circle returns a non-OK response", async () => {
+      global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 502 } as Response);
+      await expect(getBridgeFee(1_000_000n, 1, 137)).rejects.toThrow(/Failed to fetch CCTP fee/);
     });
   });
 
   describe("executeCCTPBurn", () => {
     test("executes burn successfully with approve and depositForBurn calls when no allowance", async () => {
+      mockCircleFeeApi();
       const tokenIn = makeToken(USDC_ETHEREUM, 1000000n, 1, { walletAddress: WALLET }); // 1 USDC on Ethereum
       const tokenOut = makeToken(USDC_ETHEREUM, 0n, 137, { walletAddress: WALLET }); // Polygon
 
@@ -160,6 +203,7 @@ describe("cctp", () => {
     });
 
     test("correctly pads destination address for EVM chains", async () => {
+      mockCircleFeeApi();
       const tokenIn = makeToken(USDC_ETHEREUM, 500000n, 10, { walletAddress: WALLET });
       const tokenOut = makeToken(USDC_ETHEREUM, 0n, 42161, { walletAddress: "0xabcd" as `0x${string}` }); // Short address to test padding
 
@@ -171,6 +215,7 @@ describe("cctp", () => {
     });
 
     test("skips approval when sufficient allowance already exists", async () => {
+      mockCircleFeeApi();
       const tokenIn = makeToken(USDC_ETHEREUM, 1000000n, 1, { walletAddress: WALLET });
       const tokenOut = makeToken(USDC_ETHEREUM, 0n, 137, { walletAddress: WALLET });
 
@@ -202,6 +247,7 @@ describe("cctp", () => {
     });
 
     test("includes approval when allowance is insufficient", async () => {
+      mockCircleFeeApi();
       const tokenIn = makeToken(USDC_ETHEREUM, 1000000n, 1, { walletAddress: WALLET });
       const tokenOut = makeToken(USDC_ETHEREUM, 0n, 137, { walletAddress: WALLET });
 
@@ -399,6 +445,38 @@ describe("cctp", () => {
 
       await expect(retrieveAttestations([["0xtxhash", 1]])).rejects.toThrow("Attestation retrieval failed");
     });
+
+    test("times out with AttestationTimeoutError if attestation never completes", async () => {
+      vi.useFakeTimers();
+
+      const pending: Attestation = {
+        message: "0xmessage",
+        attestation: "0xattestation",
+        status: "pending_confirmations",
+        decodedMessage: {
+          nonce: "0xnonce1",
+          destinationDomain: "7",
+          decodedMessageBody: { amount: "1000000", feeExecuted: "0" },
+        },
+      };
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ messages: [pending] }),
+      } as Response);
+
+      const promise = retrieveAttestations([["0xtxhash", 1]]);
+      // Catch the rejection eagerly so node doesn't see it as unhandled while
+      // we advance fake timers below.
+      const expectation = expect(promise).rejects.toBeInstanceOf(AttestationTimeoutError);
+
+      // Push past the 20-minute deadline
+      await vi.advanceTimersByTimeAsync(21 * 60 * 1000);
+
+      await expectation;
+      vi.useRealTimers();
+    });
   });
 
   describe("getMintUsdcCalls", () => {
@@ -518,11 +596,6 @@ describe("cctp", () => {
         },
       ];
 
-      // Mock getPublicClient to throw for unsupported chain
-      vi.mocked(getPublicClient).mockImplementationOnce(() => {
-        throw new Error("Chain 999 not supported");
-      });
-
       await expect(getMintUsdcCalls(999, mockAttestations)).rejects.toThrow("Chain 999 not supported");
     });
   });
@@ -580,7 +653,7 @@ describe("cctp", () => {
       expect(mockSendCalls).not.toHaveBeenCalled();
     });
 
-    test("returns empty result when all nonces are already used", async () => {
+    test("returns empty result and warns when all nonces are already used", async () => {
       const mockAttestations: Attestation[] = [
         {
           message: "0xmessage",
@@ -603,12 +676,16 @@ describe("cctp", () => {
       vi.mocked(getPublicClient).mockReturnValue(mockPublicClient);
 
       const mockSendCalls = vi.fn();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       const [txHash, logs] = await executeCCTPMint(mockAttestations, tokenOut, mockSendCalls);
 
       expect(txHash).toBe("");
       expect(logs).toEqual([]);
       expect(mockSendCalls).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith("CCTP mint skipped: all 1 nonce(s) already used on chain 1");
+
+      warnSpy.mockRestore();
     });
 
     test("handles multiple attestations with mixed used/unused nonces", async () => {
@@ -672,6 +749,7 @@ describe("cctp", () => {
 
   describe("edge cases and integration", () => {
     test("executeCCTPBurn handles large amounts correctly", async () => {
+      mockCircleFeeApi();
       const tokenIn = makeToken(USDC_ETHEREUM, 999999999999999n, 1, { walletAddress: WALLET }); // Very large amount
       const tokenOut = makeToken(USDC_ETHEREUM, 0n, 137, { walletAddress: WALLET });
 
