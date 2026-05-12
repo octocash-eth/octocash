@@ -24,6 +24,10 @@ export function useCCTPClaim() {
     }
 
     const attestations = await retrieveAttestations([[transactionHash, sourceChainId]]);
+    if (attestations.length === 0) {
+      throw new Error("No attestations found.");
+    }
+
     const destinationChainIds = attestations.map(getDestinationChainId);
     if (destinationChainIds.some((chainId) => chainId !== destinationChainIds[0])) {
       throw new Error("Only same destination chain ID is supported.");

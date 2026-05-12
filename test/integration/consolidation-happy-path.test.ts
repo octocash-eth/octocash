@@ -6,6 +6,16 @@ import { WALLET, consumeGenerator, makeToken, USDC_OPTIMISM, ETH_ADDRESS, WBTC_A
 // Mock dependencies
 vi.mock("../../app/lib/odos");
 vi.mock("../../app/lib/cctp");
+vi.mock("../../app/lib/public-client", () => ({
+  getPublicClient: vi.fn(() => ({
+    estimateFeesPerGas: vi.fn().mockResolvedValue({ maxFeePerGas: 1_000_000_000n }),
+    readContract: vi.fn().mockResolvedValue(2n ** 128n),
+  })),
+  retryOnRateLimit: <T>(fn: () => Promise<T>) => fn(),
+}));
+vi.mock("../../app/lib/gas", () => ({
+  getNativeBalance: vi.fn().mockResolvedValue(2n ** 128n),
+}));
 
 import { planConsolidation } from "../../app/lib/planning";
 import { executeConsolidationPlan } from "../../app/lib/execution";
