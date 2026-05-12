@@ -2,6 +2,7 @@ import { render, type RenderOptions } from "@testing-library/react";
 import type { ReactElement } from "react";
 import type { Address } from "viem";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "../app/lib/types";
+import { TokenPriceProvider } from "~/context/token-price-provider";
 import { WalletProvider } from "~/context/wallet-provider";
 
 // ============================================================================
@@ -9,12 +10,17 @@ import { WalletProvider } from "~/context/wallet-provider";
 // ============================================================================
 
 /**
- * Custom render function that wraps components with WalletProvider
- * for testing wallet-dependent components.
+ * Custom render function that wraps components with WalletProvider and
+ * TokenPriceProvider — the same provider chain real wallet-dependent pages
+ * see via `app/routes/_wallet.tsx`.
  */
 export function renderWithWallet(ui: ReactElement, options?: RenderOptions) {
   return render(ui, {
-    wrapper: ({ children }) => <WalletProvider>{children}</WalletProvider>,
+    wrapper: ({ children }) => (
+      <WalletProvider>
+        <TokenPriceProvider>{children}</TokenPriceProvider>
+      </WalletProvider>
+    ),
     ...options,
   });
 }

@@ -8,7 +8,6 @@ import {
   formatTokenAmount,
   formatUsd,
   getChainName,
-  getTokenAmountInUsd,
   getTokenIconUrl,
   getTokenId,
   groupTokensByChainAndWallet,
@@ -160,38 +159,6 @@ describe("tokens", () => {
 
     test("returns fallback for unknown chain ID", () => {
       expect(getChainName(999999)).toBe("Chain-999999");
-    });
-  });
-
-  describe("getTokenAmountInUsd", () => {
-    test("calculates USD value correctly for 6 decimal token", () => {
-      const token = makeToken(USDC_ETHEREUM, 1000000n, 1, { decimals: 6, unitaryPrice: 1.0 });
-      expect(getTokenAmountInUsd(token)).toBe(1.0);
-    });
-
-    test("calculates USD value correctly for 18 decimal token", () => {
-      const token = makeToken(ETH_ADDRESS, 1000000000000000000n, 1, { decimals: 18, unitaryPrice: 2000.0 });
-      expect(getTokenAmountInUsd(token)).toBe(2000.0);
-    });
-
-    test("handles fractional amounts", () => {
-      const token = makeToken(USDC_ETHEREUM, 500000n, 1, { decimals: 6, unitaryPrice: 1.0 });
-      expect(getTokenAmountInUsd(token)).toBe(0.5);
-    });
-
-    test("returns 0 when unitaryPrice is undefined", () => {
-      const token = makeToken(USDC_ETHEREUM, 1000000n, 1, { decimals: 6, unitaryPrice: undefined });
-      expect(getTokenAmountInUsd(token)).toBe(0);
-    });
-
-    test("handles zero amount", () => {
-      const token = makeToken(USDC_ETHEREUM, 0n, 1, { decimals: 6, unitaryPrice: 1.0 });
-      expect(getTokenAmountInUsd(token)).toBe(0);
-    });
-
-    test("handles high-value tokens", () => {
-      const token = makeToken(USDC_ETHEREUM, 1000000000000n, 1, { decimals: 6, unitaryPrice: 1.0 });
-      expect(getTokenAmountInUsd(token)).toBe(1000000);
     });
   });
 

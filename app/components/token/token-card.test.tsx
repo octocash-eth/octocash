@@ -20,6 +20,12 @@ vi.mock("~/hooks/use-token", () => ({
   useToken: (config: unknown) => mockUseToken(config),
 }));
 
+// Stub the token-price context — these tests don't assert on USD output and
+// shouldn't need a full <TokenPriceProvider>/QueryClientProvider chain.
+vi.mock("~/context/token-price-provider", () => ({
+  usePrice: () => ({ price: undefined, isPending: false }),
+}));
+
 vi.mock("wagmi", () => ({
   useEnsName: (config: unknown) => mockUseEnsName(config),
   useEnsAddress: (config: unknown) => mockUseEnsAddress(config),

@@ -11,7 +11,8 @@ import {
   TokenDisplayRoot,
   TokenDisplaySymbol,
 } from "~/components/token";
-import { formatTokenAmount, formatUsd, getChainName, getTokenAmountInUsd, getTokenId } from "~/lib/tokens";
+import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
+import { formatTokenAmount, formatUsd, getChainName, getTokenId } from "~/lib/tokens";
 
 interface SelectAmountStageProps {
   tokens: TokenWithConsolidateAmount[];
@@ -36,6 +37,13 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
       {} as Record<string, string>,
     );
   });
+
+  // Make sure the shared price context is tracking every token visible here.
+  // Native coins (zeroAddress) are handled by `fetchOdosPrices`, which
+  // substitutes Odos's `0xeeee…ee` sentinel only at request time and maps
+  // the response back to `zeroAddress` before storing.
+  useRegisterPrices(tokens);
+  const { priceFor } = usePriceMap();
 
   const onAmountsChangeRef = React.useRef(onAmountsChange);
 
@@ -64,15 +72,13 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
         {tokens.map((token) => {
           const tokenId = getTokenId(token);
           const chainName = getChainName(token.chainId);
-          const totalUsdValue = getTokenAmountInUsd(token);
+          const price = priceFor(token) ?? 0;
 
           // Calculate max consolidatable amount (respecting gas threshold for native tokens)
           const maxAmount = calculateMaxConsolidatableAmount(token);
           const amountValue = amounts[tokenId] ?? "0";
-          const currentUsdValue =
-            Number.parseFloat(maxAmount) > 0
-              ? ((Number.parseFloat(amountValue) || 0) / Number.parseFloat(maxAmount)) * totalUsdValue
-              : 0;
+          const totalUsdValue = Number(formatTokenAmount(token)) * price;
+          const currentUsdValue = (Number.parseFloat(amountValue) || 0) * price;
 
           return (
             <div key={tokenId} className="border rounded-lg p-4 space-y-3">

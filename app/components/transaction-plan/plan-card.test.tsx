@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { makeStep, makeToken, USDC_ETHEREUM, WALLET } from "test/test-helpers";
+import { screen } from "@testing-library/react";
+import { makeStep, makeToken, renderWithWallet as render, USDC_ETHEREUM, WALLET } from "test/test-helpers";
 import { describe, expect, test, vi } from "vitest";
 import type { StepResult, TransactionStep } from "~/lib/types";
 import { ERROR_CODES } from "~/lib/types";

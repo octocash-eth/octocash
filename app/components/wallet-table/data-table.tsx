@@ -36,6 +36,8 @@ interface DataTableProps<TData extends object, TValue> {
   onRowSelectionChange: OnChangeFn<RowSelectionState>;
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  priceFor?: (row: TData) => number | undefined;
+  isPending?: (row: TData) => boolean;
 }
 
 function RenderedAddressCell({ address }: { address: string }) {
@@ -72,6 +74,8 @@ export function DataTable<TData extends TokenAmount, TValue>({
   onRowSelectionChange,
   onRefresh,
   isRefreshing = false,
+  priceFor,
+  isPending,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -130,6 +134,8 @@ export function DataTable<TData extends TokenAmount, TValue>({
     [chains, tokens, wallets],
   );
 
+  const meta = React.useMemo(() => ({ priceFor, isPending }), [priceFor, isPending]);
+
   const table = useReactTable({
     data,
     columns,
@@ -143,6 +149,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
     onRowSelectionChange,
     enableRowSelection: true,
     getRowId: (row) => getTokenId(row),
+    meta,
     state: {
       sorting,
       columnFilters,

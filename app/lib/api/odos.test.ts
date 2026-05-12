@@ -1,8 +1,8 @@
-import type { Address } from "viem";
+import { type Address, zeroAddress } from "viem";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WALLET } from "../../../test/test-helpers";
 import { isSameToken } from "../tokens";
-import { EXTRA_TOKENS, fetchExtraTokenBalances } from "./odos";
+import { EXTRA_TOKENS, fetchExtraTokenBalances, fetchOdosPrices, odosPriceKey } from "./odos";
 
 // biome-ignore lint/suspicious/noExplicitAny: Test mocks require any types for flexibility
 type MockContract = any;
@@ -649,6 +649,191 @@ describe("odos", () => {
 
       // Should return empty array
       expect(result).toEqual([]);
+    });
+  });
+
+  describe("fetchOdosPrices", () => {
+    const ADDR_1 = "0x1111111111111111111111111111111111111111" as Address;
+    const ADDR_2 = "0x2222222222222222222222222222222222222222" as Address;
+    const ODOS_NATIVE = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+    test("returns empty map when no tokens are passed", async () => {
+      const result = await fetchOdosPrices([]);
+      expect(result.size).toBe(0);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    test("groups tokens by chain and issues one request per chain", async () => {
+      mockFetch.mockImplementation((url: string) => {
+        const chainPath = new URL(url).pathname.split("/").pop();
+        if (chainPath === "1") {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ currencyId: "USD", tokenPrices: { [ADDR_1]: 2.5 } }),
+          });
+        }
+        if (chainPath === "10") {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ currencyId: "USD", tokenPrices: { [ADDR_2]: 7.0 } }),
+          });
+        }
+        throw new Error(`Unexpected URL: ${url}`);
+      });
+
+      const result = await fetchOdosPrices([
+        { chainId: 1, token: ADDR_1 },
+        { chainId: 10, token: ADDR_2 },
+      ]);
+
+      expect(result.get(odosPriceKey(1, ADDR_1))).toBe(2.5);
+      expect(result.get(odosPriceKey(10, ADDR_2))).toBe(7.0);
+      // One fetch per chain
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    test("dedupes addresses within a chain", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ currencyId: "USD", tokenPrices: { [ADDR_1]: 1.23 } }),
+      });
+
+      await fetchOdosPrices([
+        { chainId: 1, token: ADDR_1 },
+        { chainId: 1, token: ADDR_1 },
+        { chainId: 1, token: ADDR_1 },
+      ]);
+
+      const fetchedUrl = mockFetch.mock.calls[0][0] as string;
+      const params = new URL(fetchedUrl).searchParams.getAll("token_addresses");
+      expect(params).toHaveLength(1);
+    });
+
+    test("returns prices keyed by lowercase address", async () => {
+      const UPPER = "0xAaaaAaaaAaAaAaaaAAAAAAaaAAaaaaAAaaAaAaAa" as Address;
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            currencyId: "USD",
+            // Odos returns mixed case
+            tokenPrices: { [UPPER]: 9.99 },
+          }),
+      });
+
+      const result = await fetchOdosPrices([{ chainId: 1, token: UPPER }]);
+
+      expect(result.get(odosPriceKey(1, UPPER))).toBe(9.99);
+      // Key must always be lowercase
+      expect([...result.keys()][0]).toBe(`1:${UPPER.toLowerCase()}`);
+    });
+
+    test("handles null prices gracefully (omits them from the map)", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            currencyId: "USD",
+            tokenPrices: { [ADDR_1]: null, [ADDR_2]: 4.2 },
+          }),
+      });
+
+      const result = await fetchOdosPrices([
+        { chainId: 1, token: ADDR_1 },
+        { chainId: 1, token: ADDR_2 },
+      ]);
+
+      expect(result.has(odosPriceKey(1, ADDR_1))).toBe(false);
+      expect(result.get(odosPriceKey(1, ADDR_2))).toBe(4.2);
+    });
+
+    test("isolates per-chain failures: one chain failing does not poison others", async () => {
+      mockFetch.mockImplementation((url: string) => {
+        const chainPath = new URL(url).pathname.split("/").pop();
+        if (chainPath === "1") {
+          return Promise.resolve({ ok: false, status: 500 });
+        }
+        if (chainPath === "10") {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ currencyId: "USD", tokenPrices: { [ADDR_2]: 3.14 } }),
+          });
+        }
+        return Promise.reject(new Error(`Unexpected URL: ${url}`));
+      });
+
+      const result = await fetchOdosPrices([
+        { chainId: 1, token: ADDR_1 },
+        { chainId: 10, token: ADDR_2 },
+      ]);
+
+      expect(result.has(odosPriceKey(1, ADDR_1))).toBe(false);
+      expect(result.get(odosPriceKey(10, ADDR_2))).toBe(3.14);
+    });
+
+    test("network error on a chain is swallowed; other chains still return", async () => {
+      mockFetch.mockImplementation((url: string) => {
+        const chainPath = new URL(url).pathname.split("/").pop();
+        if (chainPath === "1") {
+          return Promise.reject(new Error("Network error"));
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ currencyId: "USD", tokenPrices: { [ADDR_2]: 1.0 } }),
+        });
+      });
+
+      const result = await fetchOdosPrices([
+        { chainId: 1, token: ADDR_1 },
+        { chainId: 10, token: ADDR_2 },
+      ]);
+
+      expect(result.get(odosPriceKey(10, ADDR_2))).toBe(1.0);
+    });
+
+    test("substitutes Odos native sentinel for zeroAddress in the request but keys back with zeroAddress", async () => {
+      let capturedUrl = "";
+      mockFetch.mockImplementation((url: string) => {
+        capturedUrl = url;
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              currencyId: "USD",
+              // Odos responds keyed by the sentinel
+              tokenPrices: { [ODOS_NATIVE]: 3500.0 },
+            }),
+        });
+      });
+
+      const result = await fetchOdosPrices([{ chainId: 1, token: zeroAddress }]);
+
+      // The request must use the sentinel, not zeroAddress
+      const params = new URL(capturedUrl).searchParams.getAll("token_addresses");
+      expect(params).toHaveLength(1);
+      expect(params[0].toLowerCase()).toBe(ODOS_NATIVE);
+      // The result must be keyed back with zeroAddress
+      expect(result.get(odosPriceKey(1, zeroAddress))).toBe(3500.0);
+    });
+
+    test("forwards AbortSignal to fetch", async () => {
+      mockFetch.mockImplementation((_url: string, init: RequestInit) => {
+        if (init.signal?.aborted) {
+          return Promise.reject(new DOMException("aborted", "AbortError"));
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ currencyId: "USD", tokenPrices: { [ADDR_1]: 1.0 } }),
+        });
+      });
+
+      const controller = new AbortController();
+      controller.abort();
+
+      const result = await fetchOdosPrices([{ chainId: 1, token: ADDR_1 }], controller.signal);
+
+      // Aborted before fetch resolved → no price recorded
+      expect(result.has(odosPriceKey(1, ADDR_1))).toBe(false);
     });
   });
 });

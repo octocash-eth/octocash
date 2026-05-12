@@ -1,6 +1,6 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { MoreHorizontal } from "lucide-react";
-import { zeroAddress } from "viem";
+import { formatUnits, zeroAddress } from "viem";
 import {
   AddressDisplayAvatar,
   AddressDisplayCopy,
@@ -22,7 +22,7 @@ import { Checkbox } from "~/components/ui/checkbox";
 import { DataGridColumnHeader } from "~/components/ui/data-grid-column-header";
 import { Skeleton } from "~/components/ui/skeleton";
 import { supportedChains } from "~/data/supported-chains";
-import { formatUsd, getChainName, getTokenAmountInUsd } from "~/lib/tokens";
+import { formatUsd, getChainName } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
 import { ChainIcon } from "../chain/chain-icon";
 import { ButtonGroup } from "../ui/button-group";
@@ -213,20 +213,28 @@ export const columns: ColumnDef<TokenAmount>[] = [
   },
   {
     id: "amountInUsd",
-    accessorFn: (row) => getTokenAmountInUsd(row),
     size: 100,
+    enableSorting: false,
     header: ({ column }) => (
       <div className="flex justify-end -me-7">
         <DataGridColumnHeader column={column} title="In USD" className="ms-0 me-0" />
       </div>
     ),
-    cell: ({ row }) => {
-      const amount = getTokenAmountInUsd(row.original);
-      if (amount <= 0) {
-        return <div className="text-right font-medium text-muted-foreground">-</div>;
+    cell: ({ row, table }) => {
+      const meta = table.options.meta;
+      const price = meta?.priceFor?.(row.original);
+      const pending = meta?.isPending?.(row.original) ?? false;
+
+      if (price === undefined && pending) {
+        return <Skeleton className="h-4 w-16 ml-auto" />;
       }
 
-      return <div className="text-right font-medium">{formatUsd(amount)}</div>;
+      const formattedAmount = Number(formatUnits(row.original.amount, row.original.decimals));
+      const usd = (price ?? 0) * formattedAmount;
+      if (usd <= 0) {
+        return <div className="text-right font-medium text-muted-foreground">-</div>;
+      }
+      return <div className="text-right font-medium">{formatUsd(usd)}</div>;
     },
     meta: {
       skeleton: <Skeleton className="h-4 w-16 ml-auto" />,

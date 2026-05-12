@@ -1,11 +1,24 @@
 import { useQuery } from "@tanstack/react-query";
 import type { RowSelectionState } from "@tanstack/react-table";
 import * as React from "react";
+import { formatUnits } from "viem";
 import { ConsolidateTokensModal } from "~/components/consolidate-tokens-modal";
+import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
 import { fetchExtraTokenBalances, fetchZerionTokenBalances } from "~/lib/api";
-import { getTokenAmountInUsd, isSameToken } from "~/lib/tokens";
+import { isSameToken } from "~/lib/tokens";
+import type { TokenAmount } from "~/lib/types";
 import { columns } from "./columns";
 import { DataTable } from "./data-table";
+
+/**
+ * USD value used solely for the table's first-paint sort, derived from the
+ * `unitaryPrice` Zerion/Odos stamped on the `TokenAmount`. Live USD display
+ * goes through the {@link usePriceMap} context instead.
+ */
+function sortPriceUsd(token: TokenAmount): number {
+  if (token.unitaryPrice === undefined) return 0;
+  return Number(formatUnits(token.amount, token.decimals)) * token.unitaryPrice;
+}
 
 interface WalletTableProps {
   connectedAddresses?: readonly string[];
@@ -55,9 +68,9 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     // Only include extra tokens if the query has successfully completed
     // This ensures zerion data renders first before extra tokens are added
     if (!extraQuery.isSuccess) {
-      // Sort by USD value (descending)
+      // Sort by USD value (descending) using the cached `unitaryPrice`
       const sorted = [...zerionTokens];
-      sorted.sort((a, b) => getTokenAmountInUsd(b) - getTokenAmountInUsd(a));
+      sorted.sort((a, b) => sortPriceUsd(b) - sortPriceUsd(a));
       return sorted;
     }
 
@@ -67,10 +80,15 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     const deduplicatedExtra = extraTokens.filter((extra) => !zerionTokens.some((zerion) => isSameToken(zerion, extra)));
 
     const combined = [...zerionTokens, ...deduplicatedExtra];
-    // Sort by USD value (descending)
-    combined.sort((a, b) => getTokenAmountInUsd(b) - getTokenAmountInUsd(a));
+    combined.sort((a, b) => sortPriceUsd(b) - sortPriceUsd(a));
     return combined;
   }, [zerionQuery.data, extraQuery.data, extraQuery.isSuccess]);
+
+  // Feed every visible token into the shared price context, then read prices
+  // back through the same context so the table USD column and every other
+  // component (plan card, consolidation modal) see identical values.
+  useRegisterPrices(tokens);
+  const { priceFor, isPending: isPriceLoading } = usePriceMap();
 
   const isLoading = zerionQuery.isLoading;
   const isRefreshing = zerionQuery.isFetching || extraQuery.isFetching;
@@ -102,6 +120,8 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
             onRowSelectionChange={setRowSelection}
             onRefresh={handleRefresh}
             isRefreshing={isRefreshing || isLoading}
+            priceFor={priceFor}
+            isPending={isPriceLoading}
           />
           <div className="flex justify-center mt-6">
             <ConsolidateTokensModal

@@ -56,17 +56,6 @@ export function getChainName(chainId: number): string {
 }
 
 /**
- * Calculate the USD value of a token amount
- */
-export function getTokenAmountInUsd(token: TokenAmount): number {
-  if (token.unitaryPrice === undefined) {
-    return 0;
-  }
-  const formattedAmount = Number(formatUnits(token.amount, token.decimals));
-  return formattedAmount * token.unitaryPrice;
-}
-
-/**
  * Format a token amount for display
  */
 export function formatTokenAmount(token: TokenAmount): string {

@@ -1,6 +1,7 @@
 import { zeroAddress } from "viem";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
 import { ChainIcon } from "~/components/chain/chain-icon";
+import { usePrice } from "~/context/token-price-provider";
 import { chains } from "~/data/supported-chains";
 import { useToken } from "~/hooks/use-token";
 import type { TokenAmount } from "~/lib/types";
@@ -19,6 +20,7 @@ export function TokenCard({ token, label }: TokenCardProps) {
       enabled: token.token !== zeroAddress,
     },
   });
+  const { price } = usePrice(token.chainId, token.token);
 
   if (token.token !== zeroAddress && !tokenData) {
     return null;
@@ -39,7 +41,7 @@ export function TokenCard({ token, label }: TokenCardProps) {
           )}
           {token.amount > 0n && (
             <span className="ml-auto font-semibold text-sm">
-              <TokenDisplayAmount amount={token.amount} unitaryPrice={token.unitaryPrice} />
+              <TokenDisplayAmount amount={token.amount} unitaryPrice={price} />
             </span>
           )}
         </div>

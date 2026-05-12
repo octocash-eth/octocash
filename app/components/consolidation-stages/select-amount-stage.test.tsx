@@ -3,6 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { parseUnits } from "viem";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { TokenWithConsolidateAmount } from "~/components/consolidate-tokens-modal";
+
+// Stub the token-price context so the stage can be rendered without a
+// QueryClient/WalletProvider chain. The unit tests here only verify amount
+// selection logic, not USD math.
+vi.mock("~/context/token-price-provider", () => ({
+  useRegisterPrices: () => {},
+  usePriceMap: () => ({ priceFor: () => undefined, isPending: () => false }),
+}));
+
 import { SelectAmountStage } from "./select-amount-stage";
 
 // Mock ResizeObserver for Radix UI components

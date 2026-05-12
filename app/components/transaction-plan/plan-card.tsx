@@ -1,8 +1,10 @@
 import { Check, Circle, ExternalLink, Fuel, Loader2, X } from "lucide-react";
+import type { Address } from "viem";
 import { formatUnits } from "viem";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
 import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "~/components/token";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
+import { usePrice } from "~/context/token-price-provider";
 import { chains } from "~/data/supported-chains";
 import { consolidateTokenAmounts, formatUsd } from "~/lib/tokens";
 import type { StepGasEstimate, StepResult, TransactionStep } from "~/lib/types";
@@ -20,46 +22,61 @@ function getExplorerUrl(chainId: number, txHash: string): string {
   return `${chain.blockExplorers.default.url}/tx/${txHash}`;
 }
 
-function getActionContent(step: TransactionStep, result?: StepResult): React.ReactNode {
-  const chainName = chains[step.chainId as keyof typeof chains]?.name || `Chain ${step.chainId}`;
-  const isPast = step.status === "success";
-  const isExecuting = step.status === "executing";
+function ChainIconInline({ chainId }: { chainId: number }) {
+  const chainName = chains[chainId as keyof typeof chains]?.name || `Chain ${chainId}`;
+  return <ChainIcon chain={chainName} className="size-4 inline-block" />;
+}
 
-  const chainIcon = (chainId: number) => {
-    const chainName = chains[chainId as keyof typeof chains]?.name || `Chain ${chainId}`;
-    return <ChainIcon chain={chainName} className="size-4 inline-block" />;
-  };
+function ChainBadge({ chainId, name }: { chainId: number; name: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <ChainIconInline chainId={chainId} /> {name}
+    </span>
+  );
+}
 
-  const addressDisplay = (address: string) => (
+function AddressInline({ address }: { address: string }) {
+  return (
     <AddressDisplayRoot address={address} className="inline-flex gap-1">
       <AddressDisplayAvatar className="size-3 sm:size-4" title={`Wallet: ${address}`} />
       <AddressDisplayText />
     </AddressDisplayRoot>
   );
+}
 
-  // Group token icon + amount + symbol together with TokenDisplay
-  const tokenAmount = (
-    amount: bigint,
-    chainId: number,
-    tokenAddress: string,
-    symbol: string,
-    unitaryPrice?: number,
-  ) => (
+/**
+ * Renders a token icon + amount + symbol, with the USD-equivalent tooltip
+ * driven by the live Odos price from {@link usePrice}. This used to be a
+ * plain helper that received `unitaryPrice` from the step's TokenAmount, but
+ * that was Zerion's price; we now ignore it entirely.
+ */
+function TokenAmountInline({
+  amount,
+  chainId,
+  tokenAddress,
+  symbol,
+}: {
+  amount: bigint;
+  chainId: number;
+  tokenAddress: Address;
+  symbol: string;
+}) {
+  const { price } = usePrice(chainId, tokenAddress);
+  return (
     <TokenDisplayRoot tokenAddress={tokenAddress} chainId={chainId} symbol={symbol} className="inline-flex gap-1">
       <span className="inline-flex items-center gap-1">
         <TokenDisplayIcon className="size-4 inline-block" />
-        <TokenDisplayAmount amount={amount} unitaryPrice={unitaryPrice} />
+        <TokenDisplayAmount amount={amount} unitaryPrice={price} />
         <TokenDisplaySymbol />
       </span>
     </TokenDisplayRoot>
   );
+}
 
-  // Group chain icon + name together
-  const chainBadge = (chainId: number, name: string) => (
-    <span className="inline-flex items-center gap-1">
-      {chainIcon(chainId)} {name}
-    </span>
-  );
+function ActionContent({ step, result }: { step: TransactionStep; result?: StepResult }) {
+  const chainName = chains[step.chainId as keyof typeof chains]?.name || `Chain ${step.chainId}`;
+  const isPast = step.status === "success";
+  const isExecuting = step.status === "executing";
 
   switch (step.type) {
     case "swap": {
@@ -77,28 +94,38 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
             return (
               <span key={key}>
                 {index > 0 && <span className="text-muted-foreground"> + </span>}
-                {tokenAmount(token.amount, token.chainId, token.token, token.symbol, token.unitaryPrice)}
+                <TokenAmountInline
+                  amount={token.amount}
+                  chainId={token.chainId}
+                  tokenAddress={token.token}
+                  symbol={token.symbol}
+                />
               </span>
             );
           })}{" "}
           <span className="text-muted-foreground">→</span>{" "}
-          {tokenAmount(
-            outputToken.amount,
-            outputToken.chainId,
-            outputToken.token,
-            outputToken.symbol,
-            outputToken.unitaryPrice,
-          )}{" "}
-          <span className="text-muted-foreground">on</span> {chainBadge(step.chainId, chainName)}{" "}
+          <TokenAmountInline
+            amount={outputToken.amount}
+            chainId={outputToken.chainId}
+            tokenAddress={outputToken.token}
+            symbol={outputToken.symbol}
+          />{" "}
+          <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />{" "}
           <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
             (
             {inputWallets.map((wallet) => (
               <span key={wallet}>
                 {inputWallets.indexOf(wallet) > 0 && ","}
-                {addressDisplay(wallet)}
+                <AddressInline address={wallet} />
               </span>
             ))}
-            {!inputWallets.includes(outputToken.walletAddress) && <> → {addressDisplay(outputToken.walletAddress)}</>})
+            {!inputWallets.includes(outputToken.walletAddress) && (
+              <>
+                {" → "}
+                <AddressInline address={outputToken.walletAddress} />
+              </>
+            )}
+            )
           </span>
         </>
       );
@@ -114,13 +141,21 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
       return (
         <>
           <span className="text-foreground">{isPast ? "Bridged" : isExecuting ? "Bridging" : "Bridge"}</span>{" "}
-          {tokenAmount(totalAmount, inputToken.chainId, inputToken.token, inputToken.symbol, inputToken.unitaryPrice)}{" "}
-          <span className="text-muted-foreground">from</span> {chainBadge(step.chainId, chainName)}{" "}
-          <span className="text-muted-foreground">to</span> {chainBadge(destChainId, destChain)}{" "}
+          <TokenAmountInline
+            amount={totalAmount}
+            chainId={inputToken.chainId}
+            tokenAddress={inputToken.token}
+            symbol={inputToken.symbol}
+          />{" "}
+          <span className="text-muted-foreground">from</span> <ChainBadge chainId={step.chainId} name={chainName} />{" "}
+          <span className="text-muted-foreground">to</span> <ChainBadge chainId={destChainId} name={destChain} />{" "}
           <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
-            ({addressDisplay(inputToken.walletAddress)}
+            (<AddressInline address={inputToken.walletAddress} />
             {inputToken.walletAddress !== step.outputToken.walletAddress && (
-              <> → {addressDisplay(step.outputToken.walletAddress)}</>
+              <>
+                {" → "}
+                <AddressInline address={step.outputToken.walletAddress} />
+              </>
             )}
             )
           </span>
@@ -133,7 +168,7 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
           <span className="text-foreground">
             {isPast ? "Waited for" : isExecuting ? "Waiting for" : "Wait for"} attestation
           </span>{" "}
-          <span className="text-muted-foreground">on</span> {chainBadge(step.chainId, chainName)}
+          <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />
         </>
       );
     case "claim": {
@@ -141,16 +176,15 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
       return (
         <>
           <span className="text-foreground">{isPast ? "Claimed" : isExecuting ? "Claiming" : "Claim"}</span>{" "}
-          {tokenAmount(
-            outputToken.amount,
-            outputToken.chainId,
-            outputToken.token,
-            outputToken.symbol,
-            outputToken.unitaryPrice,
-          )}{" "}
-          <span className="text-muted-foreground">on</span> {chainBadge(step.chainId, chainName)}{" "}
+          <TokenAmountInline
+            amount={outputToken.amount}
+            chainId={outputToken.chainId}
+            tokenAddress={outputToken.token}
+            symbol={outputToken.symbol}
+          />{" "}
+          <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />{" "}
           <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
-            ({addressDisplay(outputToken.walletAddress)})
+            (<AddressInline address={outputToken.walletAddress} />)
           </span>
         </>
       );
@@ -162,10 +196,16 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
       return (
         <>
           <span className="text-foreground">{isPast ? "Transferred" : isExecuting ? "Transferring" : "Transfer"}</span>{" "}
-          {tokenAmount(totalAmount, inputToken.chainId, inputToken.token, inputToken.symbol, inputToken.unitaryPrice)}{" "}
-          <span className="text-muted-foreground">on</span> {chainBadge(step.chainId, chainName)}{" "}
+          <TokenAmountInline
+            amount={totalAmount}
+            chainId={inputToken.chainId}
+            tokenAddress={inputToken.token}
+            symbol={inputToken.symbol}
+          />{" "}
+          <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />{" "}
           <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
-            ({addressDisplay(inputToken.walletAddress)} → {addressDisplay(outputToken.walletAddress)})
+            (<AddressInline address={inputToken.walletAddress} /> →{" "}
+            <AddressInline address={outputToken.walletAddress} />)
           </span>
         </>
       );
@@ -174,7 +214,7 @@ function getActionContent(step: TransactionStep, result?: StepResult): React.Rea
       return (
         <>
           <span className="text-foreground">Transaction</span> <span className="text-muted-foreground">on</span>{" "}
-          {chainBadge(step.chainId, chainName)}
+          <ChainBadge chainId={step.chainId} name={chainName} />
         </>
       );
   }
@@ -234,7 +274,7 @@ export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
 
         {/* Action description */}
         <div className="text-sm text-foreground flex items-center gap-1.5 flex-wrap min-w-0">
-          {getActionContent(step, result)}
+          <ActionContent step={step} result={result} />
         </div>
       </div>
 

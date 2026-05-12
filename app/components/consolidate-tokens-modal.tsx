@@ -19,8 +19,9 @@ import {
   StepperTitle,
   StepperTrigger,
 } from "~/components/ui/stepper";
+import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
 import { USDC } from "~/data/token-contracts";
-import { formatTokenAmount, formatUsd, getTokenAmountInUsd, getTokenId } from "~/lib/tokens";
+import { formatTokenAmount, formatUsd, getTokenId } from "~/lib/tokens";
 import type { ConsolidationState, DestinationToken, SourceToken, TokenAmount } from "~/lib/types";
 import { CompletionStage } from "./consolidation-stages/completion-stage";
 import { ConfirmPlanStage } from "./consolidation-stages/confirm-plan-stage";
@@ -69,7 +70,10 @@ export function ConsolidateTokensModal({
       });
   }, [rowSelection, tokens, tokenAmounts]);
 
-  // Derive sourceTokens from consolidatedTokens and other state
+  // Derive sourceTokens from consolidatedTokens and other state. Note:
+  // `unitaryPrice` is intentionally NOT copied here — downstream USD display
+  // reads from the TokenPriceProvider context instead, so we don't propagate
+  // Zerion's price into the plan.
   const sourceTokens = React.useMemo<SourceToken[]>(() => {
     if (currentStage !== 3) return [];
 
@@ -83,7 +87,6 @@ export function ConsolidateTokensModal({
         symbol: token.symbol,
         decimals: token.decimals,
         name: token.name,
-        unitaryPrice: token.unitaryPrice,
       }));
   }, [currentStage, consolidatedTokens]);
 
@@ -106,15 +109,23 @@ export function ConsolidateTokensModal({
     };
   }, [currentStage, destination, sourceTokens]);
 
-  // Calculate actual total value based on selected amounts
+  // Register every selected token with the shared price context so its USD
+  // value reflects the live Odos price.
+  useRegisterPrices(consolidatedTokens);
+  const { priceFor } = usePriceMap();
+
+  // Calculate actual total value based on selected amounts. Uses live Odos
+  // prices from the context — never the stale Zerion unitaryPrice that may
+  // still be present on `token`.
   const actualTotalToConsolidate = React.useMemo(() => {
     return consolidatedTokens.reduce((total, token) => {
       const amountToConsolidate = Number.parseFloat(token.amountToConsolidate);
-      const fullAmount = Number(formatTokenAmount(token));
-      const ratio = fullAmount > 0 ? amountToConsolidate / fullAmount : 0;
-      return total + getTokenAmountInUsd(token) * ratio;
+      if (!Number.isFinite(amountToConsolidate) || amountToConsolidate <= 0) return total;
+      const price = priceFor(token);
+      if (price === undefined) return total;
+      return total + amountToConsolidate * price;
     }, 0);
-  }, [consolidatedTokens]);
+  }, [consolidatedTokens, priceFor]);
 
   React.useEffect(() => {
     if (destination.chainId) {

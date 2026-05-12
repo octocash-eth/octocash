@@ -1,4 +1,5 @@
 import { Outlet } from "react-router";
+import { TokenPriceProvider } from "~/context/token-price-provider";
 import { WalletProvider } from "~/context/wallet-provider";
 
 /**
@@ -8,7 +9,9 @@ import { WalletProvider } from "~/context/wallet-provider";
 export default function WalletLayout() {
   return (
     <WalletProvider>
-      <Outlet />
+      <TokenPriceProvider>
+        <Outlet />
+      </TokenPriceProvider>
     </WalletProvider>
   );
 }

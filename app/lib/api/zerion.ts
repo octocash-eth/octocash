@@ -1,11 +1,19 @@
-import { type Address, getAddress, parseUnits, zeroAddress } from "viem";
+import { type Address, formatUnits, getAddress, parseUnits, zeroAddress } from "viem";
 import { chainIdToZerionId, chains } from "~/data/supported-chains";
 import { getPublicClient } from "../public-client";
-import { getTokenAmountInUsd } from "../tokens";
 import type { TokenAmount } from "../types";
 
 function isEffectivelyZero(balance: number): boolean {
   return balance < 0.01; // Consider anything less than $0.01 as effectively zero
+}
+
+/**
+ * USD value derived from the Zerion-stamped `unitaryPrice`. Used only to
+ * drop dust positions before returning to the caller.
+ */
+function zerionTokenAmountInUsd(token: TokenAmount): number {
+  if (token.unitaryPrice === undefined) return 0;
+  return Number(formatUnits(token.amount, token.decimals)) * token.unitaryPrice;
 }
 
 // Zerion API Types
@@ -201,7 +209,7 @@ export async function fetchZerionTokenBalances(addresses: string[]): Promise<Tok
             };
 
             // Skip tokens with effectively zero USD value
-            if (isEffectivelyZero(getTokenAmountInUsd(tokenAmount))) {
+            if (isEffectivelyZero(zerionTokenAmountInUsd(tokenAmount))) {
               continue;
             }
 

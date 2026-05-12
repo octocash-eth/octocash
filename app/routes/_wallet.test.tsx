@@ -12,21 +12,33 @@ vi.mock("~/context/wallet-provider", () => ({
   WalletProvider: ({ children }: { children: React.ReactNode }) => <div data-testid="wallet-provider">{children}</div>,
 }));
 
+// Mock TokenPriceProvider — its real implementation uses `useQuery`, which
+// requires a QueryClientProvider. Here we only care that the layout wires
+// the two providers in the correct order.
+vi.mock("~/context/token-price-provider", () => ({
+  TokenPriceProvider: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="token-price-provider">{children}</div>
+  ),
+}));
+
 describe("WalletLayout", () => {
   test("renders without crashing", () => {
     render(<WalletLayout />);
     expect(screen.getByTestId("wallet-provider")).toBeInTheDocument();
   });
 
-  test("wraps Outlet with WalletProvider", () => {
+  test("wraps Outlet with WalletProvider and TokenPriceProvider", () => {
     render(<WalletLayout />);
 
-    const provider = screen.getByTestId("wallet-provider");
+    const walletProvider = screen.getByTestId("wallet-provider");
+    const priceProvider = screen.getByTestId("token-price-provider");
     const outlet = screen.getByTestId("outlet");
 
-    expect(provider).toBeInTheDocument();
+    expect(walletProvider).toBeInTheDocument();
+    expect(priceProvider).toBeInTheDocument();
     expect(outlet).toBeInTheDocument();
-    expect(provider).toContainElement(outlet);
+    expect(walletProvider).toContainElement(priceProvider);
+    expect(priceProvider).toContainElement(outlet);
   });
 
   test("renders Outlet component", () => {
@@ -37,12 +49,13 @@ describe("WalletLayout", () => {
   test("has correct component structure", () => {
     const { container } = render(<WalletLayout />);
 
-    // Should have WalletProvider wrapping Outlet
-    const provider = screen.getByTestId("wallet-provider");
+    const walletProvider = screen.getByTestId("wallet-provider");
+    const priceProvider = screen.getByTestId("token-price-provider");
     const outlet = screen.getByTestId("outlet");
 
-    expect(container.firstChild).toBe(provider);
-    expect(provider.firstChild).toBe(outlet);
+    expect(container.firstChild).toBe(walletProvider);
+    expect(walletProvider.firstChild).toBe(priceProvider);
+    expect(priceProvider.firstChild).toBe(outlet);
   });
 
   test("renders outlet content", () => {
