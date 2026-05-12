@@ -1,5 +1,6 @@
 import { type Address, erc20Abi, formatUnits, isAddressEqual, zeroAddress } from "viem";
 import { STAKED_TOKENS } from "~/data/staked-tokens";
+import { wrappedNative } from "~/data/supported-chains";
 import { getPublicClient } from "../public-client";
 import { groupTokensByChain } from "../tokens";
 import type { TokenAmount } from "../types";
@@ -28,9 +29,6 @@ interface OdosPricingResponse {
   tokenPrices: Record<string, number | null>;
 }
 
-// Odos uses this sentinel for native tokens (ETH/POL/etc.) instead of zeroAddress.
-const ODOS_NATIVE_SENTINEL = "0xEeeeeEeeeEeEeeEeEeEEEEeeeEeEeEEEeEEEeEEE" as Address;
-
 export type OdosPriceKey = `${number}:${string}`;
 export const odosPriceKey = (chainId: number, address: Address): OdosPriceKey => `${chainId}:${address.toLowerCase()}`;
 
@@ -38,8 +36,13 @@ export const odosPriceKey = (chainId: number, address: Address): OdosPriceKey =>
  * Fetch Odos token prices for the given (chainId, token) pairs.
  *
  * - Groups by chainId, dedupes addresses, issues one fetch per chain in parallel.
- * - For native tokens (zeroAddress), sends Odos's native sentinel address but keys
- *   the result back with zeroAddress so callers always look up with zeroAddress.
+ * - For native tokens (zeroAddress), we ignore Odos's `0xeeee…eEEE` sentinel
+ *   entirely and ask for the chain's wrapped-native equivalent (WETH/WPOL/…)
+ *   instead, because the sentinel quote is unreliable on several L2s (off by
+ *   ~12% on Optimism vs the WETH spot on the same chain). Native and
+ *   wrapped-native are 1:1 redeemable, so the wrapped price is the correct
+ *   number for both. Results are still keyed back under `zeroAddress` so
+ *   callers don't need to know about the substitution.
  * - Returned map keys are `${chainId}:${lowercase address}`. Use `odosPriceKey()`.
  * - Per-chain failures are swallowed and logged; missing keys mean "no price".
  */
@@ -55,19 +58,30 @@ export async function fetchOdosPrices(
   await Promise.all(
     Array.from(byChain.entries()).map(async ([chainId, chainTokens]) => {
       try {
-        // Dedupe addresses (case-insensitive); remember which originals each address belongs to.
+        // Dedupe addresses (case-insensitive).
         const uniqueAddresses = new Set<string>();
         for (const t of chainTokens) {
           uniqueAddresses.add(t.token.toLowerCase());
         }
 
-        // Substitute zeroAddress with the Odos native sentinel for the request.
-        const requestAddresses: string[] = [];
+        // Resolve the wrapped-native address for this chain so we can quote
+        // native balances against it. May be undefined for chains we haven't
+        // mapped yet, in which case native tokens just won't get priced.
+        const wrappedNativeLc = wrappedNative[chainId]?.toLowerCase();
+
+        // Build the request set, substituting zeroAddress -> wrapped-native.
+        // Using a Set so a caller that asks for both native AND wrapped-native
+        // doesn't make us send the same address twice.
+        const requestAddresses = new Set<string>();
         for (const addr of uniqueAddresses) {
-          requestAddresses.push(
-            isAddressEqual(addr as Address, zeroAddress) ? ODOS_NATIVE_SENTINEL : (addr as Address),
-          );
+          if (isAddressEqual(addr as Address, zeroAddress)) {
+            if (wrappedNativeLc !== undefined) requestAddresses.add(wrappedNativeLc);
+          } else {
+            requestAddresses.add(addr);
+          }
         }
+
+        if (requestAddresses.size === 0) return;
 
         const url = new URL(`https://api.odos.xyz/pricing/token/${chainId}`);
         for (const addr of requestAddresses) {
@@ -93,7 +107,9 @@ export async function fetchOdosPrices(
         }
 
         for (const addr of uniqueAddresses) {
-          const lookup = isAddressEqual(addr as Address, zeroAddress) ? ODOS_NATIVE_SENTINEL.toLowerCase() : addr;
+          const isNative = isAddressEqual(addr as Address, zeroAddress);
+          const lookup = isNative ? wrappedNativeLc : addr;
+          if (lookup === undefined) continue;
           const price = tokenPricesLc[lookup];
           if (price !== null && price !== undefined) {
             prices.set(odosPriceKey(chainId, addr as Address), price);

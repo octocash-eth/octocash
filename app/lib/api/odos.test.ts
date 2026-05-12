@@ -655,6 +655,8 @@ describe("odos", () => {
   describe("fetchOdosPrices", () => {
     const ADDR_1 = "0x1111111111111111111111111111111111111111" as Address;
     const ADDR_2 = "0x2222222222222222222222222222222222222222" as Address;
+    // Mainnet WETH — what we substitute zeroAddress with on chain 1.
+    const WETH_MAINNET = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
     const ODOS_NATIVE = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
     test("returns empty map when no tokens are passed", async () => {
@@ -791,7 +793,7 @@ describe("odos", () => {
       expect(result.get(odosPriceKey(10, ADDR_2))).toBe(1.0);
     });
 
-    test("substitutes Odos native sentinel for zeroAddress in the request but keys back with zeroAddress", async () => {
+    test("substitutes wrapped-native (WETH) for zeroAddress in the request but keys back with zeroAddress", async () => {
       let capturedUrl = "";
       mockFetch.mockImplementation((url: string) => {
         capturedUrl = url;
@@ -800,20 +802,61 @@ describe("odos", () => {
           json: () =>
             Promise.resolve({
               currencyId: "USD",
-              // Odos responds keyed by the sentinel
-              tokenPrices: { [ODOS_NATIVE]: 3500.0 },
+              // Odos returns the WETH price; the sentinel price (if any) is
+              // deliberately wrong here so the test fails loudly if we ever
+              // regress to using it.
+              tokenPrices: { [WETH_MAINNET]: 2286.97, [ODOS_NATIVE]: 9_999_999 },
             }),
         });
       });
 
       const result = await fetchOdosPrices([{ chainId: 1, token: zeroAddress }]);
 
-      // The request must use the sentinel, not zeroAddress
+      // The request must use WETH, not the sentinel.
       const params = new URL(capturedUrl).searchParams.getAll("token_addresses");
       expect(params).toHaveLength(1);
-      expect(params[0].toLowerCase()).toBe(ODOS_NATIVE);
-      // The result must be keyed back with zeroAddress
-      expect(result.get(odosPriceKey(1, zeroAddress))).toBe(3500.0);
+      expect(params[0].toLowerCase()).toBe(WETH_MAINNET);
+      // The result must be keyed back with zeroAddress AND must be the WETH price.
+      expect(result.get(odosPriceKey(1, zeroAddress))).toBe(2286.97);
+    });
+
+    test("dedupes the request when a caller asks for both native and wrapped-native, and populates both keys", async () => {
+      let capturedUrl = "";
+      mockFetch.mockImplementation((url: string) => {
+        capturedUrl = url;
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              currencyId: "USD",
+              tokenPrices: { [WETH_MAINNET]: 2300.0 },
+            }),
+        });
+      });
+
+      const result = await fetchOdosPrices([
+        { chainId: 1, token: zeroAddress },
+        { chainId: 1, token: WETH_MAINNET as Address },
+      ]);
+
+      // Only one address sent to Odos despite two registered tokens.
+      const params = new URL(capturedUrl).searchParams.getAll("token_addresses");
+      expect(params).toHaveLength(1);
+      expect(params[0].toLowerCase()).toBe(WETH_MAINNET);
+
+      // Both keys resolve to the WETH price.
+      expect(result.get(odosPriceKey(1, zeroAddress))).toBe(2300.0);
+      expect(result.get(odosPriceKey(1, WETH_MAINNET as Address))).toBe(2300.0);
+    });
+
+    test("skips native pricing on a chain we haven't mapped (no wrapped-native sentinel fallback)", async () => {
+      // Chain 999 is intentionally unmapped in `wrappedNative`. The only token
+      // we ask for is native on that chain — so we expect no request to fire
+      // and no price to come back.
+      const result = await fetchOdosPrices([{ chainId: 999, token: zeroAddress }]);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(result.size).toBe(0);
     });
 
     test("forwards AbortSignal to fetch", async () => {

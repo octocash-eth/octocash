@@ -1,4 +1,4 @@
-import { http } from "viem";
+import { type Address, http } from "viem";
 import { arbitrum, base, linea, mainnet, optimism, polygon, unichain } from "viem/chains";
 
 export const chains = {
@@ -63,4 +63,26 @@ export const chainIdToZerionId: Record<number, string> = {
   [polygon.id]: "polygon",
   [unichain.id]: "unichain",
   [linea.id]: "linea",
+};
+
+/**
+ * Wrapped-native ERC20 address per chain (WETH / WPOL / etc.). Native and
+ * wrapped-native are 1:1 redeemable, so for pricing purposes we treat them
+ * as the same asset and prefer the wrapped quote — Odos's `0xeeee…eEEE`
+ * native sentinel is unreliable on several chains (e.g. it returns a stale
+ * ETH price on Optimism that's ~12% off the WETH spot quoted on the same
+ * chain).
+ *
+ * Used by `fetchOdosPrices` to substitute `zeroAddress` requests for the
+ * wrapped equivalent. If/when we need this elsewhere it's already a generic
+ * piece of chain metadata.
+ */
+export const wrappedNative: Record<number, Address> = {
+  [mainnet.id]: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+  [optimism.id]: "0x4200000000000000000000000000000000000006",
+  [arbitrum.id]: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+  [base.id]: "0x4200000000000000000000000000000000000006",
+  [polygon.id]: "0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",
+  [unichain.id]: "0x4200000000000000000000000000000000000006",
+  [linea.id]: "0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f",
 };
