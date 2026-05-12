@@ -138,7 +138,7 @@ describe("TokenSelector with initial tokens", () => {
   });
 
   test("uses WETH label for Polygon", () => {
-    const wethAddress = "0x11cd37bb86f65419713f30673a480ea33c826872";
+    const wethAddress = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619";
     const options = [{ value: formatTokenValue(137, wethAddress, 18, "WETH", "Wrapped Ether") }];
     renderWithQueryClient(
       <TokenSelector chainId={137} value={wethAddress} onChange={mockOnChange} options={options} />,

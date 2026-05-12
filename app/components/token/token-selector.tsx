@@ -88,12 +88,13 @@ function useTokenMetadata(chainId: number, addresses: Address[]) {
           try {
             // Handle native token (zero address)
             if (address === zeroAddress) {
-              // Special handling for Polygon which uses WETH
+              // Polygon's native token is POL; everywhere else it's ETH.
+              // WETH on Polygon is an ERC20 with its own non-zero address (see ETH map in token-contracts.ts).
               if (chainId === 137) {
                 map.set(address, {
                   decimals: 18,
-                  symbol: "WETH",
-                  name: "Wrapped Ether",
+                  symbol: "POL",
+                  name: "Polygon Token",
                 });
               } else {
                 map.set(address, {
@@ -330,8 +331,8 @@ export function TokenSelector({
             chainId,
             address,
             18,
-            isPolygon ? "WETH" : "ETH",
-            isPolygon ? "Wrapped Ether" : "Ether",
+            isPolygon ? "POL" : "ETH",
+            isPolygon ? "Polygon Token" : "Ether",
           );
         }
 
