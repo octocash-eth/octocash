@@ -6,10 +6,8 @@ import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySym
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { usePrice } from "~/context/token-price-provider";
 import { chains } from "~/data/supported-chains";
-import { useAmountDelta } from "~/hooks/use-amount-delta";
 import { consolidateTokenAmounts, formatUsd } from "~/lib/tokens";
-import type { StepGasEstimate, StepResult, TransactionStep } from "~/lib/types";
-import { cn } from "~/lib/utils";
+import type { StepGasEstimate, StepResult, TokenAmount, TransactionStep } from "~/lib/types";
 import { ChainIcon } from "../chain/chain-icon";
 
 interface PlanCardProps {
@@ -22,29 +20,6 @@ function getExplorerUrl(chainId: number, txHash: string): string {
   const chain = chains[chainId as keyof typeof chains];
   if (!chain?.blockExplorers?.default?.url) return "#";
   return `${chain.blockExplorers.default.url}/tx/${txHash}`;
-}
-
-/**
- * Inline badge that briefly shows the percentage change in a swap step's
- * output amount whenever it gets re-quoted. Renders only while the delta is
- * active (~1s), fading in/out via the `swap-delta-fade` animation. Threshold
- * is 0.5% to avoid flicker from sub-percent Odos jitter.
- */
-function SwapOutputDelta({ amount }: { amount: bigint }) {
-  const delta = useAmountDelta(amount);
-  if (!delta) return null;
-
-  return (
-    <span
-      aria-live="polite"
-      className={cn(
-        "inline-flex items-center text-xs font-medium ml-0.5 animate-in fade-in zoom-in-95 duration-200",
-        delta.sign === "up" ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400",
-      )}
-    >
-      ({delta.sign === "up" ? "▲" : "▼"} {delta.percent.toFixed(1)}%)
-    </span>
-  );
 }
 
 function ChainIconInline({ chainId }: { chainId: number }) {
@@ -70,31 +45,66 @@ function AddressInline({ address }: { address: string }) {
 }
 
 /**
- * Renders a token icon + amount + symbol, with the USD-equivalent tooltip
- * driven by the live Odos price from {@link usePrice}. This used to be a
- * plain helper that received `unitaryPrice` from the step's TokenAmount, but
- * that was Zerion's price; we now ignore it entirely.
+ * Renders a token icon + amount + symbol + inline USD label, where the USD
+ * value is driven by the live Odos price from {@link usePrice}. The amount
+ * text gets re-keyed on every change so its `animate-in fade-in` entrance
+ * animation reruns — a small one-shot blink that signals "this number just
+ * moved" without committing to a direction or threshold.
  */
 function TokenAmountInline({
   amount,
   chainId,
   tokenAddress,
   symbol,
+  decimals,
 }: {
   amount: bigint;
   chainId: number;
   tokenAddress: Address;
   symbol: string;
+  decimals: number;
 }) {
   const { price } = usePrice(chainId, tokenAddress);
+
+  const usdLabel = price !== undefined ? formatUsd(Number(formatUnits(amount, decimals)) * price) : null;
+
   return (
-    <TokenDisplayRoot tokenAddress={tokenAddress} chainId={chainId} symbol={symbol} className="inline-flex gap-1">
+    <TokenDisplayRoot
+      tokenAddress={tokenAddress}
+      chainId={chainId}
+      symbol={symbol}
+      decimals={decimals}
+      className="inline-flex gap-1"
+    >
       <span className="inline-flex items-center gap-1">
         <TokenDisplayIcon className="size-4 inline-block" />
-        <TokenDisplayAmount amount={amount} unitaryPrice={price} />
+        <TokenDisplayAmount
+          key={amount.toString()}
+          amount={amount}
+          unitaryPrice={price}
+          className="animate-in fade-in duration-300"
+        />
         <TokenDisplaySymbol />
+        {usdLabel !== null && <span className="text-xs text-muted-foreground/80 tabular-nums">({usdLabel})</span>}
       </span>
     </TokenDisplayRoot>
+  );
+}
+
+/**
+ * Convenience wrapper so callers can pass a {@link TokenAmount}-shaped object
+ * (which always carries `decimals`) instead of spelling each field out at
+ * every call site.
+ */
+function TokenAmountInlineFor({ token, amount }: { token: TokenAmount; amount?: bigint }) {
+  return (
+    <TokenAmountInline
+      amount={amount ?? token.amount}
+      chainId={token.chainId}
+      tokenAddress={token.token}
+      symbol={token.symbol}
+      decimals={token.decimals}
+    />
   );
 }
 
@@ -119,23 +129,11 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
             return (
               <span key={key}>
                 {index > 0 && <span className="text-muted-foreground"> + </span>}
-                <TokenAmountInline
-                  amount={token.amount}
-                  chainId={token.chainId}
-                  tokenAddress={token.token}
-                  symbol={token.symbol}
-                />
+                <TokenAmountInlineFor token={token} />
               </span>
             );
           })}{" "}
-          <span className="text-muted-foreground">→</span>{" "}
-          <TokenAmountInline
-            amount={outputToken.amount}
-            chainId={outputToken.chainId}
-            tokenAddress={outputToken.token}
-            symbol={outputToken.symbol}
-          />{" "}
-          <SwapOutputDelta amount={outputToken.amount} />
+          <span className="text-muted-foreground">→</span> <TokenAmountInlineFor token={outputToken} />{" "}
           <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />{" "}
           <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
             (
@@ -167,12 +165,7 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
       return (
         <>
           <span className="text-foreground">{isPast ? "Bridged" : isExecuting ? "Bridging" : "Bridge"}</span>{" "}
-          <TokenAmountInline
-            amount={totalAmount}
-            chainId={inputToken.chainId}
-            tokenAddress={inputToken.token}
-            symbol={inputToken.symbol}
-          />{" "}
+          <TokenAmountInlineFor token={inputToken} amount={totalAmount} />{" "}
           <span className="text-muted-foreground">from</span> <ChainBadge chainId={step.chainId} name={chainName} />{" "}
           <span className="text-muted-foreground">to</span> <ChainBadge chainId={destChainId} name={destChain} />{" "}
           <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
@@ -202,13 +195,8 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
       return (
         <>
           <span className="text-foreground">{isPast ? "Claimed" : isExecuting ? "Claiming" : "Claim"}</span>{" "}
-          <TokenAmountInline
-            amount={outputToken.amount}
-            chainId={outputToken.chainId}
-            tokenAddress={outputToken.token}
-            symbol={outputToken.symbol}
-          />{" "}
-          <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />{" "}
+          <TokenAmountInlineFor token={outputToken} /> <span className="text-muted-foreground">on</span>{" "}
+          <ChainBadge chainId={step.chainId} name={chainName} />{" "}
           <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
             (<AddressInline address={outputToken.walletAddress} />)
           </span>
@@ -222,12 +210,7 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
       return (
         <>
           <span className="text-foreground">{isPast ? "Transferred" : isExecuting ? "Transferring" : "Transfer"}</span>{" "}
-          <TokenAmountInline
-            amount={totalAmount}
-            chainId={inputToken.chainId}
-            tokenAddress={inputToken.token}
-            symbol={inputToken.symbol}
-          />{" "}
+          <TokenAmountInlineFor token={inputToken} amount={totalAmount} />{" "}
           <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />{" "}
           <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
             (<AddressInline address={inputToken.walletAddress} /> →{" "}
