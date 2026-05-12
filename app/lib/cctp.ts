@@ -32,6 +32,10 @@ const CIRCLE_API_BASE = "https://iris-api.circle.com";
 const MAX_FEE_BUFFER_NUM = 110n;
 const MAX_FEE_BUFFER_DENOM = 100n;
 const BPS_DENOM = 10_000n;
+// Circle occasionally returns a fractional `minimumFee` (e.g. 1.3 bps). Scale
+// the bps before converting to BigInt so we preserve sub-bps precision without
+// blowing up on `BigInt(1.3)`.
+const BPS_SCALE = 1_000_000n;
 
 const ATTESTATION_TIMEOUT_MS = 20 * 60 * 1000;
 const ATTESTATION_POLL_INTERVAL_MS = 5_000;
@@ -323,5 +327,9 @@ export async function getBridgeFee(
 ): Promise<bigint> {
   if (sourceChainId === destinationChainId) return 0n;
   const bps = await fetchBurnFeeBps(sourceChainId, destinationChainId, transferType);
-  return (amount * BigInt(bps)) / BPS_DENOM;
+  if (!Number.isFinite(bps) || bps < 0) {
+    throw new Error(`Circle returned a non-finite or negative bps: ${bps}`);
+  }
+  const scaledBps = BigInt(Math.round(bps * Number(BPS_SCALE)));
+  return (amount * scaledBps) / (BPS_DENOM * BPS_SCALE);
 }

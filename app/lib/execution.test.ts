@@ -51,8 +51,14 @@ describe("executeConsolidationPlan", () => {
       chain: { id: 1 } as Chain,
     } as WalletClient<HttpTransport, Chain, Account>;
 
-    // Default mock for getSwapQuote (used in recalculation)
-    vi.mocked(getSwapQuote).mockResolvedValue(makeToken(USDC_ADDRESS, 1000000n, 1));
+    // Default mock for getSwapQuote: pass-through that returns the requested
+    // outputToken unchanged. This makes the unconditional pre-execution refresh
+    // (and any other ambient call) a no-op by default; individual tests
+    // override specific calls with mockResolvedValueOnce.
+    vi.mocked(getSwapQuote).mockImplementation(async (_inputs, outputToken) => {
+      const ot = outputToken as TokenAmount;
+      return { ...ot, amount: ot.amount ?? 0n };
+    });
 
     // Default execution mocks
     vi.mocked(executeOdosSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap123" });
@@ -228,6 +234,11 @@ describe("executeConsolidationPlan", () => {
     };
 
     mockState.plan = [step1, step2];
+
+    // Pre-execution swap-quote refresh on step 1 returns its existing quote
+    // (no drift), so the cascade-recalc mock below is consumed at the right
+    // place (step-2 re-quote after step-1 succeeds).
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(step1.outputToken);
 
     // Mock swap 1: WETH -> USDC (actual: 3100 USDC, estimated: 3000)
     vi.mocked(executeOdosSwap).mockResolvedValueOnce({
@@ -771,7 +782,10 @@ describe("recalculatePlan - comprehensive coverage", () => {
       chain: { id: 1 } as Chain,
     } as WalletClient<HttpTransport, Chain, Account>;
 
-    vi.mocked(getSwapQuote).mockResolvedValue(makeToken(USDC_ADDRESS, 1000000n, 1));
+    vi.mocked(getSwapQuote).mockImplementation(async (_inputs, outputToken) => {
+      const ot = outputToken as TokenAmount;
+      return { ...ot, amount: ot.amount ?? 0n };
+    });
     vi.mocked(executeOdosSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap" });
     vi.mocked(executeCCTPBurn).mockResolvedValue(["0xburn", 1]);
     vi.mocked(retrieveAttestations).mockResolvedValue([
@@ -1694,7 +1708,10 @@ describe("Additional edge cases for complete coverage", () => {
       chain: { id: 1 } as Chain,
     } as WalletClient<HttpTransport, Chain, Account>;
 
-    vi.mocked(getSwapQuote).mockResolvedValue(makeToken(USDC_ADDRESS, 1000000n, 1));
+    vi.mocked(getSwapQuote).mockImplementation(async (_inputs, outputToken) => {
+      const ot = outputToken as TokenAmount;
+      return { ...ot, amount: ot.amount ?? 0n };
+    });
     vi.mocked(executeOdosSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap" });
     vi.mocked(executeCCTPBurn).mockResolvedValue(["0xburn", 1]);
     vi.mocked(retrieveAttestations).mockResolvedValue([
@@ -2064,13 +2081,13 @@ describe("Additional edge cases for complete coverage", () => {
     expect(executeOdosSwap).toHaveBeenCalledTimes(1); // Only step 2
   });
 
-  test("swap quote is refreshed when retrying after failure (paused state)", async () => {
+  test("swap quote is always refreshed right before execution (paused retry)", async () => {
     const step1 = makeStep({
       id: "step-1",
       status: "pending",
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
-      quotedAt: Date.now(), // Fresh quote, but we're retrying
+      quotedAt: Date.now(), // Fresh quote — but we still refresh
     });
 
     const state = makeState({
@@ -2082,7 +2099,6 @@ describe("Additional edge cases for complete coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
     });
 
-    // Mock getSwapQuote to return a different (refreshed) amount
     vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 850000n, 1));
     vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 850000n, transactionHash: "0xswap" });
 
@@ -2090,10 +2106,8 @@ describe("Additional edge cases for complete coverage", () => {
       executeConsolidationPlan(state, mockWalletClient),
     );
 
-    // getSwapQuote should be called to refresh the quote (because status was paused)
     expect(getSwapQuote).toHaveBeenCalledWith(step1.inputTokens, step1.outputToken);
 
-    // The plan should be updated with the refreshed quote before execution
     const stateAfterRefresh = states.find(
       (s) => s.plan[0].outputToken.amount === 850000n && s.plan[0].status === "pending",
     );
@@ -2103,8 +2117,8 @@ describe("Additional edge cases for complete coverage", () => {
     expect(finalState.results["step-1"].status).toBe("success");
   });
 
-  test("swap quote is refreshed when quote is stale (older than threshold)", async () => {
-    const staleTime = Date.now() - 60 * 1000; // 60 seconds ago (threshold is 55s)
+  test("swap quote is always refreshed right before execution (stale quote)", async () => {
+    const staleTime = Date.now() - 60 * 1000;
 
     const step1 = makeStep({
       id: "step-1",
@@ -2117,13 +2131,12 @@ describe("Additional edge cases for complete coverage", () => {
     const state = makeState({
       plan: [step1],
       currentStepIndex: 0,
-      status: "ready", // Not retrying, but quote is stale
+      status: "ready",
       results: {},
       sourceTokens: [],
       destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
     });
 
-    // Mock getSwapQuote to return a different (refreshed) amount
     vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 820000n, 1));
     vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 820000n, transactionHash: "0xswap" });
 
@@ -2131,10 +2144,8 @@ describe("Additional edge cases for complete coverage", () => {
       executeConsolidationPlan(state, mockWalletClient),
     );
 
-    // getSwapQuote should be called to refresh the stale quote
     expect(getSwapQuote).toHaveBeenCalledWith(step1.inputTokens, step1.outputToken);
 
-    // The plan should be updated with the refreshed quote before execution
     const stateAfterRefresh = states.find(
       (s) => s.plan[0].outputToken.amount === 820000n && s.plan[0].status === "pending",
     );
@@ -2144,34 +2155,75 @@ describe("Additional edge cases for complete coverage", () => {
     expect(finalState.results["step-1"].status).toBe("success");
   });
 
-  test("swap quote is NOT refreshed when quote is fresh and not retrying", async () => {
+  test("swap quote is refreshed even when fresh and not retrying", async () => {
     const step1 = makeStep({
       id: "step-1",
       status: "pending",
       inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
-      quotedAt: Date.now(), // Fresh quote
+      quotedAt: Date.now(),
     });
 
     const state = makeState({
       plan: [step1],
       currentStepIndex: 0,
-      status: "ready", // Not retrying
+      status: "ready",
       results: {},
       sourceTokens: [],
       destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
     });
 
     vi.mocked(getSwapQuote).mockClear();
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 910000n, 1));
+    vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 910000n, transactionHash: "0xswap" });
+
+    const { finalValue: finalState, values: states } = await consumeGenerator(
+      executeConsolidationPlan(state, mockWalletClient),
+    );
+
+    // Always refreshed: getSwapQuote is called even though the quote is fresh
+    // and we're not retrying.
+    expect(getSwapQuote).toHaveBeenCalledWith(step1.inputTokens, step1.outputToken);
+
+    const stateAfterRefresh = states.find(
+      (s) => s.plan[0].outputToken.amount === 910000n && s.plan[0].status === "pending",
+    );
+    expect(stateAfterRefresh).toBeDefined();
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-1"].status).toBe("success");
+  });
+
+  test("swap quote refresh failure falls back to existing quote without erroring", async () => {
+    const step1 = makeStep({
+      id: "step-1",
+      status: "pending",
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
+      quotedAt: Date.now(),
+    });
+
+    const state = makeState({
+      plan: [step1],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+    });
+
+    vi.mocked(getSwapQuote).mockClear();
+    vi.mocked(getSwapQuote).mockRejectedValueOnce(new Error("odos down"));
     vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 900000n, transactionHash: "0xswap" });
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
-    // getSwapQuote should NOT be called (quote is fresh and not retrying)
-    expect(getSwapQuote).not.toHaveBeenCalled();
-
+    // Refresh was attempted...
+    expect(getSwapQuote).toHaveBeenCalledTimes(1);
+    // ...but execution still completes using the original quote.
     expect(finalState.status).toBe("completed");
     expect(finalState.results["step-1"].status).toBe("success");
+    expect(finalState.plan[0].outputToken.amount).toBe(900000n);
   });
 
   test("downstream steps are recalculated after quote refresh", async () => {
@@ -2194,13 +2246,12 @@ describe("Additional edge cases for complete coverage", () => {
     const state = makeState({
       plan: [step1, step2],
       currentStepIndex: 0,
-      status: "paused", // Retrying - will trigger refresh
+      status: "ready", // Refresh always happens regardless of status
       results: {},
       sourceTokens: [],
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
     });
 
-    // Mock getSwapQuote to return a different amount
     vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 750000n, 1));
     vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 750000n, transactionHash: "0xswap" });
 

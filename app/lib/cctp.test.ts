@@ -148,6 +148,15 @@ describe("cctp", () => {
       expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("/v2/burn/USDC/fees/0/7"));
     });
 
+    test("handles fractional bps from Circle's API", async () => {
+      // Circle occasionally returns a non-integer minimumFee. Regression for
+      // "1.3 can't be converted to BigInt because it isn't an integer".
+      mockCircleFeeApi(1.3);
+      const fee = await getBridgeFee(1_000_000n, 1, 137);
+      // 1_000_000 * 1.3 / 10000 = 130
+      expect(fee).toBe(130n);
+    });
+
     test("caches per-route within the TTL", async () => {
       mockCircleFeeApi(2);
       await getBridgeFee(1_000_000n, 10, 42161);

@@ -6,8 +6,10 @@ import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySym
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { usePrice } from "~/context/token-price-provider";
 import { chains } from "~/data/supported-chains";
+import { useAmountDelta } from "~/hooks/use-amount-delta";
 import { consolidateTokenAmounts, formatUsd } from "~/lib/tokens";
 import type { StepGasEstimate, StepResult, TransactionStep } from "~/lib/types";
+import { cn } from "~/lib/utils";
 import { ChainIcon } from "../chain/chain-icon";
 
 interface PlanCardProps {
@@ -20,6 +22,29 @@ function getExplorerUrl(chainId: number, txHash: string): string {
   const chain = chains[chainId as keyof typeof chains];
   if (!chain?.blockExplorers?.default?.url) return "#";
   return `${chain.blockExplorers.default.url}/tx/${txHash}`;
+}
+
+/**
+ * Inline badge that briefly shows the percentage change in a swap step's
+ * output amount whenever it gets re-quoted. Renders only while the delta is
+ * active (~1s), fading in/out via the `swap-delta-fade` animation. Threshold
+ * is 0.5% to avoid flicker from sub-percent Odos jitter.
+ */
+function SwapOutputDelta({ amount }: { amount: bigint }) {
+  const delta = useAmountDelta(amount);
+  if (!delta) return null;
+
+  return (
+    <span
+      aria-live="polite"
+      className={cn(
+        "inline-flex items-center text-xs font-medium ml-0.5 animate-in fade-in zoom-in-95 duration-200",
+        delta.sign === "up" ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400",
+      )}
+    >
+      ({delta.sign === "up" ? "▲" : "▼"} {delta.percent.toFixed(1)}%)
+    </span>
+  );
 }
 
 function ChainIconInline({ chainId }: { chainId: number }) {
@@ -110,6 +135,7 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
             tokenAddress={outputToken.token}
             symbol={outputToken.symbol}
           />{" "}
+          <SwapOutputDelta amount={outputToken.amount} />
           <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />{" "}
           <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
             (

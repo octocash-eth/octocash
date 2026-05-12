@@ -147,10 +147,10 @@ export async function* executeConsolidationPlan(
       continue;
     }
 
-    // Refresh swap quote if stale or retrying after failure
+    // Always refresh swap quote immediately before execution so the UI shows
+    // the freshest amount (and any delta vs the previously displayed quote).
     if (step.type === "swap") {
-      const isRetrying = state.status === "paused";
-      const refreshedStep = await refreshSwapQuoteIfNeeded(step, isRetrying);
+      const refreshedStep = await refreshSwapQuote(step);
       if (refreshedStep.outputToken.amount !== step.outputToken.amount) {
         // Quote changed - update plan and recalculate downstream steps
         workingState.plan = [...workingState.plan];
@@ -274,27 +274,21 @@ function filterZeroAmounts(
   return nonZeroTokens as [TokenAmount, ...TokenAmount[]];
 }
 
-/** Quote staleness threshold: 55 seconds */
-const QUOTE_STALENESS_MS = 55 * 1000;
-
 /**
- * Refresh swap quote if stale or previously failed
- * @param step - The swap step to potentially refresh
- * @param isRetrying - Whether we're retrying after a failure (paused state)
- * @returns Updated step with fresh quote, or original step if no refresh needed
+ * Re-quote a swap step against Odos right before execution.
+ *
+ * Called unconditionally for every swap step (no staleness gate) so the UI
+ * surfaces the most up-to-date output amount — and any delta vs the
+ * previously displayed value — before signing.
+ *
+ * Best-effort: if the quote request fails (RPC/Odos outage), the original
+ * step is returned and execution proceeds with the previously cached quote.
+ *
+ * @param step - The swap step to refresh
+ * @returns Step with fresh quote, or the original step on quote failure
  */
-async function refreshSwapQuoteIfNeeded(step: TransactionStep, isRetrying: boolean): Promise<TransactionStep> {
-  // Only refresh swap steps
+async function refreshSwapQuote(step: TransactionStep): Promise<TransactionStep> {
   if (step.type !== "swap") {
-    return step;
-  }
-
-  const now = Date.now();
-  // Only check staleness if quotedAt is set (backward compatibility)
-  const isStale = step.quotedAt !== undefined && now - step.quotedAt > QUOTE_STALENESS_MS;
-
-  // Refresh if stale or retrying after failure
-  if (!isStale && !isRetrying) {
     return step;
   }
 
@@ -306,10 +300,9 @@ async function refreshSwapQuoteIfNeeded(step: TransactionStep, isRetrying: boole
         ...freshQuote,
         provenance: step.id,
       },
-      quotedAt: now,
+      quotedAt: Date.now(),
     };
   } catch {
-    // On failure, return original step - execution will proceed with existing quote
     return step;
   }
 }
