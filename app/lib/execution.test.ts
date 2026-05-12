@@ -8,9 +8,32 @@ vi.mock("./odos");
 vi.mock("./cctp");
 vi.mock("./send-calls");
 
+// `validateInputBalances` reads on-chain balances via `getTokenBalance` in
+// `./tokens`, which itself dispatches to `getPublicClient(...).readContract`
+// for ERC20 and `getNativeBalance` for native. The unit suite isn't supposed
+// to hit any RPC, so we stub both leaf reads to return arbitrarily large
+// values. Tests that specifically want to exercise the insufficient-balance
+// path override these per-test.
+vi.mock("./public-client", () => ({
+  getPublicClient: vi.fn(() => ({
+    readContract: vi.fn().mockResolvedValue(2n ** 128n),
+  })),
+  retryOnRateLimit: <T>(fn: () => Promise<T>) => fn(),
+}));
+vi.mock("./gas", () => ({
+  getNativeBalance: vi.fn().mockResolvedValue(2n ** 128n),
+}));
+
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
-import { executeConsolidationPlan, shouldSkipStep } from "./execution";
+import {
+  executeConsolidationPlan,
+  InsufficientInputBalanceError,
+  shouldSkipStep,
+  validateInputBalances,
+} from "./execution";
+import { getNativeBalance } from "./gas";
 import { executeOdosSwap, getSwapQuote } from "./odos";
+import { getPublicClient } from "./public-client";
 import { prepareSendCalls } from "./send-calls";
 
 describe("executeConsolidationPlan", () => {
@@ -2196,5 +2219,153 @@ describe("Additional edge cases for complete coverage", () => {
     expect(stateAfterRefresh?.plan[1].outputToken.amount).toBe(750000n); // Bridge 1:1
 
     expect(finalState.status).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pre-flight input-balance check.
+// ---------------------------------------------------------------------------
+
+describe("validateInputBalances", () => {
+  const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+  const WBTC_ADDRESS = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599" as Address;
+  const NATIVE = "0x0000000000000000000000000000000000000000" as Address;
+
+  const baseState = (): ConsolidationState => ({
+    id: "balance-test",
+    plan: [],
+    currentStepIndex: 0,
+    status: "ready",
+    results: {},
+    sourceTokens: [],
+    destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    hasSubsequentExecution: false,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test("resolves when wallet holds at least the required ERC20 amount", async () => {
+    const step: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken(USDC_ADDRESS, 1_000_000n, 1, { walletAddress: WALLET }),
+        makeToken(WBTC_ADDRESS, 1_00000000n, 1, { walletAddress: WALLET }),
+      ],
+      outputToken: makeToken(NATIVE, 1n, 1),
+    };
+    vi.mocked(getPublicClient).mockReturnValue({
+      readContract: vi.fn().mockResolvedValue(2n ** 96n),
+    } as never);
+
+    await expect(validateInputBalances(step, baseState())).resolves.toBeUndefined();
+  });
+
+  test("throws InsufficientInputBalanceError naming the short token + wallet + shortfall", async () => {
+    const step: TransactionStep = {
+      id: "swap-2",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1_000_000n, 1, { walletAddress: WALLET })],
+      outputToken: makeToken(NATIVE, 1n, 1),
+    };
+    vi.mocked(getPublicClient).mockReturnValue({
+      readContract: vi.fn().mockResolvedValue(500_000n),
+    } as never);
+
+    await expect(validateInputBalances(step, baseState())).rejects.toMatchObject({
+      name: "InsufficientInputBalanceError",
+      token: USDC_ADDRESS,
+      required: 1_000_000n,
+      actual: 500_000n,
+    });
+    await expect(validateInputBalances(step, baseState())).rejects.toBeInstanceOf(InsufficientInputBalanceError);
+  });
+
+  test("aggregates multiple rows of the same (chain, wallet, token) before checking — two 0.6 USDC rows need 1.2 USDC, not 0.6", async () => {
+    const step: TransactionStep = {
+      id: "swap-agg",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken(USDC_ADDRESS, 600_000n, 1, { walletAddress: WALLET }),
+        makeToken(USDC_ADDRESS, 600_000n, 1, { walletAddress: WALLET }),
+      ],
+      outputToken: makeToken(NATIVE, 1n, 1),
+    };
+    // Wallet has 1.0 USDC — enough per-row but NOT enough for the aggregated 1.2 USDC.
+    vi.mocked(getPublicClient).mockReturnValue({
+      readContract: vi.fn().mockResolvedValue(1_000_000n),
+    } as never);
+
+    await expect(validateInputBalances(step, baseState())).rejects.toMatchObject({
+      name: "InsufficientInputBalanceError",
+      required: 1_200_000n,
+      actual: 1_000_000n,
+    });
+  });
+
+  test("checks the native (zero-address) input via getNativeBalance, not readContract", async () => {
+    const step: TransactionStep = {
+      id: "swap-native",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(NATIVE, 5n * 10n ** 17n, 1, { walletAddress: WALLET })],
+      outputToken: makeToken(USDC_ADDRESS, 1n, 1),
+    };
+    const readContract = vi.fn().mockResolvedValue(0n);
+    vi.mocked(getPublicClient).mockReturnValue({ readContract } as never);
+    vi.mocked(getNativeBalance).mockResolvedValueOnce(10n ** 18n); // 1 ETH > 0.5 ETH required
+
+    await expect(validateInputBalances(step, baseState())).resolves.toBeUndefined();
+    expect(readContract).not.toHaveBeenCalled();
+    expect(getNativeBalance).toHaveBeenCalled();
+  });
+
+  test("skips entirely for `claim` and `attestation` steps (no wallet-held inputs)", async () => {
+    const claim: TransactionStep = {
+      id: "claim-1",
+      type: "claim",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1_000_000n, 1, { walletAddress: WALLET })],
+      outputToken: makeToken(USDC_ADDRESS, 1n, 1),
+    };
+    const attestation: TransactionStep = {
+      ...claim,
+      id: "attestation-1",
+      type: "attestation",
+    };
+    const readContract = vi.fn().mockResolvedValue(0n);
+    vi.mocked(getPublicClient).mockReturnValue({ readContract } as never);
+
+    await expect(validateInputBalances(claim, baseState())).resolves.toBeUndefined();
+    await expect(validateInputBalances(attestation, baseState())).resolves.toBeUndefined();
+    expect(readContract).not.toHaveBeenCalled();
+  });
+
+  test("propagates non-rate-limit RPC errors so the executor pauses instead of paying gas for a guaranteed revert", async () => {
+    const step: TransactionStep = {
+      id: "swap-rpc",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1_000_000n, 1, { walletAddress: WALLET })],
+      outputToken: makeToken(NATIVE, 1n, 1),
+    };
+    vi.mocked(getPublicClient).mockReturnValue({
+      readContract: vi.fn().mockRejectedValue(new Error("rpc unreachable")),
+    } as never);
+
+    await expect(validateInputBalances(step, baseState())).rejects.toThrow("rpc unreachable");
   });
 });

@@ -8,9 +8,10 @@ import {
   isAddressEqual,
   zeroAddress,
 } from "viem";
-import { supportedChains } from "~/data/supported-chains";
-import { getPublicClient } from "~/lib/public-client";
+import { chains, supportedChains, transports } from "~/data/supported-chains";
+import { getPublicClient, retryOnRateLimit } from "~/lib/public-client";
 import type { TokenAmount } from "~/lib/types";
+import { getNativeBalance } from "./gas";
 import { tryCatch } from "./utils";
 
 // ============================================================================
@@ -165,6 +166,29 @@ export function consolidateTokenAmounts(tokens: TokenAmount[]): TokenAmount[] {
   }
 
   return Array.from(consolidatedMap.values());
+}
+
+/**
+ * Reads the on-chain balance of `tokenAddress` for `walletAddress` on `chainId`.
+ * Native (zero-address) tokens go through `getNativeBalance`; ERC20 reads are
+ * wrapped in `retryOnRateLimit` to match the rest of the codebase's RPC reads.
+ * Errors propagate — callers decide whether an RPC failure should pause an
+ * execution or be tolerated.
+ */
+export async function getTokenBalance(chainId: number, walletAddress: Address, tokenAddress: Address): Promise<bigint> {
+  if (isAddressEqual(tokenAddress, zeroAddress)) {
+    const chain = chains[chainId as keyof typeof chains];
+    return getNativeBalance(chain, walletAddress, transports?.[chainId as keyof typeof transports]);
+  }
+  const publicClient = getPublicClient(chainId);
+  return retryOnRateLimit(() =>
+    publicClient.readContract({
+      address: tokenAddress,
+      abi: erc20Abi,
+      functionName: "balanceOf",
+      args: [walletAddress],
+    }),
+  );
 }
 
 /**

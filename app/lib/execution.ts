@@ -1,5 +1,5 @@
-import type { Account, Chain, HttpTransport, WalletClient } from "viem";
-import { type Call, encodeFunctionData, isAddressEqual, parseAbi, zeroAddress } from "viem";
+import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
+import { type Call, encodeFunctionData, getAddress, isAddressEqual, parseAbi, zeroAddress } from "viem";
 import { chains, transports } from "~/data/supported-chains";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import { createTransactionError } from "./errors";
@@ -12,7 +12,72 @@ import {
 } from "./gas-estimation";
 import { executeOdosSwap, getSwapQuote } from "./odos";
 import { prepareSendCalls } from "./send-calls";
+import { getTokenBalance } from "./tokens";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
+
+/**
+ * Thrown when a step's preflight balance check finds the wallet doesn't hold
+ * enough of one of the input tokens. Surfaced before any signing prompt so
+ * the user knows exactly which token / wallet is short rather than seeing a
+ * cryptic on-chain revert.
+ */
+export class InsufficientInputBalanceError extends Error {
+  override name = "InsufficientInputBalanceError" as const;
+  chainId: number;
+  walletAddress: Address;
+  token: Address;
+  required: bigint;
+  actual: bigint;
+  constructor(chainId: number, walletAddress: Address, token: Address, required: bigint, actual: bigint) {
+    super(
+      `Insufficient balance for ${token} on chain ${chainId} for wallet ${walletAddress}: required ${required}, have ${actual}.`,
+    );
+    this.chainId = chainId;
+    this.walletAddress = walletAddress;
+    this.token = token;
+    this.required = required;
+    this.actual = actual;
+  }
+}
+
+/**
+ * Aggregates required amounts per `(chainId, wallet, token)` and verifies the
+ * wallet holds at least that much. Throws {@link InsufficientInputBalanceError}
+ * on shortfall.
+ *
+ * If a balance read fails (post-retry RPC error, etc.), the error propagates so
+ * the executor pauses instead of broadcasting calldata that will revert on
+ * chain — burning gas is worse than asking the user to retry the preflight.
+ *
+ * Skipped entirely for `claim` and `attestation` steps (no wallet-held inputs).
+ * For native (zero-address) inputs, callers should run `adjustNativeTokenForGas`
+ * first; this validator checks the post-adjustment amount directly against the
+ * wallet balance.
+ */
+export async function validateInputBalances(step: TransactionStep, _state: ConsolidationState): Promise<void> {
+  if (step.type === "claim" || step.type === "attestation") return;
+
+  const required = new Map<string, { chainId: number; wallet: Address; token: Address; amount: bigint }>();
+  for (const input of step.inputTokens) {
+    const tokenAddr = getAddress(input.token);
+    const walletAddr = getAddress(input.walletAddress);
+    const key = `${input.chainId}:${walletAddr}:${tokenAddr}`;
+    const existing = required.get(key);
+    if (existing) {
+      existing.amount += input.amount;
+    } else {
+      required.set(key, { chainId: input.chainId, wallet: walletAddr, token: tokenAddr, amount: input.amount });
+    }
+  }
+
+  for (const { chainId, wallet, token, amount } of required.values()) {
+    if (amount === 0n) continue;
+    const balance = await getTokenBalance(chainId, wallet, token);
+    if (balance < amount) {
+      throw new InsufficientInputBalanceError(chainId, wallet, token, amount, balance);
+    }
+  }
+}
 
 /**
  * Execute consolidation plan with dependency tracking and error handling (T014)
@@ -381,6 +446,10 @@ async function executeStep(
         step.inputTokens = adjustedTokens;
       }
 
+      // Preflight: confirm the wallet actually holds what we're about to swap,
+      // including the post-adjustment native amount.
+      await validateInputBalances(step, state);
+
       // Execute swap using Odos with non-zero tokens
       const { amount: actualAmount, transactionHash } = await executeOdosSwap(
         nonZeroTokens,
@@ -429,6 +498,8 @@ async function executeStep(
       // Sum all non-zero input amounts (bridge may have multiple USDC sources)
       const totalAmount = nonZeroTokens.reduce((sum, t) => sum + t.amount, 0n);
       const combinedInput = { ...nonZeroTokens[0], amount: totalAmount };
+
+      await validateInputBalances(step, state);
 
       // Execute CCTP burn
       const [burnTx] = await executeCCTPBurn(combinedInput, step.outputToken, sendCalls);
@@ -548,6 +619,8 @@ async function executeStep(
           throw new Error("All transfer input tokens must be from the same wallet");
         }
       }
+
+      await validateInputBalances(step, state);
 
       // Calculate total amount to transfer
       const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);

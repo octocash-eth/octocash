@@ -7,6 +7,10 @@ import { ERROR_CODES } from "./types";
 export const ERROR_MESSAGES: Record<ErrorCode, [string, string]> = {
   [ERROR_CODES.USER_REJECTED]: ["Transaction cancelled", "Click retry to try again."],
   [ERROR_CODES.INSUFFICIENT_GAS]: ["Insufficient funds for gas", "Add more ETH and retry."],
+  [ERROR_CODES.INSUFFICIENT_INPUT_BALANCE]: [
+    "Not enough tokens to execute this step",
+    "The wallet's balance is below the planned input amount. Top up and retry, or skip this step.",
+  ],
   [ERROR_CODES.SLIPPAGE_EXCEEDED]: ["Price changed too much", "Retry for new quote."],
   [ERROR_CODES.RPC_ERROR]: ["Network error", "Check connection and retry."],
   [ERROR_CODES.TIMEOUT]: ["Transaction took too long", "It may still be processing - check your wallet."],
@@ -48,7 +52,10 @@ export function createTransactionError(
 
   const messageIncludes = (str: string) => errMessage.toLowerCase().includes(str.toLowerCase());
 
-  if (messageIncludes("USER_REJECTED") || messageIncludes("user rejected")) {
+  const errName = (error as { name?: string } | null | undefined)?.name;
+  if (errName === "InsufficientInputBalanceError") {
+    code = ERROR_CODES.INSUFFICIENT_INPUT_BALANCE;
+  } else if (messageIncludes("USER_REJECTED") || messageIncludes("user rejected")) {
     code = ERROR_CODES.USER_REJECTED;
   } else if (messageIncludes("INSUFFICIENT_GAS") || messageIncludes("insufficient funds")) {
     code = ERROR_CODES.INSUFFICIENT_GAS;
