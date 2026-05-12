@@ -351,9 +351,12 @@ describe("zerion", () => {
   });
 
   describe("error handling", () => {
-    test("handles missing API key", async () => {
+    test("falls back to native balances when API key is missing", async () => {
       vi.stubEnv("VITE_ZERION_API_KEY", "");
-      await expect(fetchZerionTokenBalances([WALLET])).rejects.toThrow("VITE_ZERION_API_KEY is not set");
+      // Without a real RPC transport configured in tests, the fallback errors out
+      // per-chain and resolves to an empty array — the important behavior is that
+      // it does NOT throw, so the table can still render in local dev.
+      await expect(fetchZerionTokenBalances([WALLET])).resolves.toEqual([]);
     });
 
     test("handles malformed JSON response", async () => {

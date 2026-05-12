@@ -1,5 +1,6 @@
 import { type Address, getAddress, parseUnits, zeroAddress } from "viem";
-import { chainIdToZerionId } from "~/data/supported-chains";
+import { chainIdToZerionId, chains } from "~/data/supported-chains";
+import { getPublicClient } from "../public-client";
 import { getTokenAmountInUsd } from "../tokens";
 import type { TokenAmount } from "../types";
 
@@ -60,13 +61,46 @@ interface ZerionPositionsResponse {
   };
 }
 
+/** Fallback: fetch native coin balances via RPC for local testing without a Zerion API key. */
+async function fetchNativeBalances(addresses: string[]): Promise<TokenAmount[]> {
+  const supportedChainIds = Object.keys(chainIdToZerionId).map(Number);
+
+  const results = await Promise.all(
+    addresses.flatMap((walletAddress) =>
+      supportedChainIds.map(async (chainId): Promise<TokenAmount | null> => {
+        try {
+          const publicClient = getPublicClient(chainId);
+          const balance = await publicClient.getBalance({ address: walletAddress as Address });
+          if (balance === 0n) return null;
+          const chain = chains[chainId as keyof typeof chains];
+          return {
+            token: zeroAddress,
+            amount: balance,
+            chainId,
+            walletAddress: walletAddress as Address,
+            symbol: chain.nativeCurrency.symbol,
+            decimals: chain.nativeCurrency.decimals,
+            name: chain.nativeCurrency.name,
+          };
+        } catch (error) {
+          console.error(`Failed to fetch native balance for ${walletAddress} on chain ${chainId}:`, error);
+          return null;
+        }
+      }),
+    ),
+  );
+
+  return results.filter((t): t is TokenAmount => t !== null);
+}
+
 /** Fetch token balances from Zerion (fast, indexed data) */
 export async function fetchZerionTokenBalances(addresses: string[]): Promise<TokenAmount[]> {
   if (addresses.length === 0) return [];
 
   const apiKey = import.meta.env.VITE_ZERION_API_KEY;
   if (!apiKey) {
-    throw new Error("VITE_ZERION_API_KEY is not set");
+    console.warn("VITE_ZERION_API_KEY is not set; falling back to native coin balances via RPC");
+    return fetchNativeBalances(addresses);
   }
 
   // Get all Zerion chain identifiers

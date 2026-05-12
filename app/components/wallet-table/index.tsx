@@ -82,8 +82,15 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     extraQuery.refetch();
   }, [zerionQuery.refetch, extraQuery.refetch]);
 
+  const zerionApiKeyMissing = !import.meta.env.VITE_ZERION_API_KEY;
+
   return (
     <div className="space-y-4">
+      {zerionApiKeyMissing && (
+        <div className="p-4 text-muted-foreground rounded-md bg-muted border border-border">
+          VITE_ZERION_API_KEY is not set — showing native coin balances only. Set the API key to see all tokens.
+        </div>
+      )}
       {error && <div className="p-4 text-red-700 rounded-md bg-red-50">{error}</div>}
       {tokens.length > 0 || isLoading ? (
         <>
