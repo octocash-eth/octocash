@@ -63,17 +63,45 @@ export function formatTokenAmount(token: TokenAmount): string {
 }
 
 /**
- * Format a number as USD currency
- * @param amount - The amount to format
+ * Format a number as a fiat currency using the platform's Intl support.
+ *
+ * - `currency` is an ISO 4217 code (or XDR). When omitted, defaults to USD so
+ *   existing callers behave identically.
+ * - `decimals` controls both the minimum and maximum fraction digits. When
+ *   omitted, `Intl.NumberFormat` picks the currency's natural default (e.g.
+ *   JPY -> 0, USD -> 2, KWD -> 3).
+ *
+ * Stays a pure formatting helper: it doesn't perform any conversion. Callers
+ * are expected to pass the amount already denominated in the target currency.
+ */
+export function formatFiat(amount: number, currency = "USD", decimals?: number): string {
+  const options: Intl.NumberFormatOptions = {
+    style: "currency",
+    currency,
+  };
+  if (decimals !== undefined) {
+    options.minimumFractionDigits = decimals;
+    options.maximumFractionDigits = decimals;
+  }
+  try {
+    return amount.toLocaleString("en-US", options);
+  } catch {
+    // Unknown currency code: fall back to USD formatting so we never crash the
+    // UI with an `Intl` `RangeError`.
+    return amount.toLocaleString("en-US", { ...options, currency: "USD" });
+  }
+}
+
+/**
+ * Backwards-compatible USD-only wrapper around {@link formatFiat}. New code
+ * should prefer `formatFiat` (or the React-side `useFormatFiat()` hook), but
+ * non-React callers and tests still rely on this helper.
+ *
+ * @param amount - The amount to format (USD)
  * @param decimals - Number of decimal places (default: 2)
  */
 export function formatUsd(amount: number, decimals = 2): string {
-  return amount.toLocaleString("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
+  return formatFiat(amount, "USD", decimals);
 }
 
 // ============================================================================

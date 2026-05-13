@@ -11,8 +11,9 @@ import {
   TokenDisplayRoot,
   TokenDisplaySymbol,
 } from "~/components/token";
+import { useFormatFiat } from "~/context/currency-provider";
 import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
-import { formatTokenAmount, formatUsd, getChainName, getTokenId } from "~/lib/tokens";
+import { formatTokenAmount, getChainName, getTokenId } from "~/lib/tokens";
 
 interface SelectAmountStageProps {
   tokens: TokenWithConsolidateAmount[];
@@ -44,6 +45,7 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
   // the response back to `zeroAddress` before storing.
   useRegisterPrices(tokens);
   const { priceFor } = usePriceMap();
+  const formatFiat = useFormatFiat();
 
   const onAmountsChangeRef = React.useRef(onAmountsChange);
 
@@ -111,8 +113,8 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
                   </div>
                 </TokenDisplayRoot>
                 <div className="text-right">
-                  <div className="font-medium">{formatUsd(currentUsdValue)}</div>
-                  <div className="text-xs text-muted-foreground">of {formatUsd(totalUsdValue)}</div>
+                  <div className="font-medium">{formatFiat(currentUsdValue)}</div>
+                  <div className="text-xs text-muted-foreground">of {formatFiat(totalUsdValue)}</div>
                 </div>
               </div>
 

@@ -5,6 +5,7 @@ import { ETH_ADDRESS, makeToken, USDC_ETHEREUM, WALLET } from "../../test/test-h
 import {
   buildERC20ApprovalCalls,
   consolidateTokenAmounts,
+  formatFiat,
   formatTokenAmount,
   formatUsd,
   getChainName,
@@ -207,6 +208,29 @@ describe("tokens", () => {
 
     test("rounds to specified decimals", () => {
       expect(formatUsd(1.999, 2)).toBe("$2.00");
+    });
+  });
+
+  describe("formatFiat", () => {
+    test("defaults to USD and natural decimals for the currency", () => {
+      expect(formatFiat(1234.56)).toBe("$1,234.56");
+    });
+
+    test("formats EUR with the euro symbol", () => {
+      expect(formatFiat(1234.56, "EUR")).toMatch(/€/);
+      expect(formatFiat(1234.56, "EUR")).toMatch(/1,234\.56/);
+    });
+
+    test("respects an explicit decimals override", () => {
+      expect(formatFiat(1234.5678, "USD", 4)).toBe("$1,234.5678");
+    });
+
+    test("uses natural fraction digits for JPY (zero) when decimals omitted", () => {
+      expect(formatFiat(1234.5, "JPY")).toBe("¥1,235");
+    });
+
+    test("falls back to USD formatting when currency code is invalid", () => {
+      expect(formatFiat(10, "NOT_A_CURRENCY")).toBe("$10.00");
     });
   });
 

@@ -2,9 +2,9 @@ import * as React from "react";
 import type { Address } from "viem";
 import { formatUnits, isAddress, zeroAddress } from "viem";
 import { IconCopyButton, IconLinkButton } from "~/components/icon";
+import { useFormatFiat } from "~/context/currency-provider";
 import { supportedChains } from "~/data/supported-chains";
 import { useToken } from "~/hooks/use-token";
-import { formatUsd } from "~/lib/tokens";
 import { cn } from "~/lib/utils";
 import type { Button } from "../ui/button";
 import { TokenIcon } from "./token-icon";
@@ -180,13 +180,14 @@ function formatAdaptiveAmount(value: number): string {
 const TokenDisplayAmount = React.forwardRef<HTMLSpanElement, TokenDisplayAmountProps>(
   ({ amount, unitaryPrice, className, ...props }, ref) => {
     const { decimals } = useTokenDisplay();
+    const formatFiat = useFormatFiat();
 
     const { formattedAmount, titleText } = React.useMemo(() => {
       const value = Number(formatUnits(amount, decimals));
       const tokenAmount = formatAdaptiveAmount(value);
-      const title = unitaryPrice !== undefined ? `${tokenAmount} (${formatUsd(value * unitaryPrice)})` : tokenAmount;
+      const title = unitaryPrice !== undefined ? `${tokenAmount} (${formatFiat(value * unitaryPrice)})` : tokenAmount;
       return { formattedAmount: tokenAmount, titleText: title };
-    }, [amount, decimals, unitaryPrice]);
+    }, [amount, decimals, unitaryPrice, formatFiat]);
 
     return (
       <span ref={ref} className={cn("truncate text-nowrap", className)} title={titleText} {...props}>

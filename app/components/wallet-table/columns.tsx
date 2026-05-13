@@ -1,4 +1,4 @@
-import type { ColumnDef } from "@tanstack/react-table";
+import type { Column, ColumnDef } from "@tanstack/react-table";
 import { MoreHorizontal } from "lucide-react";
 import { formatUnits, zeroAddress } from "viem";
 import {
@@ -21,8 +21,9 @@ import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DataGridColumnHeader } from "~/components/ui/data-grid-column-header";
 import { Skeleton } from "~/components/ui/skeleton";
+import { useFormatFiat, useSelectedCurrency } from "~/context/currency-provider";
 import { supportedChains } from "~/data/supported-chains";
-import { formatUsd, getChainName } from "~/lib/tokens";
+import { getChainName } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
 import { ChainIcon } from "../chain/chain-icon";
 import { ButtonGroup } from "../ui/button-group";
@@ -34,6 +35,50 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+
+/**
+ * Header for the value column. Reflects the user's selected fiat currency
+ * (e.g. "In USD", "In EUR") so the column label stays in sync with the rest
+ * of the table.
+ */
+function ValueColumnHeader({ column }: { column: Column<TokenAmount> }) {
+  const { currency } = useSelectedCurrency();
+  return (
+    <div className="flex justify-end -me-7">
+      <DataGridColumnHeader column={column} title={`In ${currency.code}`} className="ms-0 me-0" />
+    </div>
+  );
+}
+
+/**
+ * Cell that converts the row's USD value to the user's selected fiat
+ * currency. Renders a skeleton while the price is loading, an em-dash when
+ * the row is worth effectively nothing, and the formatted amount otherwise.
+ */
+function ValueCell({
+  row,
+  priceFor,
+  isPending,
+}: {
+  row: { original: TokenAmount };
+  priceFor?: (row: TokenAmount) => number | undefined;
+  isPending?: (row: TokenAmount) => boolean;
+}) {
+  const formatFiat = useFormatFiat();
+  const price = priceFor?.(row.original);
+  const pending = isPending?.(row.original) ?? false;
+
+  if (price === undefined && pending) {
+    return <Skeleton className="h-4 w-16 ml-auto" />;
+  }
+
+  const formattedAmount = Number(formatUnits(row.original.amount, row.original.decimals));
+  const usd = (price ?? 0) * formattedAmount;
+  if (usd <= 0) {
+    return <div className="text-right font-medium text-muted-foreground">-</div>;
+  }
+  return <div className="text-right font-medium">{formatFiat(usd)}</div>;
+}
 
 function getExplorerUrl(chainId: number, tokenAddress: string | undefined, walletAddress: string): string {
   const chain = supportedChains.find((c) => c.id === chainId);
@@ -215,26 +260,10 @@ export const columns: ColumnDef<TokenAmount>[] = [
     id: "amountInUsd",
     size: 100,
     enableSorting: false,
-    header: ({ column }) => (
-      <div className="flex justify-end -me-7">
-        <DataGridColumnHeader column={column} title="In USD" className="ms-0 me-0" />
-      </div>
-    ),
+    header: ({ column }) => <ValueColumnHeader column={column} />,
     cell: ({ row, table }) => {
       const meta = table.options.meta;
-      const price = meta?.priceFor?.(row.original);
-      const pending = meta?.isPending?.(row.original) ?? false;
-
-      if (price === undefined && pending) {
-        return <Skeleton className="h-4 w-16 ml-auto" />;
-      }
-
-      const formattedAmount = Number(formatUnits(row.original.amount, row.original.decimals));
-      const usd = (price ?? 0) * formattedAmount;
-      if (usd <= 0) {
-        return <div className="text-right font-medium text-muted-foreground">-</div>;
-      }
-      return <div className="text-right font-medium">{formatUsd(usd)}</div>;
+      return <ValueCell row={row} priceFor={meta?.priceFor} isPending={meta?.isPending} />;
     },
     meta: {
       skeleton: <Skeleton className="h-4 w-16 ml-auto" />,

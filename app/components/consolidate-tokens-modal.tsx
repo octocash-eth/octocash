@@ -19,9 +19,10 @@ import {
   StepperTitle,
   StepperTrigger,
 } from "~/components/ui/stepper";
+import { useFormatFiat } from "~/context/currency-provider";
 import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
 import { USDC } from "~/data/token-contracts";
-import { formatTokenAmount, formatUsd, getTokenId } from "~/lib/tokens";
+import { formatTokenAmount, getTokenId } from "~/lib/tokens";
 import type { ConsolidationState, DestinationToken, SourceToken, TokenAmount } from "~/lib/types";
 import { CompletionStage } from "./consolidation-stages/completion-stage";
 import { ConfirmPlanStage } from "./consolidation-stages/confirm-plan-stage";
@@ -59,6 +60,7 @@ export function ConsolidateTokensModal({
   const [tokenAmounts, setTokenAmounts] = React.useState<Record<string, string>>({});
   const [completedState, setCompletedState] = React.useState<ConsolidationState | null>(null);
   const [isExecuting, setIsExecuting] = React.useState(false);
+  const formatFiat = useFormatFiat();
 
   const consolidatedTokens = React.useMemo<TokenWithConsolidateAmount[]>(() => {
     return tokens
@@ -258,7 +260,7 @@ export function ConsolidateTokensModal({
                 "Consolidation Partially Complete"
               )
             ) : (
-              <>Consolidate {formatUsd(actualTotalToConsolidate)}</>
+              <>Consolidate {formatFiat(actualTotalToConsolidate)}</>
             )}
           </DialogTitle>
           {!completedState && (

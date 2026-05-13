@@ -105,12 +105,23 @@ vi.mock("lucide-react", () => ({
   X: () => <div data-testid="x-icon">X</div>,
   Moon: () => <div data-testid="moon-icon">Moon</div>,
   Sun: () => <div data-testid="sun-icon">Sun</div>,
+  ChevronDown: () => <div data-testid="chevron-down-icon">ChevronDown</div>,
 }));
 
 // Mock lazy loaded GatedConnectButton
 const mockGatedConnectButton = vi.fn(() => <button type="button">Connect Wallet</button>);
 vi.mock("~/components/site/gated-connect-button", () => ({
   GatedConnectButton: () => mockGatedConnectButton(),
+}));
+
+// Mock lazy loaded CurrencySelector — its real implementation pulls in the
+// CoinGecko fetcher and the modal stack, neither of which we exercise here.
+vi.mock("~/components/site/currency-selector", () => ({
+  CurrencySelector: ({ variant }: { variant?: string }) => (
+    <button type="button" data-testid="currency-selector" data-variant={variant}>
+      USD
+    </button>
+  ),
 }));
 
 // Mock site data

@@ -4,9 +4,10 @@ import { formatUnits } from "viem";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
 import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "~/components/token";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
+import { useFormatFiat } from "~/context/currency-provider";
 import { usePrice } from "~/context/token-price-provider";
 import { chains } from "~/data/supported-chains";
-import { consolidateTokenAmounts, formatUsd } from "~/lib/tokens";
+import { consolidateTokenAmounts } from "~/lib/tokens";
 import type { StepGasEstimate, StepResult, TokenAmount, TransactionStep } from "~/lib/types";
 import { ChainIcon } from "../chain/chain-icon";
 
@@ -65,8 +66,9 @@ function TokenAmountInline({
   decimals: number;
 }) {
   const { price } = usePrice(chainId, tokenAddress);
+  const formatFiat = useFormatFiat();
 
-  const usdLabel = price !== undefined ? formatUsd(Number(formatUnits(amount, decimals)) * price) : null;
+  const usdLabel = price !== undefined ? formatFiat(Number(formatUnits(amount, decimals)) * price) : null;
 
   return (
     <TokenDisplayRoot
@@ -230,12 +232,13 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
 }
 
 function GasCostTooltip({ gas }: { gas: StepGasEstimate }) {
+  const formatFiat = useFormatFiat();
   const nativeAmount = Number.parseFloat(formatUnits(gas.gasCostWei, 18));
   const gweiPrice = Number.parseFloat(formatUnits(gas.maxFeePerGas, 9));
   const hasUsd = gas.gasCostUsd > 0;
 
   const ariaLabel = hasUsd
-    ? `Estimated gas: ${nativeAmount.toFixed(6)} ${gas.nativeSymbol} (~${formatUsd(gas.gasCostUsd)})`
+    ? `Estimated gas: ${nativeAmount.toFixed(6)} ${gas.nativeSymbol} (~${formatFiat(gas.gasCostUsd)})`
     : `Estimated gas: ${nativeAmount.toFixed(6)} ${gas.nativeSymbol}`;
 
   return (
@@ -250,7 +253,7 @@ function GasCostTooltip({ gas }: { gas: StepGasEstimate }) {
           ~{nativeAmount.toFixed(6)} {gas.nativeSymbol}
         </div>
         <div className="text-muted-foreground">{gweiPrice.toFixed(2)} gwei</div>
-        {hasUsd && <div className="text-muted-foreground">~{formatUsd(gas.gasCostUsd)}</div>}
+        {hasUsd && <div className="text-muted-foreground">~{formatFiat(gas.gasCostUsd)}</div>}
       </TooltipContent>
     </Tooltip>
   );

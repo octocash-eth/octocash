@@ -14,10 +14,18 @@ vi.mock("~/context/wallet-provider", () => ({
 
 // Mock TokenPriceProvider — its real implementation uses `useQuery`, which
 // requires a QueryClientProvider. Here we only care that the layout wires
-// the two providers in the correct order.
+// the providers in the correct order.
 vi.mock("~/context/token-price-provider", () => ({
   TokenPriceProvider: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="token-price-provider">{children}</div>
+  ),
+}));
+
+// Mock CurrencyProvider for the same reason — its real implementation calls
+// `useQuery` for the CoinGecko exchange rates.
+vi.mock("~/context/currency-provider", () => ({
+  CurrencyProvider: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="currency-provider">{children}</div>
   ),
 }));
 
@@ -27,18 +35,21 @@ describe("WalletLayout", () => {
     expect(screen.getByTestId("wallet-provider")).toBeInTheDocument();
   });
 
-  test("wraps Outlet with WalletProvider and TokenPriceProvider", () => {
+  test("wraps Outlet with WalletProvider, TokenPriceProvider, and CurrencyProvider", () => {
     render(<WalletLayout />);
 
     const walletProvider = screen.getByTestId("wallet-provider");
     const priceProvider = screen.getByTestId("token-price-provider");
+    const currencyProvider = screen.getByTestId("currency-provider");
     const outlet = screen.getByTestId("outlet");
 
     expect(walletProvider).toBeInTheDocument();
     expect(priceProvider).toBeInTheDocument();
+    expect(currencyProvider).toBeInTheDocument();
     expect(outlet).toBeInTheDocument();
     expect(walletProvider).toContainElement(priceProvider);
-    expect(priceProvider).toContainElement(outlet);
+    expect(priceProvider).toContainElement(currencyProvider);
+    expect(currencyProvider).toContainElement(outlet);
   });
 
   test("renders Outlet component", () => {
@@ -51,11 +62,13 @@ describe("WalletLayout", () => {
 
     const walletProvider = screen.getByTestId("wallet-provider");
     const priceProvider = screen.getByTestId("token-price-provider");
+    const currencyProvider = screen.getByTestId("currency-provider");
     const outlet = screen.getByTestId("outlet");
 
     expect(container.firstChild).toBe(walletProvider);
     expect(walletProvider.firstChild).toBe(priceProvider);
-    expect(priceProvider.firstChild).toBe(outlet);
+    expect(priceProvider.firstChild).toBe(currencyProvider);
+    expect(currencyProvider.firstChild).toBe(outlet);
   });
 
   test("renders outlet content", () => {

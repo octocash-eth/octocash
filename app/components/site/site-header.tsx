@@ -12,6 +12,13 @@ const GatedConnectButton = lazy(() =>
   import("~/components/site/gated-connect-button").then((m) => ({ default: m.GatedConnectButton })),
 );
 
+// Lazy load currency selector — it lives inside <CurrencyProvider> (which is
+// only mounted on /dashboard and /history) and depends on TanStack Query +
+// the CoinGecko fetcher, so we keep it out of the marketing bundle.
+const CurrencySelector = lazy(() =>
+  import("~/components/site/currency-selector").then((m) => ({ default: m.CurrencySelector })),
+);
+
 type NavItem = {
   to: string;
   label: string;
@@ -100,6 +107,17 @@ export function SiteHeader() {
           </div>
           <nav className="hidden md:flex items-center gap-2" aria-label="Main navigation">
             <Links items={NAV} isAppPage={isAppPage} />
+            {isAppPage && (
+              <Suspense
+                fallback={
+                  <Button variant="ghost" size="sm" disabled aria-hidden="true">
+                    USD
+                  </Button>
+                }
+              >
+                <CurrencySelector />
+              </Suspense>
+            )}
             <ThemeToggle />
             <MainButton isAppPage={isAppPage} />
           </nav>
@@ -125,6 +143,19 @@ export function SiteHeader() {
           <nav className="flex flex-col gap-2" aria-label="Mobile navigation">
             <Links items={NAV} isAppPage={isAppPage} isMobile onLinkClick={() => setMobileMenuOpen(false)} />
           </nav>
+          {isAppPage && (
+            <div className="mt-2 px-3">
+              <Suspense
+                fallback={
+                  <Button variant="ghost" size="default" disabled className="w-full justify-between">
+                    USD
+                  </Button>
+                }
+              >
+                <CurrencySelector variant="wide" />
+              </Suspense>
+            </div>
+          )}
           <div className="flex items-center gap-2 mt-4 px-3">
             <MainButton isAppPage={isAppPage} />
           </div>
