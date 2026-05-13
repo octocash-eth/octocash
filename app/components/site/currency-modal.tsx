@@ -42,7 +42,14 @@ export function CurrencyModal({ open, onOpenChange }: CurrencyModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[80vh] gap-3 overflow-hidden sm:max-w-2xl">
+      {/*
+       * Override the default grid layout with flex-column so the header and
+       * search input stay pinned to the top while the list below takes the
+       * remaining vertical space and scrolls internally. `min-h-0` on the
+       * list is required for it to shrink inside its flex parent and let
+       * `overflow-y-auto` activate.
+       */}
+      <DialogContent className="flex max-h-[80vh] flex-col gap-3 overflow-hidden sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>Select Currency</DialogTitle>
           <DialogDescription className="sr-only">
@@ -66,7 +73,7 @@ export function CurrencyModal({ open, onOpenChange }: CurrencyModalProps) {
           />
         </div>
 
-        <div className="-mx-2 overflow-y-auto px-2 pb-1">
+        <div className="-mx-2 min-h-0 flex-1 overflow-y-auto px-2 pb-1">
           {suggested.length === 0 && fiat.length === 0 ? (
             <p className="px-1 py-6 text-center text-sm text-muted-foreground">No currencies match "{query}".</p>
           ) : (
@@ -80,13 +87,7 @@ export function CurrencyModal({ open, onOpenChange }: CurrencyModalProps) {
                 />
               )}
               {fiat.length > 0 && (
-                <CurrencySection
-                  title="Fiat Currencies"
-                  items={fiat}
-                  selected={currency.code}
-                  onPick={handlePick}
-                  className={suggested.length > 0 ? "mt-4" : undefined}
-                />
+                <CurrencySection title="Fiat Currencies" items={fiat} selected={currency.code} onPick={handlePick} />
               )}
             </>
           )}
@@ -111,7 +112,7 @@ function CurrencySection({
 }) {
   return (
     <section className={className} aria-label={title}>
-      <h3 className="px-1 pb-2 text-xs font-medium text-muted-foreground">{title}</h3>
+      <h3 className="px-1 pt-8 pb-2 text-xs font-medium text-muted-foreground">{title}</h3>
       <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-4">
         {items.map((c) => (
           <li key={c.code}>

@@ -16,6 +16,13 @@ export interface Currency {
   code: string;
   name: string;
   group: CurrencyGroup;
+  /**
+   * BCP-47 locale used by `Intl.NumberFormat` to render this currency. We pick
+   * the issuing region's locale so users see the currency in its native
+   * convention (e.g. `10,00 €` for EUR, `￥1,235` for JPY), independent of the
+   * viewer's browser locale.
+   */
+  locale: string;
 }
 
 /**
@@ -27,56 +34,56 @@ export const SUGGESTED_CODES = ["USD", "IDR", "TWD", "EUR", "KRW", "JPY", "RUB",
 const SUGGESTED_SET = new Set<string>(SUGGESTED_CODES);
 
 const SUGGESTED_CURRENCIES: Currency[] = [
-  { code: "USD", name: "US Dollar", group: "suggested" },
-  { code: "IDR", name: "Indonesian Rupiah", group: "suggested" },
-  { code: "TWD", name: "New Taiwan Dollar", group: "suggested" },
-  { code: "EUR", name: "Euro", group: "suggested" },
-  { code: "KRW", name: "South Korean Won", group: "suggested" },
-  { code: "JPY", name: "Japanese Yen", group: "suggested" },
-  { code: "RUB", name: "Russian Ruble", group: "suggested" },
-  { code: "CNY", name: "Chinese Yuan", group: "suggested" },
+  { code: "USD", name: "US Dollar", group: "suggested", locale: "en-US" },
+  { code: "IDR", name: "Indonesian Rupiah", group: "suggested", locale: "id-ID" },
+  { code: "TWD", name: "New Taiwan Dollar", group: "suggested", locale: "zh-TW" },
+  { code: "EUR", name: "Euro", group: "suggested", locale: "de-DE" },
+  { code: "KRW", name: "South Korean Won", group: "suggested", locale: "ko-KR" },
+  { code: "JPY", name: "Japanese Yen", group: "suggested", locale: "ja-JP" },
+  { code: "RUB", name: "Russian Ruble", group: "suggested", locale: "ru-RU" },
+  { code: "CNY", name: "Chinese Yuan", group: "suggested", locale: "zh-CN" },
 ];
 
 const FIAT_CURRENCIES: Currency[] = [
-  { code: "AED", name: "United Arab Emirates Dirham", group: "fiat" },
-  { code: "ARS", name: "Argentine Peso", group: "fiat" },
-  { code: "AUD", name: "Australian Dollar", group: "fiat" },
-  { code: "BDT", name: "Bangladeshi Taka", group: "fiat" },
-  { code: "BHD", name: "Bahraini Dinar", group: "fiat" },
-  { code: "BMD", name: "Bermudian Dollar", group: "fiat" },
-  { code: "BRL", name: "Brazil Real", group: "fiat" },
-  { code: "CAD", name: "Canadian Dollar", group: "fiat" },
-  { code: "CHF", name: "Swiss Franc", group: "fiat" },
-  { code: "CLP", name: "Chilean Peso", group: "fiat" },
-  { code: "CZK", name: "Czech Koruna", group: "fiat" },
-  { code: "DKK", name: "Danish Krone", group: "fiat" },
-  { code: "GBP", name: "British Pound Sterling", group: "fiat" },
-  { code: "GEL", name: "Georgian Lari", group: "fiat" },
-  { code: "HKD", name: "Hong Kong Dollar", group: "fiat" },
-  { code: "HUF", name: "Hungarian Forint", group: "fiat" },
-  { code: "ILS", name: "Israeli New Shekel", group: "fiat" },
-  { code: "INR", name: "Indian Rupee", group: "fiat" },
-  { code: "KWD", name: "Kuwaiti Dinar", group: "fiat" },
-  { code: "LKR", name: "Sri Lankan Rupee", group: "fiat" },
-  { code: "MMK", name: "Burmese Kyat", group: "fiat" },
-  { code: "MXN", name: "Mexican Peso", group: "fiat" },
-  { code: "MYR", name: "Malaysian Ringgit", group: "fiat" },
-  { code: "NGN", name: "Nigerian Naira", group: "fiat" },
-  { code: "NOK", name: "Norwegian Krone", group: "fiat" },
-  { code: "NZD", name: "New Zealand Dollar", group: "fiat" },
-  { code: "PHP", name: "Philippine Peso", group: "fiat" },
-  { code: "PKR", name: "Pakistani Rupee", group: "fiat" },
-  { code: "PLN", name: "Polish Zloty", group: "fiat" },
-  { code: "SAR", name: "Saudi Riyal", group: "fiat" },
-  { code: "SEK", name: "Swedish Krona", group: "fiat" },
-  { code: "SGD", name: "Singapore Dollar", group: "fiat" },
-  { code: "THB", name: "Thai Baht", group: "fiat" },
-  { code: "TRY", name: "Turkish Lira", group: "fiat" },
-  { code: "UAH", name: "Ukrainian hryvnia", group: "fiat" },
-  { code: "VEF", name: "Venezuelan bolívar fuerte", group: "fiat" },
-  { code: "VND", name: "Vietnamese đồng", group: "fiat" },
-  { code: "ZAR", name: "South African Rand", group: "fiat" },
-  { code: "XDR", name: "IMF Special Drawing Rights", group: "fiat" },
+  { code: "AED", name: "United Arab Emirates Dirham", group: "fiat", locale: "ar-AE" },
+  { code: "ARS", name: "Argentine Peso", group: "fiat", locale: "es-AR" },
+  { code: "AUD", name: "Australian Dollar", group: "fiat", locale: "en-AU" },
+  { code: "BDT", name: "Bangladeshi Taka", group: "fiat", locale: "bn-BD" },
+  { code: "BHD", name: "Bahraini Dinar", group: "fiat", locale: "ar-BH" },
+  { code: "BMD", name: "Bermudian Dollar", group: "fiat", locale: "en-BM" },
+  { code: "BRL", name: "Brazil Real", group: "fiat", locale: "pt-BR" },
+  { code: "CAD", name: "Canadian Dollar", group: "fiat", locale: "en-CA" },
+  { code: "CHF", name: "Swiss Franc", group: "fiat", locale: "de-CH" },
+  { code: "CLP", name: "Chilean Peso", group: "fiat", locale: "es-CL" },
+  { code: "CZK", name: "Czech Koruna", group: "fiat", locale: "cs-CZ" },
+  { code: "DKK", name: "Danish Krone", group: "fiat", locale: "da-DK" },
+  { code: "GBP", name: "British Pound Sterling", group: "fiat", locale: "en-GB" },
+  { code: "GEL", name: "Georgian Lari", group: "fiat", locale: "ka-GE" },
+  { code: "HKD", name: "Hong Kong Dollar", group: "fiat", locale: "zh-HK" },
+  { code: "HUF", name: "Hungarian Forint", group: "fiat", locale: "hu-HU" },
+  { code: "ILS", name: "Israeli New Shekel", group: "fiat", locale: "he-IL" },
+  { code: "INR", name: "Indian Rupee", group: "fiat", locale: "en-IN" },
+  { code: "KWD", name: "Kuwaiti Dinar", group: "fiat", locale: "ar-KW" },
+  { code: "LKR", name: "Sri Lankan Rupee", group: "fiat", locale: "si-LK" },
+  { code: "MMK", name: "Burmese Kyat", group: "fiat", locale: "my-MM" },
+  { code: "MXN", name: "Mexican Peso", group: "fiat", locale: "es-MX" },
+  { code: "MYR", name: "Malaysian Ringgit", group: "fiat", locale: "ms-MY" },
+  { code: "NGN", name: "Nigerian Naira", group: "fiat", locale: "en-NG" },
+  { code: "NOK", name: "Norwegian Krone", group: "fiat", locale: "nb-NO" },
+  { code: "NZD", name: "New Zealand Dollar", group: "fiat", locale: "en-NZ" },
+  { code: "PHP", name: "Philippine Peso", group: "fiat", locale: "en-PH" },
+  { code: "PKR", name: "Pakistani Rupee", group: "fiat", locale: "en-PK" },
+  { code: "PLN", name: "Polish Zloty", group: "fiat", locale: "pl-PL" },
+  { code: "SAR", name: "Saudi Riyal", group: "fiat", locale: "ar-SA" },
+  { code: "SEK", name: "Swedish Krona", group: "fiat", locale: "sv-SE" },
+  { code: "SGD", name: "Singapore Dollar", group: "fiat", locale: "en-SG" },
+  { code: "THB", name: "Thai Baht", group: "fiat", locale: "th-TH" },
+  { code: "TRY", name: "Turkish Lira", group: "fiat", locale: "tr-TR" },
+  { code: "UAH", name: "Ukrainian hryvnia", group: "fiat", locale: "uk-UA" },
+  { code: "VEF", name: "Venezuelan bolívar fuerte", group: "fiat", locale: "es-VE" },
+  { code: "VND", name: "Vietnamese đồng", group: "fiat", locale: "vi-VN" },
+  { code: "ZAR", name: "South African Rand", group: "fiat", locale: "en-ZA" },
+  { code: "XDR", name: "IMF Special Drawing Rights", group: "fiat", locale: "en-US" },
 ];
 
 export const CURRENCIES: readonly Currency[] = Object.freeze([...SUGGESTED_CURRENCIES, ...FIAT_CURRENCIES]);
@@ -96,6 +103,14 @@ export function getCurrency(code: string | undefined | null): Currency {
 
 export function isSuggestedCode(code: string): boolean {
   return SUGGESTED_SET.has(code.toUpperCase());
+}
+
+/**
+ * Returns the BCP-47 locale associated with a currency code. Falls back to the
+ * default currency's locale when the code is unknown.
+ */
+export function getCurrencyLocale(code: string | undefined | null): string {
+  return getCurrency(code).locale;
 }
 
 /**

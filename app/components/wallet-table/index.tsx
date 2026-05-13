@@ -13,7 +13,7 @@ import {
 } from "~/lib/api";
 import { isSameToken } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
-import { columns } from "./columns";
+import { buildColumns } from "./columns";
 import { DataTable } from "./data-table";
 
 /** Chain IDs the wallet table cares about. */
@@ -256,6 +256,10 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
   // component (plan card, consolidation modal) see identical values.
   useRegisterPrices(tokens);
   const { priceFor, isPending: isPriceLoading } = usePriceMap();
+
+  // Rebuild columns when `priceFor` changes so the value column's `sortingFn`
+  // (which closes over `priceFor`) sees fresh prices and the table re-sorts.
+  const columns = React.useMemo(() => buildColumns(priceFor), [priceFor]);
 
   const isLoading = zerionQuery.isLoading;
   const isOdosFetching = odosTokenListQueries.some((q) => q.isFetching);

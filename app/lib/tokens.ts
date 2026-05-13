@@ -11,6 +11,7 @@ import {
 import { chains, supportedChains, transports } from "~/data/supported-chains";
 import { getPublicClient, retryOnRateLimit } from "~/lib/public-client";
 import type { TokenAmount } from "~/lib/types";
+import { getCurrencyLocale } from "./currencies";
 import { getNativeBalance } from "./gas";
 import { tryCatch } from "./utils";
 
@@ -71,10 +72,15 @@ export function formatTokenAmount(token: TokenAmount): string {
  *   omitted, `Intl.NumberFormat` picks the currency's natural default (e.g.
  *   JPY -> 0, USD -> 2, KWD -> 3).
  *
+ * Uses the currency's native locale (e.g. `de-DE` for EUR, `ja-JP` for JPY)
+ * so the symbol position and thousand/decimal separators match the convention
+ * for that currency, independent of the viewer's browser locale.
+ *
  * Stays a pure formatting helper: it doesn't perform any conversion. Callers
  * are expected to pass the amount already denominated in the target currency.
  */
 export function formatFiat(amount: number, currency = "USD", decimals?: number): string {
+  const locale = getCurrencyLocale(currency);
   const options: Intl.NumberFormatOptions = {
     style: "currency",
     currency,
@@ -84,7 +90,7 @@ export function formatFiat(amount: number, currency = "USD", decimals?: number):
     options.maximumFractionDigits = decimals;
   }
   try {
-    return amount.toLocaleString("en-US", options);
+    return amount.toLocaleString(locale, options);
   } catch {
     // Unknown currency code: fall back to USD formatting so we never crash the
     // UI with an `Intl` `RangeError`.

@@ -51,6 +51,19 @@ function ValueColumnHeader({ column }: { column: Column<TokenAmount> }) {
 }
 
 /**
+ * Computes the row's USD value for both the cell render and the column's
+ * sort comparator, so the two stay in lockstep. Falls back to 0 when no
+ * price is known yet — same as the cell's "—" rendering — which keeps
+ * priceless rows sortable as the bottom of an ascending sort.
+ */
+function getUsdValue(token: TokenAmount, priceFor?: (row: TokenAmount) => number | undefined): number {
+  const price = priceFor?.(token);
+  if (price === undefined) return 0;
+  const formattedAmount = Number(formatUnits(token.amount, token.decimals));
+  return price * formattedAmount;
+}
+
+/**
  * Cell that converts the row's USD value to the user's selected fiat
  * currency. Renders a skeleton while the price is loading, an em-dash when
  * the row is worth effectively nothing, and the formatted amount otherwise.
@@ -72,8 +85,7 @@ function ValueCell({
     return <Skeleton className="h-4 w-16 ml-auto" />;
   }
 
-  const formattedAmount = Number(formatUnits(row.original.amount, row.original.decimals));
-  const usd = (price ?? 0) * formattedAmount;
+  const usd = getUsdValue(row.original, priceFor);
   if (usd <= 0) {
     return <div className="text-right font-medium text-muted-foreground">-</div>;
   }
@@ -91,222 +103,239 @@ function getExplorerUrl(chainId: number, tokenAddress: string | undefined, walle
   return `${chain.explorerUrl}/token/${tokenAddress}?a=${walletAddress}`;
 }
 
-export const columns: ColumnDef<TokenAmount>[] = [
-  {
-    id: "select",
-    size: 20,
-    header: ({ table }) => (
-      <Checkbox
-        checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")}
-        onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
-        aria-label="Select all"
-      />
-    ),
-    cell: ({ row }) => (
-      <Checkbox
-        checked={row.getIsSelected()}
-        onCheckedChange={(value) => row.toggleSelected(!!value)}
-        aria-label="Select row"
-      />
-    ),
-    enableSorting: false,
-    enableHiding: false,
-    meta: {
-      skeleton: <Skeleton className="h-4 w-4 rounded" />,
+/**
+ * Builds the wallet table's column defs.
+ *
+ * The value column ("In USD/EUR/...") is computed from a live `priceFor`
+ * lookup, so its `sortingFn` needs the same lookup in closure scope —
+ * TanStack's `SortingFn` signature `(rowA, rowB, columnId) => number` does
+ * not pass `meta` through. Callers (re)build columns whenever `priceFor`
+ * changes so the table re-sorts as prices stream in.
+ */
+export function buildColumns(priceFor?: (row: TokenAmount) => number | undefined): ColumnDef<TokenAmount>[] {
+  return [
+    {
+      id: "select",
+      size: 20,
+      header: ({ table }) => (
+        <Checkbox
+          checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")}
+          onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
+          aria-label="Select all"
+        />
+      ),
+      cell: ({ row }) => (
+        <Checkbox
+          checked={row.getIsSelected()}
+          onCheckedChange={(value) => row.toggleSelected(!!value)}
+          aria-label="Select row"
+        />
+      ),
+      enableSorting: false,
+      enableHiding: false,
+      meta: {
+        skeleton: <Skeleton className="h-4 w-4 rounded" />,
+      },
     },
-  },
-  {
-    accessorKey: "symbol",
-    size: 200,
-    header: ({ column }) => <DataGridColumnHeader column={column} title="Token" />,
-    cell: ({ row }) => {
-      const token = row.original;
-      const tokenName = token.name || token.symbol;
+    {
+      accessorKey: "symbol",
+      size: 200,
+      header: ({ column }) => <DataGridColumnHeader column={column} title="Token" />,
+      cell: ({ row }) => {
+        const token = row.original;
+        const tokenName = token.name || token.symbol;
 
-      // If we don't have a token address, just show the token symbol
-      if (!token.token || !token.chainId) {
-        return <div className="text-left">{token.symbol}</div>;
-      }
+        // If we don't have a token address, just show the token symbol
+        if (!token.token || !token.chainId) {
+          return <div className="text-left">{token.symbol}</div>;
+        }
 
-      return (
-        <div className="text-left">
-          <TokenDisplayRoot
-            tokenAddress={token.token}
-            chainId={token.chainId}
-            symbol={token.symbol}
-            name={tokenName}
-            className="gap-1"
-          >
-            <TokenDisplayIcon className="size-4 md:size-5" />
-            <TokenDisplayName className="truncate text-nowrap" />
-            <span className="text-muted-foreground">
-              <TokenDisplaySymbol />
+        return (
+          <div className="text-left">
+            <TokenDisplayRoot
+              tokenAddress={token.token}
+              chainId={token.chainId}
+              symbol={token.symbol}
+              name={tokenName}
+              className="gap-1"
+            >
+              <TokenDisplayIcon className="size-4 md:size-5" />
+              <TokenDisplayName className="truncate text-nowrap" />
+              <span className="text-muted-foreground">
+                <TokenDisplaySymbol />
+              </span>
+              <ButtonGroup>
+                <TokenDisplayCopy />
+                <TokenDisplayLink walletAddress={token.walletAddress} />
+              </ButtonGroup>
+            </TokenDisplayRoot>
+          </div>
+        );
+      },
+      filterFn: (row, _id, value) => {
+        const values = value as string[];
+        if (values.length === 0) return true;
+        return values.includes(row.original.symbol);
+      },
+      meta: {
+        skeleton: (
+          <div className="flex items-center gap-1">
+            <Skeleton className="h-6 w-6 rounded-full" />
+            <Skeleton className="h-4 w-20" />
+            <Skeleton className="h-4 w-12" />
+          </div>
+        ),
+      },
+    },
+    {
+      accessorKey: "chainId",
+      size: 100,
+      header: ({ column }) => <DataGridColumnHeader column={column} title="Chain" />,
+      cell: ({ row }) => {
+        const chainName = getChainName(row.original.chainId);
+        return (
+          <div className="text-left flex items-center gap-2">
+            <ChainIcon chain={chainName} className="size-4 md:size-5" />
+            <span title={chainName} className="truncate text-nowrap">
+              {chainName}
             </span>
-            <ButtonGroup>
-              <TokenDisplayCopy />
-              <TokenDisplayLink walletAddress={token.walletAddress} />
-            </ButtonGroup>
-          </TokenDisplayRoot>
-        </div>
-      );
+          </div>
+        );
+      },
+      filterFn: (row, _id, value) => {
+        const values = value as string[];
+        if (values.length === 0) return true;
+        const chainName = getChainName(row.original.chainId);
+        return values.includes(chainName);
+      },
+      meta: {
+        skeleton: (
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-6 w-6 rounded-full" />
+            <Skeleton className="h-4 w-24" />
+          </div>
+        ),
+      },
     },
-    filterFn: (row, _id, value) => {
-      const values = value as string[];
-      if (values.length === 0) return true;
-      return values.includes(row.original.symbol);
-    },
-    meta: {
-      skeleton: (
-        <div className="flex items-center gap-1">
-          <Skeleton className="h-6 w-6 rounded-full" />
-          <Skeleton className="h-4 w-20" />
-          <Skeleton className="h-4 w-12" />
-        </div>
-      ),
-    },
-  },
-  {
-    accessorKey: "chainId",
-    size: 100,
-    header: ({ column }) => <DataGridColumnHeader column={column} title="Chain" />,
-    cell: ({ row }) => {
-      const chainName = getChainName(row.original.chainId);
-      return (
-        <div className="text-left flex items-center gap-2">
-          <ChainIcon chain={chainName} className="size-4 md:size-5" />
-          <span title={chainName} className="truncate text-nowrap">
-            {chainName}
-          </span>
-        </div>
-      );
-    },
-    filterFn: (row, _id, value) => {
-      const values = value as string[];
-      if (values.length === 0) return true;
-      const chainName = getChainName(row.original.chainId);
-      return values.includes(chainName);
-    },
-    meta: {
-      skeleton: (
-        <div className="flex items-center gap-2">
-          <Skeleton className="h-6 w-6 rounded-full" />
-          <Skeleton className="h-4 w-24" />
-        </div>
-      ),
-    },
-  },
-  {
-    accessorKey: "walletAddress",
-    size: 150,
-    header: ({ column }) => <DataGridColumnHeader column={column} title="Wallet" />,
-    cell: ({ row }) => {
-      const token = row.original;
+    {
+      accessorKey: "walletAddress",
+      size: 150,
+      header: ({ column }) => <DataGridColumnHeader column={column} title="Wallet" />,
+      cell: ({ row }) => {
+        const token = row.original;
 
-      return (
-        <div className="font-medium text-left">
-          <AddressDisplayRoot address={token.walletAddress} chainId={token.chainId}>
-            <AddressDisplayAvatar className="size-4 md:size-5" />
-            <AddressDisplayText />
-            <ButtonGroup>
-              <AddressDisplayCopy />
-              <AddressDisplayLink />
-            </ButtonGroup>
-          </AddressDisplayRoot>
-        </div>
-      );
+        return (
+          <div className="font-medium text-left">
+            <AddressDisplayRoot address={token.walletAddress} chainId={token.chainId}>
+              <AddressDisplayAvatar className="size-4 md:size-5" />
+              <AddressDisplayText />
+              <ButtonGroup>
+                <AddressDisplayCopy />
+                <AddressDisplayLink />
+              </ButtonGroup>
+            </AddressDisplayRoot>
+          </div>
+        );
+      },
+      filterFn: (row, _id, value) => {
+        const values = value as string[];
+        if (values.length === 0) return true;
+        return values.includes(row.original.walletAddress);
+      },
+      meta: {
+        skeleton: (
+          <div className="flex items-center gap-2">
+            <Skeleton className="size-5 rounded-full" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+        ),
+      },
     },
-    filterFn: (row, _id, value) => {
-      const values = value as string[];
-      if (values.length === 0) return true;
-      return values.includes(row.original.walletAddress);
-    },
-    meta: {
-      skeleton: (
-        <div className="flex items-center gap-2">
-          <Skeleton className="size-5 rounded-full" />
-          <Skeleton className="h-4 w-32" />
+    {
+      accessorKey: "amount",
+      size: 70,
+      header: ({ column }) => (
+        <div className="flex justify-end -me-7">
+          <DataGridColumnHeader column={column} title="Amount" className="ms-0 me-0" />
         </div>
       ),
+      cell: ({ row }) => {
+        const token = row.original;
+        return (
+          <div className="text-right font-medium">
+            <TokenDisplayRoot
+              tokenAddress={token.token}
+              chainId={token.chainId}
+              symbol={token.symbol}
+              decimals={token.decimals}
+            >
+              <TokenDisplayAmount amount={token.amount} />
+            </TokenDisplayRoot>
+          </div>
+        );
+      },
+      meta: {
+        skeleton: <Skeleton className="h-4 w-20 ml-auto" />,
+      },
     },
-  },
-  {
-    accessorKey: "amount",
-    size: 70,
-    header: ({ column }) => (
-      <div className="flex justify-end -me-7">
-        <DataGridColumnHeader column={column} title="Amount" className="ms-0 me-0" />
-      </div>
-    ),
-    cell: ({ row }) => {
-      const token = row.original;
-      return (
-        <div className="text-right font-medium">
-          <TokenDisplayRoot
-            tokenAddress={token.token}
-            chainId={token.chainId}
-            symbol={token.symbol}
-            decimals={token.decimals}
-          >
-            <TokenDisplayAmount amount={token.amount} />
-          </TokenDisplayRoot>
-        </div>
-      );
+    {
+      id: "amountInUsd",
+      // `accessorFn` is required for `column.getCanSort()` to return true —
+      // TanStack treats columns without an accessor as display-only and
+      // refuses to sort them, regardless of `enableSorting`. The numeric
+      // value we return is also what the default `basic` sorting compares.
+      accessorFn: (row) => getUsdValue(row, priceFor),
+      size: 100,
+      enableSorting: true,
+      header: ({ column }) => <ValueColumnHeader column={column} />,
+      cell: ({ row, table }) => {
+        const meta = table.options.meta;
+        return <ValueCell row={row} priceFor={meta?.priceFor} isPending={meta?.isPending} />;
+      },
+      sortingFn: "basic",
+      meta: {
+        skeleton: <Skeleton className="h-4 w-16 ml-auto" />,
+      },
     },
-    meta: {
-      skeleton: <Skeleton className="h-4 w-20 ml-auto" />,
-    },
-  },
-  {
-    id: "amountInUsd",
-    size: 100,
-    enableSorting: false,
-    header: ({ column }) => <ValueColumnHeader column={column} />,
-    cell: ({ row, table }) => {
-      const meta = table.options.meta;
-      return <ValueCell row={row} priceFor={meta?.priceFor} isPending={meta?.isPending} />;
-    },
-    meta: {
-      skeleton: <Skeleton className="h-4 w-16 ml-auto" />,
-    },
-  },
-  {
-    id: "actions",
-    size: 70,
-    cell: ({ row }) => {
-      const token = row.original;
+    {
+      id: "actions",
+      size: 70,
+      cell: ({ row }) => {
+        const token = row.original;
 
-      return (
-        <div className="text-right">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="h-8 w-8 p-0">
-                <span className="sr-only">Open menu</span>
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Actions</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => navigator.clipboard.writeText(token.walletAddress)}>
-                Copy wallet address
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem>View details</DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => {
-                  if (token.token) {
-                    window.open(getExplorerUrl(token.chainId, token.token, token.walletAddress), "_blank");
-                  }
-                }}
-              >
-                View on explorer
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      );
+        return (
+          <div className="text-right">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="h-8 w-8 p-0">
+                  <span className="sr-only">Open menu</span>
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => navigator.clipboard.writeText(token.walletAddress)}>
+                  Copy wallet address
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem>View details</DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    if (token.token) {
+                      window.open(getExplorerUrl(token.chainId, token.token, token.walletAddress), "_blank");
+                    }
+                  }}
+                >
+                  View on explorer
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        );
+      },
+      meta: {
+        skeleton: <Skeleton className="h-8 w-8 rounded ml-auto" />,
+      },
     },
-    meta: {
-      skeleton: <Skeleton className="h-8 w-8 rounded ml-auto" />,
-    },
-  },
-];
+  ];
+}

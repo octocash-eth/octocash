@@ -216,9 +216,10 @@ describe("tokens", () => {
       expect(formatFiat(1234.56)).toBe("$1,234.56");
     });
 
-    test("formats EUR with the euro symbol", () => {
-      expect(formatFiat(1234.56, "EUR")).toMatch(/€/);
-      expect(formatFiat(1234.56, "EUR")).toMatch(/1,234\.56/);
+    test("formats EUR using its native locale (symbol after, comma decimal)", () => {
+      const formatted = formatFiat(1234.56, "EUR");
+      expect(formatted).toMatch(/€/);
+      expect(formatted).toMatch(/1\.234,56/);
     });
 
     test("respects an explicit decimals override", () => {
@@ -226,7 +227,7 @@ describe("tokens", () => {
     });
 
     test("uses natural fraction digits for JPY (zero) when decimals omitted", () => {
-      expect(formatFiat(1234.5, "JPY")).toBe("¥1,235");
+      expect(formatFiat(1234.5, "JPY")).toBe("￥1,235");
     });
 
     test("falls back to USD formatting when currency code is invalid", () => {
