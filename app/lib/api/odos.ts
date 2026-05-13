@@ -29,6 +29,43 @@ interface OdosPricingResponse {
   tokenPrices: Record<string, number | null>;
 }
 
+// Odos `/token?query=&chainId=N` returns an array of token catalog entries.
+// We only care about the address; the rest is metadata we already have.
+interface OdosTokenInfo {
+  address: string;
+  chainId: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  isWhitelisted: boolean;
+}
+
+/**
+ * Fetch Odos's swappable-token catalog for a single chain.
+ *
+ * Returns a Set of lowercased addresses. Throws on non-2xx so callers (e.g.
+ * TanStack Query) can observe the failure and decide whether to fail open.
+ * Native ETH is represented in the response as `0x0000…0000`, which matches
+ * the `zeroAddress` we use internally — no special-casing required.
+ */
+export async function fetchOdosTokensForChain(chainId: number, signal?: AbortSignal): Promise<ReadonlySet<string>> {
+  const url = new URL("https://api.odos.xyz/token");
+  url.searchParams.set("query", "");
+  url.searchParams.set("chainId", String(chainId));
+
+  const response = await fetch(url.toString(), {
+    headers: { accept: "application/json" },
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Odos /token failed for chain ${chainId}: ${response.status} ${response.statusText}`);
+  }
+
+  const data: OdosTokenInfo[] = await response.json();
+  return new Set(data.map((t) => t.address.toLowerCase()));
+}
+
 export type OdosPriceKey = `${number}:${string}`;
 export const odosPriceKey = (chainId: number, address: Address): OdosPriceKey => `${chainId}:${address.toLowerCase()}`;
 

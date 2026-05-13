@@ -2,7 +2,7 @@ import { type Address, zeroAddress } from "viem";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WALLET } from "../../../test/test-helpers";
 import { isSameToken } from "../tokens";
-import { EXTRA_TOKENS, fetchExtraTokenBalances, fetchOdosPrices, odosPriceKey } from "./odos";
+import { EXTRA_TOKENS, fetchExtraTokenBalances, fetchOdosPrices, fetchOdosTokensForChain, odosPriceKey } from "./odos";
 
 // biome-ignore lint/suspicious/noExplicitAny: Test mocks require any types for flexibility
 type MockContract = any;
@@ -877,6 +877,70 @@ describe("odos", () => {
 
       // Aborted before fetch resolved → no price recorded
       expect(result.has(odosPriceKey(1, ADDR_1))).toBe(false);
+    });
+  });
+
+  describe("fetchOdosTokensForChain", () => {
+    test("returns a Set of lowercased addresses on success", async () => {
+      // Mix a checksum-cased address, an already-lowercase one, and native ETH
+      // (which Odos returns as `0x00…00`) so we lock in both the lowercase
+      // normalisation and the native-token handling the UI relies on.
+      const CHECKSUM = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+      const LOWER = "0xdac17f958d2ee523a2206206994597c13d831ec7";
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve([
+            { address: CHECKSUM, chainId: "1", symbol: "USDC", name: "USD Coin", decimals: 6, isWhitelisted: true },
+            { address: LOWER, chainId: "1", symbol: "USDT", name: "Tether", decimals: 6, isWhitelisted: true },
+            { address: zeroAddress, chainId: "1", symbol: "ETH", name: "Ethereum", decimals: 18, isWhitelisted: true },
+          ]),
+      });
+
+      const set = await fetchOdosTokensForChain(1);
+
+      expect(set).toBeInstanceOf(Set);
+      expect(set.size).toBe(3);
+      expect(set.has(CHECKSUM.toLowerCase())).toBe(true);
+      expect(set.has(LOWER)).toBe(true);
+      expect(set.has(zeroAddress)).toBe(true);
+      // The checksum form must NOT remain — UI looks up by `.toLowerCase()`.
+      expect(set.has(CHECKSUM)).toBe(false);
+    });
+
+    test("builds the documented URL: /token?query=&chainId=N", async () => {
+      let capturedUrl = "";
+      mockFetch.mockImplementation((url: string) => {
+        capturedUrl = url;
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      });
+
+      await fetchOdosTokensForChain(42161);
+
+      const parsed = new URL(capturedUrl);
+      expect(parsed.origin + parsed.pathname).toBe("https://api.odos.xyz/token");
+      expect(parsed.searchParams.get("chainId")).toBe("42161");
+      expect(parsed.searchParams.get("query")).toBe("");
+    });
+
+    test("throws on non-2xx so callers can observe the failure", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 503, statusText: "Service Unavailable" });
+
+      await expect(fetchOdosTokensForChain(1)).rejects.toThrow(/Odos \/token failed for chain 1/);
+    });
+
+    test("forwards AbortSignal to fetch", async () => {
+      mockFetch.mockImplementation((_url: string, init: RequestInit) => {
+        if (init.signal?.aborted) {
+          return Promise.reject(new DOMException("aborted", "AbortError"));
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      });
+
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(fetchOdosTokensForChain(1, controller.signal)).rejects.toThrow();
     });
   });
 });

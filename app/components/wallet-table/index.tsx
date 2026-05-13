@@ -1,14 +1,18 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import type { RowSelectionState } from "@tanstack/react-table";
 import * as React from "react";
 import { formatUnits } from "viem";
 import { ConsolidateTokensModal } from "~/components/consolidate-tokens-modal";
 import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
-import { fetchExtraTokenBalances, fetchZerionTokenBalances } from "~/lib/api";
+import { chains } from "~/data/supported-chains";
+import { fetchExtraTokenBalances, fetchOdosTokensForChain, fetchZerionTokenBalances } from "~/lib/api";
 import { isSameToken } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
 import { columns } from "./columns";
 import { DataTable } from "./data-table";
+
+/** Chain IDs the wallet table cares about. */
+const SUPPORTED_CHAIN_IDS = Object.keys(chains).map(Number);
 
 /**
  * USD value used solely for the table's first-paint sort, derived from the
@@ -60,10 +64,47 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     staleTime: 30_000, // 30 seconds
   });
 
-  // Combine tokens: Zerion first, then extra tokens (deduplicated)
-  // Importantly, we show zerion tokens immediately without waiting for extra tokens
+  // Per-chain Odos `/token` catalog fetches. These run alongside `zerionQuery`
+  // (no gating) so the catalog is usually ready by the time the filter runs.
+  // The catalog is global (independent of `addresses`), so the cache key omits
+  // them and is shared across users.
+  const odosTokenListQueries = useQueries({
+    queries: SUPPORTED_CHAIN_IDS.map((chainId) => ({
+      queryKey: ["odos-token-list", chainId],
+      queryFn: ({ signal }: { signal: AbortSignal }) => fetchOdosTokensForChain(chainId, signal),
+      staleTime: 10 * 60_000, // catalog is stable, refresh sparingly
+    })),
+  });
+
+  // Index per-chain so the row filter is O(1) per token.
+  const odosByChain = React.useMemo(() => {
+    const m = new Map<number, (typeof odosTokenListQueries)[number]>();
+    SUPPORTED_CHAIN_IDS.forEach((id, i) => {
+      m.set(id, odosTokenListQueries[i]);
+    });
+    return m;
+  }, [odosTokenListQueries]);
+
+  // Per-chain gate + fail-open: a token on chain N is hidden until that
+  // chain's Odos catalog resolves (success or error). On success we keep
+  // only addresses present in the catalog; on error we keep everything so a
+  // transient Odos blip doesn't nuke the user's balance view.
+  const isOdosAllowed = React.useCallback(
+    (token: TokenAmount): boolean => {
+      const q = odosByChain.get(token.chainId);
+      if (!q) return false; // chain not in our supported set
+      if (q.isPending) return false; // per-chain gate: still loading
+      if (q.isError) return true; // fail-open on chain-level failure
+      return q.data?.has(token.token.toLowerCase()) ?? false;
+    },
+    [odosByChain],
+  );
+
+  // Combine tokens: Zerion first, then extra tokens (deduplicated). Both
+  // streams are passed through `isOdosAllowed` so non-routable tokens never
+  // reach the table.
   const tokens = React.useMemo(() => {
-    const zerionTokens = zerionQuery.data ?? [];
+    const zerionTokens = (zerionQuery.data ?? []).filter(isOdosAllowed);
 
     // Only include extra tokens if the query has successfully completed
     // This ensures zerion data renders first before extra tokens are added
@@ -74,7 +115,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
       return sorted;
     }
 
-    const extraTokens = extraQuery.data ?? [];
+    const extraTokens = (extraQuery.data ?? []).filter(isOdosAllowed);
 
     // Deduplicate extra tokens against Zerion tokens
     const deduplicatedExtra = extraTokens.filter((extra) => !zerionTokens.some((zerion) => isSameToken(zerion, extra)));
@@ -82,7 +123,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     const combined = [...zerionTokens, ...deduplicatedExtra];
     combined.sort((a, b) => sortPriceUsd(b) - sortPriceUsd(a));
     return combined;
-  }, [zerionQuery.data, extraQuery.data, extraQuery.isSuccess]);
+  }, [zerionQuery.data, extraQuery.data, extraQuery.isSuccess, isOdosAllowed]);
 
   // Feed every visible token into the shared price context, then read prices
   // back through the same context so the table USD column and every other
@@ -91,14 +132,18 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
   const { priceFor, isPending: isPriceLoading } = usePriceMap();
 
   const isLoading = zerionQuery.isLoading;
-  const isRefreshing = zerionQuery.isFetching || extraQuery.isFetching;
+  const isOdosFetching = odosTokenListQueries.some((q) => q.isFetching);
+  const isRefreshing = zerionQuery.isFetching || extraQuery.isFetching || isOdosFetching;
   const error = zerionQuery.error?.message ?? extraQuery.error?.message ?? null;
 
   const handleRefresh = React.useCallback(() => {
     setRowSelection({});
     zerionQuery.refetch();
     extraQuery.refetch();
-  }, [zerionQuery.refetch, extraQuery.refetch]);
+    odosTokenListQueries.forEach((q) => {
+      q.refetch();
+    });
+  }, [zerionQuery.refetch, extraQuery.refetch, odosTokenListQueries]);
 
   const zerionApiKeyMissing = !import.meta.env.VITE_ZERION_API_KEY;
 
