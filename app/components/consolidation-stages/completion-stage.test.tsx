@@ -76,6 +76,8 @@ vi.mock("~/components/token/token-display", () => ({
   TokenDisplayAmount: ({ amount }: { amount: bigint }) => (
     <span data-testid="token-display-amount">{amount.toString()}</span>
   ),
+  TokenDisplayFiat: ({ amount, price }: { amount: bigint; price?: number }) =>
+    price === undefined ? null : <span data-testid="token-display-fiat">{(Number(amount) * price).toString()}</span>,
 }));
 
 describe("CompletionStage", () => {

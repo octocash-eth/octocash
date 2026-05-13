@@ -417,7 +417,7 @@ describe("ConsolidationCard - Expand/Collapse", () => {
     expect(screen.getByTestId("chevron-up")).toBeInTheDocument();
   });
 
-  test("clicking expanded card collapses it", async () => {
+  test("clicking chevron collapses an expanded card", async () => {
     const { useConsolidationRecords } = await import("~/hooks/use-consolidation-records");
     const mockConsolidation = createMockConsolidation();
 
@@ -428,12 +428,14 @@ describe("ConsolidationCard - Expand/Collapse", () => {
 
     const card = screen.getByTestId("card");
 
-    // Expand
+    // Expand by clicking the card
     await user.click(card);
     expect(screen.getByTestId("consolidation-tokens-summary")).toBeInTheDocument();
 
-    // Collapse
-    await user.click(card);
+    // Collapse by clicking the chevron-up button (card body click is disabled when expanded)
+    const chevronUpButton = screen.getByTestId("chevron-up").closest("button");
+    if (!chevronUpButton) throw new Error("Chevron up button not found");
+    await user.click(chevronUpButton);
     expect(screen.queryByTestId("consolidation-tokens-summary")).not.toBeInTheDocument();
   });
 
