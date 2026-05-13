@@ -8,6 +8,7 @@ export { TokenCard } from "./token-card";
 export {
   TokenDisplayAmount,
   TokenDisplayCopy,
+  TokenDisplayFiat,
   TokenDisplayIcon,
   TokenDisplayLink,
   TokenDisplayName,

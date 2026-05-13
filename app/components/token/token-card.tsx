@@ -5,7 +5,13 @@ import { usePrice } from "~/context/token-price-provider";
 import { chains } from "~/data/supported-chains";
 import { useToken } from "~/hooks/use-token";
 import type { TokenAmount } from "~/lib/types";
-import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "./token-display";
+import {
+  TokenDisplayAmount,
+  TokenDisplayFiat,
+  TokenDisplayIcon,
+  TokenDisplayRoot,
+  TokenDisplaySymbol,
+} from "./token-display";
 
 interface TokenCardProps {
   token: TokenAmount;
@@ -35,14 +41,21 @@ export function TokenCard({ token, label }: TokenCardProps) {
       <TokenDisplayRoot tokenAddress={token.token} chainId={token.chainId} symbol={token.symbol} className="gap-2">
         <div className="flex items-center gap-2 flex-1">
           <TokenDisplayIcon className="size-4" />
+          {token.amount > 0n && (
+            <span className="font-semibold text-sm">
+              <TokenDisplayAmount amount={token.amount} unitaryPrice={price} />
+            </span>
+          )}
           <TokenDisplaySymbol />
           {label && (
             <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">{label}</span>
           )}
           {token.amount > 0n && (
-            <span className="ml-auto font-semibold text-sm">
-              <TokenDisplayAmount amount={token.amount} unitaryPrice={price} />
-            </span>
+            <TokenDisplayFiat
+              amount={token.amount}
+              unitaryPrice={price}
+              className="ml-auto text-sm text-muted-foreground"
+            />
           )}
         </div>
       </TokenDisplayRoot>

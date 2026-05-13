@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Inbox, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { ConsolidationTokensSummary } from "~/components/consolidation-tokens-summary";
 import { SiteHeader } from "~/components/site";
@@ -14,10 +14,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/ui/dialog";
+import { Pagination } from "~/components/ui/pagination";
 import { useConsolidationRecords } from "~/hooks/use-consolidation-records";
 import type { ConsolidationState } from "~/lib/types";
 import { generateMeta } from "~/utils/meta";
 import ManualClaimDialog from "./manual-claim-dialog";
+
+const PAGE_SIZE = 10;
 
 export function meta() {
   return generateMeta({
@@ -32,6 +35,16 @@ export default function History() {
   const { consolidations, removeConsolidation, clearAll } = useConsolidationRecords();
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
+  const [pageIndex, setPageIndex] = useState(0);
+
+  const pageCount = Math.max(1, Math.ceil(consolidations.length / PAGE_SIZE));
+  const pagedConsolidations = consolidations.slice(pageIndex * PAGE_SIZE, (pageIndex + 1) * PAGE_SIZE);
+
+  useEffect(() => {
+    if (pageIndex > 0 && pageIndex >= pageCount) {
+      setPageIndex(pageCount - 1);
+    }
+  }, [pageCount, pageIndex]);
 
   const handleDelete = (id: string) => {
     removeConsolidation(id);
@@ -98,18 +111,32 @@ export default function History() {
               </Link>
             </div>
           ) : (
-            <div className="space-y-3">
-              {consolidations.map((consolidation) => (
-                <ConsolidationCard
-                  key={consolidation.id}
-                  consolidation={consolidation}
-                  expanded={expandedIds.has(consolidation.id)}
-                  onToggle={() => toggleExpanded(consolidation.id)}
-                  onDelete={() => handleDelete(consolidation.id)}
-                  getStatusColor={getStatusColor}
-                />
-              ))}
-            </div>
+            <>
+              <div className="space-y-3">
+                {pagedConsolidations.map((consolidation) => (
+                  <ConsolidationCard
+                    key={consolidation.id}
+                    consolidation={consolidation}
+                    expanded={expandedIds.has(consolidation.id)}
+                    onToggle={() => toggleExpanded(consolidation.id)}
+                    onDelete={() => handleDelete(consolidation.id)}
+                    getStatusColor={getStatusColor}
+                  />
+                ))}
+              </div>
+
+              {pageCount > 1 && (
+                <div className="mt-4">
+                  <Pagination
+                    pageIndex={pageIndex}
+                    pageSize={PAGE_SIZE}
+                    pageCount={pageCount}
+                    recordCount={consolidations.length}
+                    onPageChange={setPageIndex}
+                  />
+                </div>
+              )}
+            </>
           )}
         </div>
       </main>
@@ -161,8 +188,8 @@ function ConsolidationCard({ consolidation, expanded, onToggle, onDelete, getSta
   return (
     <>
       <Card
-        className={`bg-card/70 border-secondary/30 hover:border-secondary/60 transition-colors gap-0 py-0 ${expanded ? "border-secondary/60" : ""}`}
-        onClick={onToggle}
+        className={`bg-card/70 border-secondary/30 hover:border-secondary/60 transition-colors gap-0 py-0 ${expanded ? "border-secondary/60" : "cursor-pointer"}`}
+        onClick={expanded ? undefined : onToggle}
       >
         <CardHeader className="py-4">
           <div className="flex items-center gap-3 mb-2">
@@ -187,13 +214,24 @@ function ConsolidationCard({ consolidation, expanded, onToggle, onDelete, getSta
 
           <CardAction>
             <div className="flex items-center gap-1">
-              <Button variant="link" size="icon" onClick={onToggle} aria-label={expanded ? "Collapse" : "Expand"}>
+              <Button
+                variant="link"
+                size="icon"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggle();
+                }}
+                aria-label={expanded ? "Collapse" : "Expand"}
+              >
                 {expanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
               </Button>
               <Button
                 variant="link"
                 size="icon"
-                onClick={() => setShowDeleteConfirm(true)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowDeleteConfirm(true);
+                }}
                 className="text-destructive hover:text-destructive hover:bg-destructive/10"
                 aria-label="Delete consolidation"
               >

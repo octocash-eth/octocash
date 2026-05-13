@@ -199,6 +199,35 @@ const TokenDisplayAmount = React.forwardRef<HTMLSpanElement, TokenDisplayAmountP
 
 TokenDisplayAmount.displayName = "TokenDisplayAmount";
 
+// Fiat Value Component
+interface TokenDisplayFiatProps extends React.ComponentProps<"span"> {
+  amount: bigint;
+  unitaryPrice?: number;
+}
+
+const TokenDisplayFiat = React.forwardRef<HTMLSpanElement, TokenDisplayFiatProps>(
+  ({ amount, unitaryPrice, className, ...props }, ref) => {
+    const { decimals } = useTokenDisplay();
+    const formatFiat = useFormatFiat();
+
+    const fiat = React.useMemo(() => {
+      if (unitaryPrice === undefined) return null;
+      const value = Number(formatUnits(amount, decimals));
+      return formatFiat(value * unitaryPrice);
+    }, [amount, decimals, unitaryPrice, formatFiat]);
+
+    if (fiat === null) return null;
+
+    return (
+      <span ref={ref} className={cn("truncate text-nowrap", className)} {...props}>
+        {fiat}
+      </span>
+    );
+  },
+);
+
+TokenDisplayFiat.displayName = "TokenDisplayFiat";
+
 // Copy Button Component
 interface TokenDisplayCopyProps extends Omit<React.ComponentProps<typeof Button>, "onCopy"> {}
 
@@ -250,6 +279,7 @@ export {
   TokenDisplaySymbol,
   TokenDisplayName,
   TokenDisplayAmount,
+  TokenDisplayFiat,
   TokenDisplayCopy,
   TokenDisplayLink,
 };
