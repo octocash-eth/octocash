@@ -1,8 +1,16 @@
-import { type Address, zeroAddress } from "viem";
+import { type Address, parseUnits, zeroAddress } from "viem";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WALLET } from "../../../test/test-helpers";
+import { USDC } from "../../data/token-contracts";
 import { isSameToken } from "../tokens";
-import { EXTRA_TOKENS, fetchExtraTokenBalances, fetchOdosPrices, fetchOdosTokensForChain, odosPriceKey } from "./odos";
+import {
+  checkOdosRoutableToUsdc,
+  EXTRA_TOKENS,
+  fetchExtraTokenBalances,
+  fetchOdosPrices,
+  fetchOdosTokensForChain,
+  odosPriceKey,
+} from "./odos";
 
 // biome-ignore lint/suspicious/noExplicitAny: Test mocks require any types for flexibility
 type MockContract = any;
@@ -941,6 +949,226 @@ describe("odos", () => {
       controller.abort();
 
       await expect(fetchOdosTokensForChain(1, controller.signal)).rejects.toThrow();
+    });
+  });
+
+  describe("checkOdosRoutableToUsdc", () => {
+    // A random ERC20 on mainnet — not USDC, so the probe is meaningful.
+    const HIDDEN_TOKEN = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Address;
+
+    test("returns true when Odos returns a non-zero outAmount", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ pathId: "abc", outAmounts: ["1000000"] }),
+      });
+
+      const result = await checkOdosRoutableToUsdc({
+        chainId: 1,
+        token: HIDDEN_TOKEN,
+        decimals: 18,
+        unitaryPrice: 1,
+        walletAddress: WALLET,
+      });
+
+      expect(result).toBe(true);
+      // Routes to /sor/quote/v3 with the USDC mainnet address as the output.
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toBe("https://api.odos.xyz/sor/quote/v3");
+      const body = JSON.parse((init as RequestInit).body as string) as {
+        chainId: number;
+        inputTokens: { tokenAddress: string; amount: string }[];
+        outputTokens: { tokenAddress: string; proportion: number }[];
+        userAddr: string;
+        simple?: boolean;
+      };
+      expect(body.chainId).toBe(1);
+      expect(body.inputTokens[0].tokenAddress).toBe(HIDDEN_TOKEN);
+      expect(body.outputTokens[0].tokenAddress.toLowerCase()).toBe(USDC[1].toLowerCase());
+      expect(body.userAddr).toBe(WALLET);
+      expect(body.simple).toBe(true);
+    });
+
+    test("returns false on non-2xx response", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+
+      const result = await checkOdosRoutableToUsdc({
+        chainId: 1,
+        token: HIDDEN_TOKEN,
+        decimals: 18,
+        unitaryPrice: 1,
+        walletAddress: WALLET,
+      });
+
+      expect(result).toBe(false);
+    });
+
+    test("returns false on thrown network error", async () => {
+      mockFetch.mockRejectedValueOnce(new Error("Network error"));
+
+      const result = await checkOdosRoutableToUsdc({
+        chainId: 1,
+        token: HIDDEN_TOKEN,
+        decimals: 18,
+        unitaryPrice: 1,
+        walletAddress: WALLET,
+      });
+
+      expect(result).toBe(false);
+    });
+
+    test("returns false when outAmounts is missing", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ pathId: "abc" }),
+      });
+
+      const result = await checkOdosRoutableToUsdc({
+        chainId: 1,
+        token: HIDDEN_TOKEN,
+        decimals: 18,
+        unitaryPrice: 1,
+        walletAddress: WALLET,
+      });
+
+      expect(result).toBe(false);
+    });
+
+    test("returns false when outAmounts[0] is zero", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ pathId: "abc", outAmounts: ["0"] }),
+      });
+
+      const result = await checkOdosRoutableToUsdc({
+        chainId: 1,
+        token: HIDDEN_TOKEN,
+        decimals: 18,
+        unitaryPrice: 1,
+        walletAddress: WALLET,
+      });
+
+      expect(result).toBe(false);
+    });
+
+    test("returns false (and doesn't fetch) when token is already USDC on that chain", async () => {
+      const result = await checkOdosRoutableToUsdc({
+        chainId: 1,
+        token: USDC[1],
+        decimals: 6,
+        unitaryPrice: 1,
+        walletAddress: WALLET,
+      });
+
+      expect(result).toBe(false);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    test("returns false (and doesn't fetch) when chain has no USDC mapping", async () => {
+      const result = await checkOdosRoutableToUsdc({
+        chainId: 999_999,
+        token: HIDDEN_TOKEN,
+        decimals: 18,
+        unitaryPrice: 1,
+        walletAddress: WALLET,
+      });
+
+      expect(result).toBe(false);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    test("returns false (and doesn't fetch) when unitaryPrice is non-positive", async () => {
+      const zeroPrice = await checkOdosRoutableToUsdc({
+        chainId: 1,
+        token: HIDDEN_TOKEN,
+        decimals: 18,
+        unitaryPrice: 0,
+        walletAddress: WALLET,
+      });
+      const negativePrice = await checkOdosRoutableToUsdc({
+        chainId: 1,
+        token: HIDDEN_TOKEN,
+        decimals: 18,
+        unitaryPrice: -1,
+        walletAddress: WALLET,
+      });
+
+      expect(zeroPrice).toBe(false);
+      expect(negativePrice).toBe(false);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    test("normalises input to a ~$1-equivalent amount derived from unitaryPrice", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ pathId: "abc", outAmounts: ["1"] }),
+      });
+
+      await checkOdosRoutableToUsdc({
+        chainId: 1,
+        token: HIDDEN_TOKEN,
+        decimals: 18,
+        unitaryPrice: 2,
+        walletAddress: WALLET,
+      });
+
+      const init = mockFetch.mock.calls[0][1] as RequestInit;
+      const body = JSON.parse(init.body as string) as {
+        inputTokens: { amount: string }[];
+      };
+      // $1 of a $2 token → 0.5 tokens with 18 decimals.
+      expect(body.inputTokens[0].amount).toBe(parseUnits("0.5", 18).toString());
+    });
+
+    test("clamps the amount to 1n when the $1-equivalent rounds to zero", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ pathId: "abc", outAmounts: ["1"] }),
+      });
+
+      // A 0-decimal token at $0.01 would round to 100 tokens of $1, but a
+      // 0-decimal token priced at $1,000,000 would truncate to 0 — that's
+      // the clamp case we want to verify.
+      await checkOdosRoutableToUsdc({
+        chainId: 1,
+        token: HIDDEN_TOKEN,
+        decimals: 0,
+        unitaryPrice: 1_000_000,
+        walletAddress: WALLET,
+      });
+
+      const init = mockFetch.mock.calls[0][1] as RequestInit;
+      const body = JSON.parse(init.body as string) as {
+        inputTokens: { amount: string }[];
+      };
+      expect(body.inputTokens[0].amount).toBe("1");
+    });
+
+    test("forwards AbortSignal to fetch and returns false when aborted", async () => {
+      mockFetch.mockImplementation((_url: string, init: RequestInit) => {
+        if (init.signal?.aborted) {
+          return Promise.reject(new DOMException("aborted", "AbortError"));
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ pathId: "abc", outAmounts: ["1"] }),
+        });
+      });
+
+      const controller = new AbortController();
+      controller.abort();
+
+      const result = await checkOdosRoutableToUsdc(
+        {
+          chainId: 1,
+          token: HIDDEN_TOKEN,
+          decimals: 18,
+          unitaryPrice: 1,
+          walletAddress: WALLET,
+        },
+        controller.signal,
+      );
+
+      expect(result).toBe(false);
     });
   });
 });

@@ -5,7 +5,12 @@ import { formatUnits } from "viem";
 import { ConsolidateTokensModal } from "~/components/consolidate-tokens-modal";
 import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
 import { chains } from "~/data/supported-chains";
-import { fetchExtraTokenBalances, fetchOdosTokensForChain, fetchZerionTokenBalances } from "~/lib/api";
+import {
+  checkOdosRoutableToUsdc,
+  fetchExtraTokenBalances,
+  fetchOdosTokensForChain,
+  fetchZerionTokenBalances,
+} from "~/lib/api";
 import { isSameToken } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
 import { columns } from "./columns";
@@ -85,52 +90,132 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     return m;
   }, [odosTokenListQueries]);
 
+  // Tokens that the per-chain Odos `/token` catalog definitively does not
+  // know about, deduped by `${chainId}:${token}`. The catalog is conservative
+  // — many legitimately routable tokens are missing — so we probe each of
+  // these against Odos's `/sor/quote/v3` endpoint (the same one planning
+  // uses) and re-admit anything that comes back with a real USDC route.
+  //
+  // We only consider tokens with a Zerion-stamped `unitaryPrice` and a USD
+  // value above the existing dust threshold ($0.01), to keep this off the
+  // hot path for the long tail of priceless / dusty hidden tokens.
+  const hiddenCandidates = React.useMemo<TokenAmount[]>(() => {
+    const all: TokenAmount[] = [...(zerionQuery.data ?? []), ...(extraQuery.data ?? [])];
+    const seen = new Map<string, TokenAmount>();
+    for (const t of all) {
+      const q = odosByChain.get(t.chainId);
+      if (!q?.isSuccess || q.data === undefined) continue;
+      if (q.data.has(t.token.toLowerCase())) continue;
+      if (t.unitaryPrice === undefined) continue;
+      if (sortPriceUsd(t) <= 0.01) continue;
+      const key = `${t.chainId}:${t.token.toLowerCase()}`;
+      if (!seen.has(key)) seen.set(key, t);
+    }
+    return Array.from(seen.values());
+  }, [zerionQuery.data, extraQuery.data, odosByChain]);
+
+  // Probe each hidden candidate. We gate on `zerionQuery.isSuccess` so the
+  // initial table render — driven by catalog-known tokens — paints before
+  // any of these network requests fire. As probes resolve, `routableSet`
+  // grows and `isOdosAllowed` flips for the affected tokens, which causes
+  // the `tokens` memo to fold them back into the visible table reactively.
+  const routabilityQueries = useQueries({
+    queries: hiddenCandidates.map((t) => ({
+      queryKey: ["odos-routable-usdc", t.chainId, t.token.toLowerCase()],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        checkOdosRoutableToUsdc(
+          {
+            chainId: t.chainId,
+            token: t.token,
+            decimals: t.decimals,
+            // Filtered above; the `!` is just to satisfy TS.
+            // biome-ignore lint/style/noNonNullAssertion: filtered in hiddenCandidates
+            unitaryPrice: t.unitaryPrice!,
+            walletAddress: t.walletAddress,
+          },
+          signal,
+        ),
+      enabled: zerionQuery.isSuccess,
+      staleTime: 5 * 60_000,
+    })),
+  });
+
+  const routableSet = React.useMemo<ReadonlySet<string>>(() => {
+    const s = new Set<string>();
+    for (let i = 0; i < hiddenCandidates.length; i++) {
+      if (routabilityQueries[i]?.data === true) {
+        const t = hiddenCandidates[i];
+        s.add(`${t.chainId}:${t.token.toLowerCase()}`);
+      }
+    }
+    return s;
+  }, [hiddenCandidates, routabilityQueries]);
+
   // Per-chain gate + fail-open: a token on chain N is hidden until that
   // chain's Odos catalog resolves (success or error). On success we keep
-  // only addresses present in the catalog; on error we keep everything so a
-  // transient Odos blip doesn't nuke the user's balance view.
+  // only addresses present in the catalog *plus* any token a deferred Odos
+  // quote probe confirmed is still routable to USDC; on error we keep
+  // everything so a transient Odos blip doesn't nuke the user's balance
+  // view.
   const isOdosAllowed = React.useCallback(
     (token: TokenAmount): boolean => {
+      if (routableSet.has(`${token.chainId}:${token.token.toLowerCase()}`)) return true;
       const q = odosByChain.get(token.chainId);
       if (!q) return false; // chain not in our supported set
       if (q.isPending) return false; // per-chain gate: still loading
       if (q.isError) return true; // fail-open on chain-level failure
       return q.data?.has(token.token.toLowerCase()) ?? false;
     },
-    [odosByChain],
+    [odosByChain, routableSet],
   );
 
-  // Dev-aid: when a chain's Odos catalog has loaded, surface any wallet
-  // tokens we definitively dropped from that chain so it's obvious *what*
-  // and *how much* the filter is hiding. Only logs the "chain succeeded but
-  // token not in catalog" case — tokens on still-pending chains aren't
-  // logged because they might still be allowed once the catalog arrives.
+  // Dev-aid: surface tokens that we've definitively dropped *and* the
+  // routability probe came back negative for. Tokens that are still being
+  // probed, or that were re-admitted, are intentionally excluded so the
+  // signal is only the truly-stuck long tail.
   const lastHiddenLogRef = React.useRef<string>("");
   React.useEffect(() => {
-    const allInputTokens: TokenAmount[] = [...(zerionQuery.data ?? []), ...(extraQuery.data ?? [])];
+    const all: TokenAmount[] = [...(zerionQuery.data ?? []), ...(extraQuery.data ?? [])];
 
-    const hidden = allInputTokens.filter((token) => {
+    // Index probe results by `${chainId}:${address}` for cheap lookup.
+    const probeStatus = new Map<string, "pending" | "routable" | "not-routable">();
+    for (let i = 0; i < hiddenCandidates.length; i++) {
+      const c = hiddenCandidates[i];
+      const key = `${c.chainId}:${c.token.toLowerCase()}`;
+      const q = routabilityQueries[i];
+      if (!q || q.isPending) probeStatus.set(key, "pending");
+      else if (q.data === true) probeStatus.set(key, "routable");
+      else probeStatus.set(key, "not-routable");
+    }
+
+    const stuck = all.filter((token) => {
       const q = odosByChain.get(token.chainId);
-      return q?.isSuccess && q.data !== undefined && !q.data.has(token.token.toLowerCase());
+      if (!q?.isSuccess || q.data === undefined) return false;
+      if (q.data.has(token.token.toLowerCase())) return false;
+      const status = probeStatus.get(`${token.chainId}:${token.token.toLowerCase()}`);
+      // Tokens that weren't eligible to probe (dust / no price) fall through
+      // here too — log them as "not-routable" since the table treats them
+      // the same way.
+      return status === undefined || status === "not-routable";
     });
 
-    if (hidden.length === 0) {
+    if (stuck.length === 0) {
       lastHiddenLogRef.current = "";
       return;
     }
 
     // Stable signature so we don't re-log on every render.
-    const signature = hidden
+    const signature = stuck
       .map((t) => `${t.chainId}:${t.token.toLowerCase()}:${t.amount.toString()}`)
       .sort()
       .join("|");
     if (signature === lastHiddenLogRef.current) return;
     lastHiddenLogRef.current = signature;
 
-    const totalUsd = hidden.reduce((sum, t) => sum + sortPriceUsd(t), 0);
+    const totalUsd = stuck.reduce((sum, t) => sum + sortPriceUsd(t), 0);
     console.warn(
-      `[WalletTable] Hiding ${hidden.length} token(s) not in Odos catalog (~$${totalUsd.toFixed(2)} total):`,
-      hidden.map((t) => ({
+      `[WalletTable] Hiding ${stuck.length} non-routable token(s) (~$${totalUsd.toFixed(2)} total):`,
+      stuck.map((t) => ({
         chainId: t.chainId,
         address: t.token,
         symbol: t.symbol,
@@ -139,7 +224,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
         amountUsd: sortPriceUsd(t),
       })),
     );
-  }, [zerionQuery.data, extraQuery.data, odosByChain]);
+  }, [zerionQuery.data, extraQuery.data, odosByChain, hiddenCandidates, routabilityQueries]);
 
   // Combine tokens: Zerion first, then extra tokens (deduplicated). Both
   // streams are passed through `isOdosAllowed` so non-routable tokens never

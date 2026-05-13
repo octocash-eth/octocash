@@ -1,5 +1,11 @@
 // Re-export Zerion API functions and types
 
 // Re-export Odos API functions and types
-export { EXTRA_TOKENS, fetchExtraTokenBalances, fetchOdosTokensForChain } from "./odos";
+export {
+  checkOdosRoutableToUsdc,
+  EXTRA_TOKENS,
+  fetchExtraTokenBalances,
+  fetchOdosTokensForChain,
+  type RoutabilityProbe,
+} from "./odos";
 export { fetchZerionTokenBalances } from "./zerion";

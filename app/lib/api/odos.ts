@@ -1,6 +1,7 @@
-import { type Address, erc20Abi, formatUnits, isAddressEqual, zeroAddress } from "viem";
+import { type Address, erc20Abi, formatUnits, isAddressEqual, parseUnits, zeroAddress } from "viem";
 import { STAKED_TOKENS } from "~/data/staked-tokens";
 import { wrappedNative } from "~/data/supported-chains";
+import { USDC } from "~/data/token-contracts";
 import { getPublicClient } from "../public-client";
 import { groupTokensByChain } from "../tokens";
 import type { TokenAmount } from "../types";
@@ -64,6 +65,92 @@ export async function fetchOdosTokensForChain(chainId: number, signal?: AbortSig
 
   const data: OdosTokenInfo[] = await response.json();
   return new Set(data.map((t) => t.address.toLowerCase()));
+}
+
+/**
+ * Input for {@link checkOdosRoutableToUsdc}. `unitaryPrice` is required so we
+ * can normalise the probe to a $1-equivalent amount regardless of the token's
+ * decimals/price — callers that don't have a price should skip the probe.
+ */
+export interface RoutabilityProbe {
+  chainId: number;
+  token: Address;
+  decimals: number;
+  unitaryPrice: number;
+  walletAddress: Address;
+}
+
+const ODOS_QUOTE_V3_URL = "https://api.odos.xyz/sor/quote/v3";
+
+/**
+ * Probe whether Odos can quote a swap from `token` → USDC on the same chain.
+ *
+ * Used by the wallet table to re-admit tokens that aren't in Odos's `/token`
+ * catalog but still have a live route through `/sor/quote/v3` (the same
+ * endpoint planning uses). We send a normalised ~$1-equivalent input amount
+ * derived from `unitaryPrice` so the probe is stable across token decimals
+ * and price magnitudes.
+ *
+ * Returns `false` (without making a request) when the chain has no mapped
+ * USDC address or when the input token already *is* USDC, since neither is a
+ * meaningful "swap to USDC" question. Any non-2xx response, network error,
+ * or zero/missing `outAmounts` also yields `false` — failing closed is OK
+ * here because the only consequence is the token staying hidden until the
+ * user refreshes.
+ */
+export async function checkOdosRoutableToUsdc(probe: RoutabilityProbe, signal?: AbortSignal): Promise<boolean> {
+  const usdc = USDC[probe.chainId];
+  if (usdc === undefined) return false;
+  if (isAddressEqual(probe.token, usdc)) return false;
+  if (!Number.isFinite(probe.unitaryPrice) || probe.unitaryPrice <= 0) return false;
+
+  // Normalise to ~$1 of input. `parseUnits` only accepts a fixed-point string
+  // with at most `decimals` fractional digits, so we cap to `decimals` and
+  // clamp the resulting amount to 1n in the degenerate case where the
+  // truncated string evaluates to zero (extreme-priced or low-decimal tokens).
+  let amount: bigint;
+  try {
+    const tokensPerDollar = 1 / probe.unitaryPrice;
+    const fixedString = tokensPerDollar.toFixed(probe.decimals);
+    amount = parseUnits(fixedString, probe.decimals);
+    if (amount === 0n) amount = 1n;
+  } catch {
+    return false;
+  }
+
+  try {
+    const response = await fetch(ODOS_QUOTE_V3_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", accept: "application/json" },
+      signal,
+      body: JSON.stringify({
+        chainId: probe.chainId,
+        inputTokens: [{ tokenAddress: probe.token, amount: amount.toString() }],
+        outputTokens: [{ tokenAddress: usdc, proportion: 1 }],
+        userAddr: probe.walletAddress,
+        slippageLimitPercent: 0.3,
+        referralCode: 0,
+        disableRFQs: true,
+        compact: false,
+        simple: true,
+      }),
+    });
+
+    if (!response.ok) return false;
+
+    const data = (await response.json()) as { outAmounts?: string[] };
+    const outAmountStr = data.outAmounts?.[0];
+    if (outAmountStr === undefined) return false;
+    try {
+      return BigInt(outAmountStr) > 0n;
+    } catch {
+      return false;
+    }
+  } catch (error) {
+    if (signal?.aborted) return false;
+    console.warn(`[OdosRoutable] Probe failed for ${probe.chainId}:${probe.token}:`, error);
+    return false;
+  }
 }
 
 export type OdosPriceKey = `${number}:${string}`;
