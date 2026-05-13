@@ -100,6 +100,47 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     [odosByChain],
   );
 
+  // Dev-aid: when a chain's Odos catalog has loaded, surface any wallet
+  // tokens we definitively dropped from that chain so it's obvious *what*
+  // and *how much* the filter is hiding. Only logs the "chain succeeded but
+  // token not in catalog" case — tokens on still-pending chains aren't
+  // logged because they might still be allowed once the catalog arrives.
+  const lastHiddenLogRef = React.useRef<string>("");
+  React.useEffect(() => {
+    const allInputTokens: TokenAmount[] = [...(zerionQuery.data ?? []), ...(extraQuery.data ?? [])];
+
+    const hidden = allInputTokens.filter((token) => {
+      const q = odosByChain.get(token.chainId);
+      return q?.isSuccess && q.data !== undefined && !q.data.has(token.token.toLowerCase());
+    });
+
+    if (hidden.length === 0) {
+      lastHiddenLogRef.current = "";
+      return;
+    }
+
+    // Stable signature so we don't re-log on every render.
+    const signature = hidden
+      .map((t) => `${t.chainId}:${t.token.toLowerCase()}:${t.amount.toString()}`)
+      .sort()
+      .join("|");
+    if (signature === lastHiddenLogRef.current) return;
+    lastHiddenLogRef.current = signature;
+
+    const totalUsd = hidden.reduce((sum, t) => sum + sortPriceUsd(t), 0);
+    console.warn(
+      `[WalletTable] Hiding ${hidden.length} token(s) not in Odos catalog (~$${totalUsd.toFixed(2)} total):`,
+      hidden.map((t) => ({
+        chainId: t.chainId,
+        address: t.token,
+        symbol: t.symbol,
+        name: t.name,
+        wallet: t.walletAddress,
+        amountUsd: sortPriceUsd(t),
+      })),
+    );
+  }, [zerionQuery.data, extraQuery.data, odosByChain]);
+
   // Combine tokens: Zerion first, then extra tokens (deduplicated). Both
   // streams are passed through `isOdosAllowed` so non-routable tokens never
   // reach the table.
