@@ -7,15 +7,6 @@ function isEffectivelyZero(balance: number): boolean {
   return balance < 0.01; // Consider anything less than $0.01 as effectively zero
 }
 
-/**
- * USD value derived from the Zerion-stamped `unitaryPrice`. Used only to
- * drop dust positions before returning to the caller.
- */
-function zerionTokenAmountInUsd(token: TokenAmount): number {
-  if (token.unitaryPrice === undefined) return 0;
-  return Number(formatUnits(token.amount, token.decimals)) * token.unitaryPrice;
-}
-
 // Zerion API Types
 interface ZerionFungibleInfo {
   name: string;
@@ -179,9 +170,6 @@ export async function fetchZerionTokenBalances(addresses: string[]): Promise<Tok
               continue;
             }
 
-            // Calculate exchange rate (price per token)
-            const unitaryPrice = attributes.price || 0;
-
             // Get quantity - this is specific to THIS chain for THIS position
             const quantity = attributes.quantity.numeric;
 
@@ -197,6 +185,16 @@ export async function fetchZerionTokenBalances(addresses: string[]): Promise<Tok
             const decimals = implementation.decimals;
             const amount = parseUnits(quantity, decimals);
 
+            // Drop dust against Zerion's own price — this is a conservative
+            // pre-filter to keep the response small. Live USD values are
+            // sourced from the Odos-backed price context downstream; we
+            // don't propagate Zerion's price onto the returned token.
+            const zerionPrice = attributes.price ?? 0;
+            const zerionUsd = Number(formatUnits(amount, decimals)) * zerionPrice;
+            if (isEffectivelyZero(zerionUsd)) {
+              continue;
+            }
+
             const tokenAmount: TokenAmount = {
               token: tokenAddress,
               amount,
@@ -205,13 +203,7 @@ export async function fetchZerionTokenBalances(addresses: string[]): Promise<Tok
               symbol: attributes.fungible_info.symbol,
               decimals,
               name: attributes.fungible_info.name,
-              unitaryPrice,
             };
-
-            // Skip tokens with effectively zero USD value
-            if (isEffectivelyZero(zerionTokenAmountInUsd(tokenAmount))) {
-              continue;
-            }
 
             tokens.push(tokenAmount);
           } catch (error) {

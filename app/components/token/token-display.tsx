@@ -147,7 +147,7 @@ TokenDisplayName.displayName = "TokenDisplayName";
 // Amount Component
 interface TokenDisplayAmountProps extends React.ComponentProps<"span"> {
   amount: bigint;
-  unitaryPrice?: number;
+  price?: number;
 }
 
 /**
@@ -178,16 +178,16 @@ function formatAdaptiveAmount(value: number): string {
 }
 
 const TokenDisplayAmount = React.forwardRef<HTMLSpanElement, TokenDisplayAmountProps>(
-  ({ amount, unitaryPrice, className, ...props }, ref) => {
+  ({ amount, price, className, ...props }, ref) => {
     const { decimals } = useTokenDisplay();
     const formatFiat = useFormatFiat();
 
     const { formattedAmount, titleText } = React.useMemo(() => {
       const value = Number(formatUnits(amount, decimals));
       const tokenAmount = formatAdaptiveAmount(value);
-      const title = unitaryPrice !== undefined ? `${tokenAmount} (${formatFiat(value * unitaryPrice)})` : tokenAmount;
+      const title = price !== undefined ? `${tokenAmount} (${formatFiat(value * price)})` : tokenAmount;
       return { formattedAmount: tokenAmount, titleText: title };
-    }, [amount, decimals, unitaryPrice, formatFiat]);
+    }, [amount, decimals, price, formatFiat]);
 
     return (
       <span ref={ref} className={cn("truncate text-nowrap", className)} title={titleText} {...props}>
@@ -202,19 +202,19 @@ TokenDisplayAmount.displayName = "TokenDisplayAmount";
 // Fiat Value Component
 interface TokenDisplayFiatProps extends React.ComponentProps<"span"> {
   amount: bigint;
-  unitaryPrice?: number;
+  price?: number;
 }
 
 const TokenDisplayFiat = React.forwardRef<HTMLSpanElement, TokenDisplayFiatProps>(
-  ({ amount, unitaryPrice, className, ...props }, ref) => {
+  ({ amount, price, className, ...props }, ref) => {
     const { decimals } = useTokenDisplay();
     const formatFiat = useFormatFiat();
 
     const fiat = React.useMemo(() => {
-      if (unitaryPrice === undefined) return null;
+      if (price === undefined) return null;
       const value = Number(formatUnits(amount, decimals));
-      return formatFiat(value * unitaryPrice);
-    }, [amount, decimals, unitaryPrice, formatFiat]);
+      return formatFiat(value * price);
+    }, [amount, decimals, price, formatFiat]);
 
     if (fiat === null) return null;
 

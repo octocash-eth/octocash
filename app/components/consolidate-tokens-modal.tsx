@@ -72,10 +72,7 @@ export function ConsolidateTokensModal({
       });
   }, [rowSelection, tokens, tokenAmounts]);
 
-  // Derive sourceTokens from consolidatedTokens and other state. Note:
-  // `unitaryPrice` is intentionally NOT copied here — downstream USD display
-  // reads from the TokenPriceProvider context instead, so we don't propagate
-  // Zerion's price into the plan.
+  // Derive sourceTokens from consolidatedTokens and other state.
   const sourceTokens = React.useMemo<SourceToken[]>(() => {
     if (currentStage !== 3) return [];
 
@@ -116,9 +113,8 @@ export function ConsolidateTokensModal({
   useRegisterPrices(consolidatedTokens);
   const { priceFor } = usePriceMap();
 
-  // Calculate actual total value based on selected amounts. Uses live Odos
-  // prices from the context — never the stale Zerion unitaryPrice that may
-  // still be present on `token`.
+  // Calculate actual total value based on selected amounts using live Odos
+  // prices from the context.
   const actualTotalToConsolidate = React.useMemo(() => {
     return consolidatedTokens.reduce((total, token) => {
       const amountToConsolidate = Number.parseFloat(token.amountToConsolidate);

@@ -83,7 +83,6 @@ describe("zerion", () => {
         chainId: 1,
         walletAddress: WALLET,
         decimals: 6,
-        unitaryPrice: 1.0,
       });
     });
 

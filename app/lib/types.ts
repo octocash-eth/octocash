@@ -36,7 +36,6 @@ export interface TokenAmount {
   symbol: string; // Token symbol (ETH, USDC, etc.)
   decimals: number; // Token decimals
   name?: string; // Token name (e.g., "USD Coin")
-  unitaryPrice?: number; // Price per token in USD
   provenance?: string; // ID of step that produced this token (undefined for source tokens)
 }
 

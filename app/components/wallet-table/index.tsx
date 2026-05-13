@@ -19,16 +19,6 @@ import { DataTable } from "./data-table";
 /** Chain IDs the wallet table cares about. */
 const SUPPORTED_CHAIN_IDS = Object.keys(chains).map(Number);
 
-/**
- * USD value used solely for the table's first-paint sort, derived from the
- * `unitaryPrice` Zerion/Odos stamped on the `TokenAmount`. Live USD display
- * goes through the {@link usePriceMap} context instead.
- */
-function sortPriceUsd(token: TokenAmount): number {
-  if (token.unitaryPrice === undefined) return 0;
-  return Number(formatUnits(token.amount, token.decimals)) * token.unitaryPrice;
-}
-
 interface WalletTableProps {
   connectedAddresses?: readonly string[];
 }
@@ -90,29 +80,51 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     return m;
   }, [odosTokenListQueries]);
 
+  // Register every fetched token (visible *and* not-yet-admitted) with the
+  // shared price context. Hidden candidates need a live price to drive the
+  // routability probe, so we can't wait until after `isOdosAllowed` filters
+  // the list. Odos's pricing endpoint accepts many addresses per request,
+  // so the cost of priceing the long tail is small.
+  const allFetchedTokens = React.useMemo<TokenAmount[]>(
+    () => [...(zerionQuery.data ?? []), ...(extraQuery.data ?? [])],
+    [zerionQuery.data, extraQuery.data],
+  );
+  useRegisterPrices(allFetchedTokens);
+  const { priceFor, isPending: isPriceLoading } = usePriceMap();
+
+  // USD value via the live Odos price. Returns 0 when no price is known yet
+  // (token not yet priced or the chain's pricing call hasn't returned).
+  const liveUsd = React.useCallback(
+    (t: TokenAmount): number => {
+      const price = priceFor(t);
+      if (price === undefined) return 0;
+      return Number(formatUnits(t.amount, t.decimals)) * price;
+    },
+    [priceFor],
+  );
+
   // Tokens that the per-chain Odos `/token` catalog definitively does not
   // know about, deduped by `${chainId}:${token}`. The catalog is conservative
   // — many legitimately routable tokens are missing — so we probe each of
   // these against Odos's `/sor/quote/v3` endpoint (the same one planning
   // uses) and re-admit anything that comes back with a real USDC route.
   //
-  // We only consider tokens with a Zerion-stamped `unitaryPrice` and a USD
-  // value above the existing dust threshold ($0.01), to keep this off the
-  // hot path for the long tail of priceless / dusty hidden tokens.
+  // We only consider tokens with a live Odos price and a USD value above
+  // the existing dust threshold ($0.01), to keep this off the hot path for
+  // the long tail of priceless / dusty hidden tokens.
   const hiddenCandidates = React.useMemo<TokenAmount[]>(() => {
-    const all: TokenAmount[] = [...(zerionQuery.data ?? []), ...(extraQuery.data ?? [])];
     const seen = new Map<string, TokenAmount>();
-    for (const t of all) {
+    for (const t of allFetchedTokens) {
       const q = odosByChain.get(t.chainId);
       if (!q?.isSuccess || q.data === undefined) continue;
       if (q.data.has(t.token.toLowerCase())) continue;
-      if (t.unitaryPrice === undefined) continue;
-      if (sortPriceUsd(t) <= 0.01) continue;
+      if (priceFor(t) === undefined) continue;
+      if (liveUsd(t) <= 0.01) continue;
       const key = `${t.chainId}:${t.token.toLowerCase()}`;
       if (!seen.has(key)) seen.set(key, t);
     }
     return Array.from(seen.values());
-  }, [zerionQuery.data, extraQuery.data, odosByChain]);
+  }, [allFetchedTokens, odosByChain, priceFor, liveUsd]);
 
   // Probe each hidden candidate. We gate on `zerionQuery.isSuccess` so the
   // initial table render — driven by catalog-known tokens — paints before
@@ -120,24 +132,27 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
   // grows and `isOdosAllowed` flips for the affected tokens, which causes
   // the `tokens` memo to fold them back into the visible table reactively.
   const routabilityQueries = useQueries({
-    queries: hiddenCandidates.map((t) => ({
-      queryKey: ["odos-routable-usdc", t.chainId, t.token.toLowerCase()],
-      queryFn: ({ signal }: { signal: AbortSignal }) =>
-        checkOdosRoutableToUsdc(
-          {
-            chainId: t.chainId,
-            token: t.token,
-            decimals: t.decimals,
-            // Filtered above; the `!` is just to satisfy TS.
-            // biome-ignore lint/style/noNonNullAssertion: filtered in hiddenCandidates
-            unitaryPrice: t.unitaryPrice!,
-            walletAddress: t.walletAddress,
-          },
-          signal,
-        ),
-      enabled: zerionQuery.isSuccess,
-      staleTime: 5 * 60_000,
-    })),
+    queries: hiddenCandidates.map((t) => {
+      // Filtered above; `hiddenCandidates` only contains tokens with a
+      // resolved live price, so this is non-undefined.
+      const price = priceFor(t) as number;
+      return {
+        queryKey: ["odos-routable-usdc", t.chainId, t.token.toLowerCase()],
+        queryFn: ({ signal }: { signal: AbortSignal }) =>
+          checkOdosRoutableToUsdc(
+            {
+              chainId: t.chainId,
+              token: t.token,
+              decimals: t.decimals,
+              unitaryPrice: price,
+              walletAddress: t.walletAddress,
+            },
+            signal,
+          ),
+        enabled: zerionQuery.isSuccess,
+        staleTime: 5 * 60_000,
+      };
+    }),
   });
 
   const routableSet = React.useMemo<ReadonlySet<string>>(() => {
@@ -175,8 +190,6 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
   // signal is only the truly-stuck long tail.
   const lastHiddenLogRef = React.useRef<string>("");
   React.useEffect(() => {
-    const all: TokenAmount[] = [...(zerionQuery.data ?? []), ...(extraQuery.data ?? [])];
-
     // Index probe results by `${chainId}:${address}` for cheap lookup.
     const probeStatus = new Map<string, "pending" | "routable" | "not-routable">();
     for (let i = 0; i < hiddenCandidates.length; i++) {
@@ -188,7 +201,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
       else probeStatus.set(key, "not-routable");
     }
 
-    const stuck = all.filter((token) => {
+    const stuck = allFetchedTokens.filter((token) => {
       const q = odosByChain.get(token.chainId);
       if (!q?.isSuccess || q.data === undefined) return false;
       if (q.data.has(token.token.toLowerCase())) return false;
@@ -212,7 +225,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     if (signature === lastHiddenLogRef.current) return;
     lastHiddenLogRef.current = signature;
 
-    const totalUsd = stuck.reduce((sum, t) => sum + sortPriceUsd(t), 0);
+    const totalUsd = stuck.reduce((sum, t) => sum + liveUsd(t), 0);
     console.warn(
       `[WalletTable] Hiding ${stuck.length} non-routable token(s) (~$${totalUsd.toFixed(2)} total):`,
       stuck.map((t) => ({
@@ -221,41 +234,31 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
         symbol: t.symbol,
         name: t.name,
         wallet: t.walletAddress,
-        amountUsd: sortPriceUsd(t),
+        amountUsd: liveUsd(t),
       })),
     );
-  }, [zerionQuery.data, extraQuery.data, odosByChain, hiddenCandidates, routabilityQueries]);
+  }, [allFetchedTokens, odosByChain, hiddenCandidates, routabilityQueries, liveUsd]);
 
   // Combine tokens: Zerion first, then extra tokens (deduplicated). Both
   // streams are passed through `isOdosAllowed` so non-routable tokens never
-  // reach the table.
+  // reach the table, then we sort by the same live `priceFor` the value
+  // column uses so the default order matches the displayed USD values.
   const tokens = React.useMemo(() => {
     const zerionTokens = (zerionQuery.data ?? []).filter(isOdosAllowed);
 
-    // Only include extra tokens if the query has successfully completed
-    // This ensures zerion data renders first before extra tokens are added
-    if (!extraQuery.isSuccess) {
-      // Sort by USD value (descending) using the cached `unitaryPrice`
-      const sorted = [...zerionTokens];
-      sorted.sort((a, b) => sortPriceUsd(b) - sortPriceUsd(a));
-      return sorted;
-    }
+    // Hold extras back until their query has succeeded, so Zerion data
+    // renders first before extra tokens are folded in.
+    const merged = extraQuery.isSuccess
+      ? [
+          ...zerionTokens,
+          ...(extraQuery.data ?? [])
+            .filter(isOdosAllowed)
+            .filter((extra) => !zerionTokens.some((zerion) => isSameToken(zerion, extra))),
+        ]
+      : zerionTokens;
 
-    const extraTokens = (extraQuery.data ?? []).filter(isOdosAllowed);
-
-    // Deduplicate extra tokens against Zerion tokens
-    const deduplicatedExtra = extraTokens.filter((extra) => !zerionTokens.some((zerion) => isSameToken(zerion, extra)));
-
-    const combined = [...zerionTokens, ...deduplicatedExtra];
-    combined.sort((a, b) => sortPriceUsd(b) - sortPriceUsd(a));
-    return combined;
-  }, [zerionQuery.data, extraQuery.data, extraQuery.isSuccess, isOdosAllowed]);
-
-  // Feed every visible token into the shared price context, then read prices
-  // back through the same context so the table USD column and every other
-  // component (plan card, consolidation modal) see identical values.
-  useRegisterPrices(tokens);
-  const { priceFor, isPending: isPriceLoading } = usePriceMap();
+    return merged.sort((a, b) => liveUsd(b) - liveUsd(a));
+  }, [zerionQuery.data, extraQuery.data, extraQuery.isSuccess, isOdosAllowed, liveUsd]);
 
   // Rebuild columns when `priceFor` changes so the value column's `sortingFn`
   // (which closes over `priceFor`) sees fresh prices and the table re-sorts.

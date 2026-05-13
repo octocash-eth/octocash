@@ -83,7 +83,7 @@ function TokenAmountInline({
         <TokenDisplayAmount
           key={amount.toString()}
           amount={amount}
-          unitaryPrice={price}
+          price={price}
           className="animate-in fade-in duration-300"
         />
         <TokenDisplaySymbol />

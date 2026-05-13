@@ -205,7 +205,6 @@ describe("odos", () => {
         chainId: 1,
         walletAddress: WALLET,
         decimals: 18,
-        unitaryPrice: 1.05,
         amount: 1000000000000000000n,
       });
     });
@@ -498,8 +497,11 @@ describe("odos", () => {
 
       const result = await fetchExtraTokenBalances([WALLET]);
 
+      // Surviving the dust filter implies the price lookup matched
+      // case-insensitively — without the match, USD would be 0 and the
+      // token would be filtered out.
       expect(result).toHaveLength(1);
-      expect(result[0].unitaryPrice).toBe(1.0);
+      expect(result[0].token.toLowerCase()).toBe(TOKEN_ADDRESS);
     });
 
     test("handles multiple wallets correctly", async () => {

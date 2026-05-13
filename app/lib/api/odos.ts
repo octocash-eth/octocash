@@ -10,15 +10,6 @@ function isEffectivelyZero(balance: number): boolean {
   return balance < 0.01; // Consider anything less than $0.01 as effectively zero
 }
 
-/**
- * USD value derived from the Odos-stamped `unitaryPrice`. Used only to drop
- * dust positions before returning to the caller.
- */
-function odosTokenAmountInUsd(token: TokenAmount): number {
-  if (token.unitaryPrice === undefined) return 0;
-  return Number(formatUnits(token.amount, token.decimals)) * token.unitaryPrice;
-}
-
 export const EXTRA_TOKENS = STAKED_TOKENS.map((token) => {
   const [chainId, address] = token.split(":") as [string, Address];
   return { chainId: Number(chainId), address: address as Address };
@@ -399,19 +390,19 @@ export async function fetchExtraTokenBalances(walletAddresses: string[]): Promis
 
     if (tokenAmounts.length === 0) return [];
 
-    // Step 5–6: Fetch Odos prices and assign to tokens
+    // Step 5: Fetch Odos prices once, then use them in-place to drop dust
+    // and order by USD value descending. We deliberately do NOT stamp the
+    // price onto the returned `TokenAmount` — downstream consumers read
+    // live prices from the central price context to avoid two-sources-of-
+    // truth bugs (see app/context/token-price-provider.tsx).
     const prices = await fetchOdosPrices(tokenAmounts);
-    for (const token of tokenAmounts) {
-      const price = prices.get(odosPriceKey(token.chainId, token.token));
-      if (price !== undefined) {
-        token.unitaryPrice = price;
-      }
-    }
+    const usdValue = (t: TokenAmount): number => {
+      const price = prices.get(odosPriceKey(t.chainId, t.token));
+      if (price === undefined) return 0;
+      return Number(formatUnits(t.amount, t.decimals)) * price;
+    };
 
-    // Step 7: Filter out tokens with effectively zero USD value
-    return tokenAmounts.filter((token) => {
-      return !isEffectivelyZero(odosTokenAmountInUsd(token));
-    });
+    return tokenAmounts.filter((t) => !isEffectivelyZero(usdValue(t))).sort((a, b) => usdValue(b) - usdValue(a));
   } catch (error) {
     console.error("[ExtraTokens] Error fetching extra token balances:", error);
     return [];

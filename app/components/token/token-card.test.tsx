@@ -60,7 +60,6 @@ describe("TokenCard", () => {
     symbol: "USDC",
     decimals: 6,
     name: "USD Coin",
-    unitaryPrice: 1.0,
   };
 
   beforeEach(() => {
@@ -178,7 +177,6 @@ describe("TokenCard", () => {
       const tokenWithPrice: TokenAmount = {
         ...baseToken,
         amount: 1000000000n,
-        unitaryPrice: 1.0,
       };
 
       const { container } = renderWithQueryClient(<TokenCard token={tokenWithPrice} />);
@@ -194,7 +192,6 @@ describe("TokenCard", () => {
       const tokenWithoutPrice: TokenAmount = {
         ...baseToken,
         amount: 1000000000n,
-        unitaryPrice: undefined,
       };
 
       const { container } = renderWithQueryClient(<TokenCard token={tokenWithoutPrice} />);

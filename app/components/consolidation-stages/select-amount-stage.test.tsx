@@ -98,7 +98,6 @@ describe("SelectAmountStage", () => {
       symbol: "USDC",
       decimals,
       name: "USD Coin",
-      unitaryPrice: 1,
       amountToConsolidate: amountStr,
       ...overrides,
     };
@@ -113,7 +112,6 @@ describe("SelectAmountStage", () => {
         amount: parseUnits(maxAmount, 18),
         amountToConsolidate: maxAmount,
         decimals: 18,
-        unitaryPrice: 1000,
       });
 
       render(<SelectAmountStage tokens={[token]} onAmountsChange={onAmountsChange} />);
