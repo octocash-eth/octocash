@@ -117,20 +117,31 @@ export function buildColumns(priceFor?: (row: TokenAmount) => number | undefined
     {
       id: "select",
       size: 20,
-      header: ({ table }) => (
-        <Checkbox
-          checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate")}
-          onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
-          aria-label="Select all"
-        />
-      ),
-      cell: ({ row }) => (
-        <Checkbox
-          checked={row.getIsSelected()}
-          onCheckedChange={(value) => row.toggleSelected(!!value)}
-          aria-label="Select row"
-        />
-      ),
+      header: ({ table }) => {
+        const canSelectMore = table.options.meta?.canSelectMore ?? true;
+        const allSelected = table.getIsAllPageRowsSelected();
+        const someSelected = table.getIsSomePageRowsSelected();
+        return (
+          <Checkbox
+            checked={allSelected || (someSelected && "indeterminate")}
+            disabled={!canSelectMore && !allSelected && !someSelected}
+            onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
+            aria-label="Select all"
+          />
+        );
+      },
+      cell: ({ row, table }) => {
+        const canSelectMore = table.options.meta?.canSelectMore ?? true;
+        const isSelected = row.getIsSelected();
+        return (
+          <Checkbox
+            checked={isSelected}
+            disabled={!isSelected && !canSelectMore}
+            onCheckedChange={(value) => row.toggleSelected(!!value)}
+            aria-label="Select row"
+          />
+        );
+      },
       enableSorting: false,
       enableHiding: false,
       meta: {

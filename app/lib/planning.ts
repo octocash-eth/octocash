@@ -29,6 +29,9 @@ function throwInsufficientGas(chainId: number, walletAddress: Address, gasCost: 
 
 const SUPPORTED_CHAINS = Object.keys(chains).map(Number);
 
+/** Max source tokens accepted by a single consolidation plan. */
+export const MAX_SOURCE_TOKENS = 50;
+
 /**
  * Finds a suitable intermediate wallet in case the destination wallet is not connected
  * It ensures the wallet has sufficient gas to execute the claim and transfer steps
@@ -181,8 +184,8 @@ function validateInputs(
     throw new Error("PlanningError: Source tokens cannot be empty");
   }
 
-  if (sourceTokens.length > 50) {
-    throw new Error("PlanningError: Too many source tokens (max 50)");
+  if (sourceTokens.length > MAX_SOURCE_TOKENS) {
+    throw new Error(`PlanningError: Too many source tokens (max ${MAX_SOURCE_TOKENS})`);
   }
 
   for (const token of sourceTokens) {

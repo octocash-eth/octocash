@@ -38,6 +38,7 @@ interface DataTableProps<TData extends object, TValue> {
   isRefreshing?: boolean;
   priceFor?: (row: TData) => number | undefined;
   isPending?: (row: TData) => boolean;
+  canSelectMore?: boolean;
 }
 
 function RenderedAddressCell({ address }: { address: string }) {
@@ -76,6 +77,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
   isRefreshing = false,
   priceFor,
   isPending,
+  canSelectMore = true,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -134,7 +136,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
     [chains, tokens, wallets],
   );
 
-  const meta = React.useMemo(() => ({ priceFor, isPending }), [priceFor, isPending]);
+  const meta = React.useMemo(() => ({ priceFor, isPending, canSelectMore }), [priceFor, isPending, canSelectMore]);
 
   const table = useReactTable({
     data,
@@ -179,7 +181,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
         emptyMessage="No tokens found"
         onRowClick={(rowData) => {
           const row = table.getRowModel().rows.find((r) => r.original === rowData);
-          if (row) {
+          if (row && (row.getIsSelected() || canSelectMore)) {
             row.toggleSelected();
           }
         }}
