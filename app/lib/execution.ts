@@ -158,7 +158,8 @@ export async function* executeConsolidationPlan(
         workingState.plan[i] = refreshedStep;
 
         // Recalculate downstream steps with new quote estimate
-        await recalculatePlan(workingState, i, refreshedStep.outputToken);
+        const { plan } = await recalculatePlan(workingState, i, refreshedStep.outputToken);
+        workingState.plan = plan;
         workingState.updatedAt = Date.now();
 
         // Yield state after quote refresh so UI updates with new estimates
@@ -192,7 +193,8 @@ export async function* executeConsolidationPlan(
           executedAt: Date.now(),
         };
         if (reconciled.actualOutput) {
-          await recalculatePlan(workingState, i, reconciled.actualOutput);
+          const { plan } = await recalculatePlan(workingState, i, reconciled.actualOutput);
+          workingState.plan = plan;
         }
         workingState.updatedAt = Date.now();
         yield structuredClone(workingState);
@@ -221,9 +223,16 @@ export async function* executeConsolidationPlan(
       workingState.plan[i] = successStep;
       workingState.updatedAt = Date.now();
 
+      // Apply any metadata patch the step requested (e.g. attestation step
+      // stashes Circle attestations here for the downstream claim step).
+      if (result.metadataPatch) {
+        workingState.metadata = { ...workingState.metadata, ...result.metadataPatch };
+      }
+
       // Recalculate remaining steps with actual amounts (T016)
       if (result.actualOutput) {
-        await recalculatePlan(workingState, i, result.actualOutput);
+        const { plan } = await recalculatePlan(workingState, i, result.actualOutput);
+        workingState.plan = plan;
         workingState.updatedAt = Date.now();
       }
 
@@ -655,10 +664,6 @@ async function executeStep(
       // Retrieve attestations
       const attestations = await retrieveAttestations(bridgeTxs);
 
-      // Store attestations for claim step (mutation of working state during execution)
-      const updatedMetadata = { ...state.metadata, attestations };
-      Object.assign(state, { metadata: updatedMetadata });
-
       // Calculate actual bridged amount from attestations
       const actualAmount = attestations.reduce(
         (sum, attestation) =>
@@ -679,6 +684,7 @@ async function executeStep(
         status: "success",
         chainId: step.chainId,
         actualOutput,
+        metadataPatch: { attestations },
       };
     }
 
@@ -917,7 +923,7 @@ async function recalculatePlan(
   state: ConsolidationState,
   completedStepIndex: number,
   actualOutput: TokenAmount,
-): Promise<void> {
+): Promise<{ plan: TransactionStep[] }> {
   const completedStep = state.plan[completedStepIndex];
 
   // Create a new plan array with updated steps
@@ -972,9 +978,5 @@ async function recalculatePlan(
     }
   }
 
-  // Update state with new plan and timestamp
-  Object.assign(state, {
-    plan: updatedPlan,
-    updatedAt: Date.now(),
-  });
+  return { plan: updatedPlan };
 }

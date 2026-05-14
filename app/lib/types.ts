@@ -123,6 +123,10 @@ export interface StepResult {
   // Failure data
   error?: TransactionError;
   skipReason?: string; // Reason for skipping (e.g., "Depends on failed step X")
+
+  // Patch the caller merges into ConsolidationState.metadata. Lets executeStep
+  // describe state changes instead of mutating its parameter.
+  metadataPatch?: Partial<NonNullable<ConsolidationState["metadata"]>>;
 }
 
 /**
