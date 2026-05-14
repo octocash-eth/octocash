@@ -4,6 +4,7 @@ import {
   decodeFunctionData,
   encodeFunctionData,
   erc20Abi,
+  getAddress,
   type Hex,
   isAddressEqual,
   type Log,
@@ -61,6 +62,32 @@ async function fetchJson<T>(url: string, body: unknown): Promise<T> {
 }
 
 /**
+ * Sums per-`tokenAddress` so the Odos `/sor/quote/v3` payload doesn't include
+ * the same token twice. Odos rejects repeated `inputTokens[].tokenAddress`
+ * with "input cannot be repeated" — and we hit that whenever `step.inputTokens`
+ * legitimately carries multiple `TokenAmount`s for the same on-chain token
+ * (e.g. on the destination chain after a CCTP claim, the user's pre-existing
+ * USDC and the claim-output USDC sit in `step.inputTokens` as two entries
+ * with different `provenance` so dependency tracking and `recalculatePlan`
+ * stay correct). The Odos request only cares about totals per address, so
+ * collapse here without touching the upstream plan.
+ *
+ * Addresses go through `getAddress` so EIP-55 case differences don't split
+ * the same token across two buckets.
+ */
+function dedupeOdosInputs(inputTokens: TokenAmount[]): { tokenAddress: Address; amount: string }[] {
+  const sums = new Map<Address, bigint>();
+  for (const t of inputTokens) {
+    const key = getAddress(t.token);
+    sums.set(key, (sums.get(key) ?? 0n) + t.amount);
+  }
+  return Array.from(sums.entries()).map(([tokenAddress, amount]) => ({
+    tokenAddress,
+    amount: amount.toString(),
+  }));
+}
+
+/**
  * Fetches a swap quote from Odos.
  * @param inputTokens - The tokens to swap.
  * @param outputToken - The output token.
@@ -73,10 +100,7 @@ async function fetchSwapQuote(
 ): Promise<OdosQuoteResponse> {
   const quoteBody = {
     chainId: outputToken.chainId,
-    inputTokens: inputTokens.map((token) => ({
-      tokenAddress: token.token,
-      amount: token.amount.toString(),
-    })),
+    inputTokens: dedupeOdosInputs(inputTokens),
     outputTokens: [
       {
         tokenAddress: outputToken.token,

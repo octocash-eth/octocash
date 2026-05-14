@@ -342,6 +342,82 @@ describe("odos", () => {
       );
     });
 
+    test("dedupes same-address inputs in Odos request body, summing amounts", async () => {
+      // Repro for "input cannot be repeated": after a CCTP claim on the
+      // destination chain, `step.inputTokens` may legitimately carry two
+      // TokenAmount entries for the same token (pre-existing USDC + claim
+      // output USDC) with different `provenance`. The Odos API rejects a
+      // payload that lists the same `tokenAddress` twice — we must collapse
+      // them into a single entry whose amount is the sum.
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ pathId: "test-path-id", outAmounts: ["3000000"] }),
+        text: async () => "",
+      })) as unknown as typeof fetch;
+      vi.stubGlobal("fetch", fetchMock);
+
+      const outputToken = {
+        token: mockTokenUSDT.token,
+        chainId: mockTokenUSDC.chainId,
+        symbol: mockTokenUSDT.symbol,
+        decimals: mockTokenUSDT.decimals,
+        walletAddress: mockTokenUSDC.walletAddress,
+      };
+
+      // Two USDC entries — same token, same wallet, different amounts and
+      // different provenance — exactly the destination-chain post-claim shape.
+      const usdcExisting = makeToken(USDC_TOKEN, 139412n, mockTokenUSDC.chainId, {
+        walletAddress: mockTokenUSDC.walletAddress,
+      });
+      const usdcFromClaim = makeToken(USDC_TOKEN, 5979743n, mockTokenUSDC.chainId, {
+        walletAddress: mockTokenUSDC.walletAddress,
+        provenance: "step-claim",
+      });
+
+      await getSwapQuote([usdcExisting, usdcFromClaim], outputToken);
+
+      const [, requestInit] = (fetchMock as unknown as Mock).mock.calls[0];
+      const body = JSON.parse((requestInit as { body: string }).body);
+      expect(body.inputTokens).toEqual([{ tokenAddress: USDC_TOKEN, amount: (139412n + 5979743n).toString() }]);
+    });
+
+    test("dedupe is case-insensitive on tokenAddress (mixed-case inputs collapse)", async () => {
+      // Polygon USDC (`0x3c499c…`) — same address with different casings.
+      // EIP-55 checksum case differences from upstream sources must NOT
+      // create separate buckets.
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ pathId: "test-path-id", outAmounts: ["3000000"] }),
+        text: async () => "",
+      })) as unknown as typeof fetch;
+      vi.stubGlobal("fetch", fetchMock);
+
+      const outputToken = {
+        token: mockTokenUSDT.token,
+        chainId: mockTokenUSDC.chainId,
+        symbol: mockTokenUSDT.symbol,
+        decimals: mockTokenUSDT.decimals,
+        walletAddress: mockTokenUSDC.walletAddress,
+      };
+
+      const lower = makeToken("0x3c499c542cef5e3811e1192ce70d8cc03d5c3359" as Address, 100n, mockTokenUSDC.chainId, {
+        walletAddress: mockTokenUSDC.walletAddress,
+      });
+      const checksum = makeToken("0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359" as Address, 200n, mockTokenUSDC.chainId, {
+        walletAddress: mockTokenUSDC.walletAddress,
+        provenance: "step-claim",
+      });
+
+      await getSwapQuote([lower, checksum], outputToken);
+
+      const [, requestInit] = (fetchMock as unknown as Mock).mock.calls[0];
+      const body = JSON.parse((requestInit as { body: string }).body);
+      expect(body.inputTokens).toHaveLength(1);
+      expect(body.inputTokens[0].amount).toBe("300");
+    });
+
     test("wraps API errors with ExternalAPIError", async () => {
       vi.stubGlobal(
         "fetch",
