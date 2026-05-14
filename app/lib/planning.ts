@@ -31,6 +31,18 @@ function throwInsufficientGas(chainId: number, walletAddress: Address, gasCost: 
 const SUPPORTED_CHAINS = Object.keys(chains).map(Number);
 
 /**
+ * EIP-7702 designation prefix. An EOA that has authorized a delegate has
+ * bytecode of the form `0xef0100 || <20-byte delegate address>` (23 bytes
+ * total). The account remains an EOA — the original key still controls it
+ * and the address is the same on every chain — so for our planning purposes
+ * (CCTP mintRecipient, intermediate-wallet candidate, signing) it should be
+ * treated like a plain EOA, not a smart-account wallet.
+ *
+ * See https://eips.ethereum.org/EIPS/eip-7702.
+ */
+const EIP7702_DELEGATION_PREFIX = "0xef0100";
+
+/**
  * Source wallets sign on their source chain and (since the same address is the
  * default CCTP mintRecipient and the intermediate-wallet candidate pool) need
  * to be reachable as EOAs everywhere. Smart-account wallets (Safe, ERC-4337)
@@ -38,6 +50,10 @@ const SUPPORTED_CHAINS = Object.keys(chains).map(Number);
  * bridging risks stranded funds. The destination wallet only needs this check
  * when it's itself a connected wallet (intermediate-wallet candidate); an
  * arbitrary destination address can be a contract and just receive ERC20.
+ *
+ * EIP-7702-delegated EOAs report non-empty bytecode but are still EOAs (same
+ * address on every chain, signable by the original key), so we recognize the
+ * `0xef0100` designation prefix and let them through.
  */
 async function assertEoaWallets(
   sourceTokens: TokenAmount[],
@@ -59,7 +75,9 @@ async function assertEoaWallets(
   const checks = await Promise.all(
     Array.from(pairs.values()).map(async ({ address, chainId }) => {
       const code = await getPublicClient(chainId).getCode({ address });
-      return { address, chainId, isContract: code !== undefined && code !== "0x" };
+      const hasCode = code !== undefined && code !== "0x";
+      const is7702 = hasCode && code.toLowerCase().startsWith(EIP7702_DELEGATION_PREFIX);
+      return { address, chainId, isContract: hasCode && !is7702 };
     }),
   );
 

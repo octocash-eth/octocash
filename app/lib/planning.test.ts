@@ -33,6 +33,7 @@ vi.mock("./gas-estimation", () => ({
 import { getBridgeFee } from "./cctp";
 import { getSwapQuote } from "./odos";
 import { planConsolidation } from "./planning";
+import { getPublicClient } from "./public-client";
 
 describe("planConsolidation", () => {
   beforeEach(() => {
@@ -2060,6 +2061,74 @@ describe("planConsolidation", () => {
         maxFeePerGas: 20_000_000_000n,
         perOperation: [],
       });
+    });
+  });
+
+  describe("smart-account / EIP-7702 detection", () => {
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: USDC_ADDRESS,
+        amount: 1_000_000n,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    const mockGetCode = (code: `0x${string}`) => {
+      vi.mocked(getPublicClient).mockReturnValue({
+        getCode: vi.fn().mockResolvedValue(code),
+      } as unknown as ReturnType<typeof getPublicClient>);
+    };
+
+    test("rejects a true smart-account wallet (non-7702 bytecode)", async () => {
+      mockGetCode("0x6080604052"); // arbitrary contract bytecode
+
+      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(
+        /Smart-account wallets are not supported/,
+      );
+    });
+
+    test("accepts an EIP-7702-delegated EOA (0xef0100 designation)", async () => {
+      // EIP-7702 designation: 0xef0100 || <20-byte delegate address>
+      mockGetCode("0xef0100aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+      vi.mocked(getSwapQuote).mockResolvedValue({
+        token: WBTC_ADDRESS,
+        amount: 8000n,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "WBTC",
+        decimals: 8,
+      });
+
+      const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+      expect(result).toHaveLength(1);
+      expect(result[0].type).toBe("swap");
+    });
+
+    test("accepts an EIP-7702 designation with uppercase hex", async () => {
+      mockGetCode("0xEF0100AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+
+      vi.mocked(getSwapQuote).mockResolvedValue({
+        token: WBTC_ADDRESS,
+        amount: 8000n,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "WBTC",
+        decimals: 8,
+      });
+
+      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).resolves.toBeDefined();
     });
   });
 });
