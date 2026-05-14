@@ -2,7 +2,7 @@ import type { Account, Address, Call, Chain, Client, Hex, HttpTransport, WalletC
 import { BaseError, encodeFunctionData, parseAbi } from "viem";
 import { estimateGas, getTransactionCount, waitForTransactionReceipt } from "viem/actions";
 import { chains } from "~/data/supported-chains";
-import { getPublicClient } from "./public-client";
+import { fetchFastFees } from "./gas-estimation";
 
 /**
  * Detects "nonce too low" errors thrown by the wallet/RPC.
@@ -99,10 +99,9 @@ const estimateAndSendTransaction = async (
   }
 
   try {
-    const publicClient = getPublicClient(params.chain.id);
-    const fees = await publicClient.estimateFeesPerGas();
-    maxFeePerGas = fees.maxFeePerGas ?? undefined;
-    maxPriorityFeePerGas = fees.maxPriorityFeePerGas ?? undefined;
+    const fees = await fetchFastFees(params.chain.id);
+    maxFeePerGas = fees.maxFeePerGas;
+    maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
   } catch {
     // Fall back to wallet/RPC defaults
   }

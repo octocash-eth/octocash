@@ -21,6 +21,7 @@ vi.mock("./public-client", () => ({
       maxPriorityFeePerGas: 1000000000n,
     }),
   }),
+  retryOnRateLimit: vi.fn((fn: () => unknown) => fn()),
 }));
 
 // Import mocked actions

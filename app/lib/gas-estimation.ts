@@ -34,6 +34,15 @@ const GAS_BUDGETS: Record<OperationType, bigint> = {
 /** Multiplier applied to raw gas cost. 130 = +30%. */
 const SAFETY_BUFFER_PCT = 130n;
 
+/**
+ * Multiplier applied to live fee data so submitted transactions outbid the
+ * "standard" tier and land within ~1 minute on slow chains (mainnet ~5 blocks
+ * of headroom). Applied to both `maxFeePerGas` and `maxPriorityFeePerGas` and
+ * fed into the same budget calc so reserved native covers the boosted price.
+ * 150 = +50%.
+ */
+const FAST_FEE_MULTIPLIER_PCT = 150n;
+
 export interface GasEstimateResult {
   totalGasCost: bigint;
   maxFeePerGas: bigint;
@@ -68,12 +77,30 @@ export async function estimateChainGasCosts(
 }
 
 /**
- * Fetches current maxFeePerGas for a chain.
+ * Fetches current EIP-1559 fees for a chain, boosted by {@link FAST_FEE_MULTIPLIER_PCT}
+ * so submitted transactions land within ~1 minute. Falls back to legacy `gasPrice`
+ * (also boosted) on chains/RPCs that don't support EIP-1559.
  */
-export async function fetchMaxFeePerGas(chainId: number): Promise<bigint> {
+export async function fetchFastFees(chainId: number): Promise<{
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint | undefined;
+}> {
   const client = getPublicClient(chainId);
   const fees = await retryOnRateLimit(() => client.estimateFeesPerGas());
-  return fees.maxFeePerGas ?? fees.gasPrice ?? 0n;
+  const baseMax = fees.maxFeePerGas ?? fees.gasPrice ?? 0n;
+  const basePriority = fees.maxPriorityFeePerGas;
+  return {
+    maxFeePerGas: (baseMax * FAST_FEE_MULTIPLIER_PCT) / 100n,
+    maxPriorityFeePerGas: basePriority !== undefined ? (basePriority * FAST_FEE_MULTIPLIER_PCT) / 100n : undefined,
+  };
+}
+
+/**
+ * Fetches the boosted `maxFeePerGas` for a chain. See {@link fetchFastFees}.
+ */
+export async function fetchMaxFeePerGas(chainId: number): Promise<bigint> {
+  const { maxFeePerGas } = await fetchFastFees(chainId);
+  return maxFeePerGas;
 }
 
 export interface ChainTokenInfo {
