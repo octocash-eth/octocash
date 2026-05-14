@@ -131,7 +131,6 @@ export default function History() {
                     pageIndex={pageIndex}
                     pageSize={PAGE_SIZE}
                     pageCount={pageCount}
-                    recordCount={consolidations.length}
                     onPageChange={setPageIndex}
                   />
                 </div>

@@ -1,178 +1,196 @@
-import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "~/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { Skeleton } from "~/components/ui/skeleton";
 import { cn } from "~/lib/utils";
 
-interface PaginationProps {
-  pageIndex: number;
+interface PaginationSizeProps {
   pageSize: number;
-  pageCount: number;
-  recordCount: number;
-  onPageChange: (index: number) => void;
-  sizes?: number[];
-  onPageSizeChange?: (size: number) => void;
-  moreLimit?: number;
-  info?: string;
-  rowsPerPageLabel?: string;
-  previousPageLabel?: string;
-  nextPageLabel?: string;
-  ellipsisText?: string;
+  sizes: number[];
+  onPageSizeChange: (size: number) => void;
+  label?: string;
   className?: string;
   isLoading?: boolean;
+  skeleton?: ReactNode;
+}
+
+function PaginationSize({
+  pageSize,
+  sizes,
+  onPageSizeChange,
+  label = "Rows per page",
+  className,
+  isLoading = false,
+  skeleton = <Skeleton className="h-8 w-44" />,
+}: PaginationSizeProps) {
+  if (isLoading) return <>{skeleton}</>;
+  if (sizes.length === 0) return null;
+
+  return (
+    <div data-slot="pagination-size" className={cn("flex items-center gap-2", className)}>
+      <p className="text-sm font-medium">{label}</p>
+      <Select value={`${pageSize}`} onValueChange={(value) => onPageSizeChange(Number(value))}>
+        <SelectTrigger className="w-fit" size="sm">
+          <SelectValue placeholder={`${pageSize}`} />
+        </SelectTrigger>
+        <SelectContent side="top" className="min-w-[50px]">
+          {sizes.map((size) => (
+            <SelectItem key={size} value={`${size}`}>
+              {size}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+interface PaginationNavProps {
+  pageIndex: number;
+  pageCount: number;
+  onPageChange: (index: number) => void;
+  firstPageLabel?: string;
+  previousPageLabel?: string;
+  nextPageLabel?: string;
+  lastPageLabel?: string;
+  className?: string;
+  isLoading?: boolean;
+  skeleton?: ReactNode;
+}
+
+function PaginationNav({
+  pageIndex,
+  pageCount,
+  onPageChange,
+  firstPageLabel = "Go to first page",
+  previousPageLabel = "Go to previous page",
+  nextPageLabel = "Go to next page",
+  lastPageLabel = "Go to last page",
+  className,
+  isLoading = false,
+  skeleton = <Skeleton className="h-8 w-60" />,
+}: PaginationNavProps) {
+  if (isLoading) return <>{skeleton}</>;
+
+  const canPrev = pageIndex > 0;
+  const canNext = pageIndex < pageCount - 1;
+  const displayPageCount = Math.max(pageCount, 1);
+
+  return (
+    <div data-slot="pagination-nav" className={cn("flex items-center gap-2", className)}>
+      <Button
+        variant="outline"
+        size="icon"
+        className="h-8 w-8 rtl:rotate-180"
+        onClick={() => onPageChange(0)}
+        disabled={!canPrev}
+      >
+        <span className="sr-only">{firstPageLabel}</span>
+        <ChevronsLeftIcon className="size-4" />
+      </Button>
+      <Button
+        variant="outline"
+        size="icon"
+        className="h-8 w-8 rtl:rotate-180"
+        onClick={() => onPageChange(pageIndex - 1)}
+        disabled={!canPrev}
+      >
+        <span className="sr-only">{previousPageLabel}</span>
+        <ChevronLeftIcon className="size-4" />
+      </Button>
+      <div className="flex w-[100px] items-center justify-center text-sm font-medium">
+        Page {pageIndex + 1} of {displayPageCount}
+      </div>
+      <Button
+        variant="outline"
+        size="icon"
+        className="h-8 w-8 rtl:rotate-180"
+        onClick={() => onPageChange(pageIndex + 1)}
+        disabled={!canNext}
+      >
+        <span className="sr-only">{nextPageLabel}</span>
+        <ChevronRightIcon className="size-4" />
+      </Button>
+      <Button
+        variant="outline"
+        size="icon"
+        className="h-8 w-8 rtl:rotate-180"
+        onClick={() => onPageChange(pageCount - 1)}
+        disabled={!canNext}
+      >
+        <span className="sr-only">{lastPageLabel}</span>
+        <ChevronsRightIcon className="size-4" />
+      </Button>
+    </div>
+  );
+}
+
+interface PaginationProps
+  extends Omit<PaginationNavProps, "className" | "skeleton">,
+    Omit<PaginationSizeProps, "className" | "skeleton" | "label" | "sizes" | "onPageSizeChange"> {
+  sizes?: number[];
+  onPageSizeChange?: (size: number) => void;
+  rowsPerPageLabel?: string;
+  className?: string;
   sizesSkeleton?: ReactNode;
-  infoSkeleton?: ReactNode;
+  navSkeleton?: ReactNode;
 }
 
 function Pagination({
   pageIndex,
   pageSize,
   pageCount,
-  recordCount,
   onPageChange,
   sizes,
   onPageSizeChange,
-  moreLimit = 5,
-  info = "{from} - {to} of {count}",
-  rowsPerPageLabel = "Rows per page",
-  previousPageLabel = "Go to previous page",
-  nextPageLabel = "Go to next page",
-  ellipsisText = "...",
+  rowsPerPageLabel,
+  firstPageLabel,
+  previousPageLabel,
+  nextPageLabel,
+  lastPageLabel,
   className,
   isLoading = false,
-  sizesSkeleton = <Skeleton className="h-8 w-44" />,
-  infoSkeleton = <Skeleton className="h-8 w-60" />,
+  sizesSkeleton,
+  navSkeleton,
 }: PaginationProps) {
-  const btnBaseClasses = "size-7 p-0 text-sm";
-  const btnArrowClasses = `${btnBaseClasses} rtl:transform rtl:rotate-180`;
-
-  const from = recordCount > 0 ? pageIndex * pageSize + 1 : 0;
-  const to = Math.min((pageIndex + 1) * pageSize, recordCount);
-
-  const paginationInfo = info
-    .replace("{from}", from.toString())
-    .replace("{to}", to.toString())
-    .replace("{count}", recordCount.toString());
-
-  const currentGroupStart = Math.floor(pageIndex / moreLimit) * moreLimit;
-  const currentGroupEnd = Math.min(currentGroupStart + moreLimit, pageCount);
-
-  const showSizeSelector = sizes && sizes.length > 0 && onPageSizeChange;
-
-  const renderPageButtons = () => {
-    const buttons = [];
-    for (let i = currentGroupStart; i < currentGroupEnd; i++) {
-      buttons.push(
-        <Button
-          key={`page-${i + 1}`}
-          size="icon"
-          variant="ghost"
-          className={cn(btnBaseClasses, "text-muted-foreground", {
-            "bg-accent text-accent-foreground": pageIndex === i,
-          })}
-          onClick={() => {
-            if (pageIndex !== i) onPageChange(i);
-          }}
-        >
-          {i + 1}
-        </Button>,
-      );
-    }
-    return buttons;
-  };
+  const showSize = sizes && sizes.length > 0 && onPageSizeChange;
 
   return (
     <div
       data-slot="pagination"
-      className={cn(
-        "flex flex-wrap flex-col sm:flex-row justify-between items-center gap-2.5 py-2.5 sm:py-0 grow",
-        className,
-      )}
+      className={cn("flex flex-wrap items-center justify-end gap-x-6 gap-y-2.5 py-2.5 sm:py-0", className)}
     >
-      <div className="flex flex-wrap items-center space-x-2.5 pb-2.5 sm:pb-0 order-2 sm:order-1">
-        {isLoading ? (
-          showSizeSelector ? (
-            sizesSkeleton
-          ) : null
-        ) : showSizeSelector ? (
-          <>
-            <div className="text-sm text-muted-foreground">{rowsPerPageLabel}</div>
-            <Select value={`${pageSize}`} onValueChange={(value) => onPageSizeChange?.(Number(value))}>
-              <SelectTrigger className="w-fit" size="sm">
-                <SelectValue placeholder={`${pageSize}`} />
-              </SelectTrigger>
-              <SelectContent side="top" className="min-w-[50px]">
-                {sizes?.map((size) => (
-                  <SelectItem key={size} value={`${size}`}>
-                    {size}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </>
-        ) : null}
-      </div>
-      <div className="flex flex-col sm:flex-row justify-center sm:justify-end items-center gap-2.5 pt-2.5 sm:pt-0 order-1 sm:order-2">
-        {isLoading ? (
-          infoSkeleton
-        ) : (
-          <>
-            <div className="text-sm text-muted-foreground text-nowrap order-2 sm:order-1">{paginationInfo}</div>
-            {pageCount > 1 && (
-              <div className="flex items-center space-x-1 order-1 sm:order-2">
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className={btnArrowClasses}
-                  onClick={() => onPageChange(pageIndex - 1)}
-                  disabled={pageIndex === 0}
-                >
-                  <span className="sr-only">{previousPageLabel}</span>
-                  <ChevronLeftIcon className="size-4" />
-                </Button>
-
-                {currentGroupStart > 0 && (
-                  <Button
-                    size="icon"
-                    className={btnBaseClasses}
-                    variant="ghost"
-                    onClick={() => onPageChange(currentGroupStart - 1)}
-                  >
-                    {ellipsisText}
-                  </Button>
-                )}
-
-                {renderPageButtons()}
-
-                {currentGroupEnd < pageCount && (
-                  <Button
-                    size="icon"
-                    className={btnBaseClasses}
-                    variant="ghost"
-                    onClick={() => onPageChange(currentGroupEnd)}
-                  >
-                    {ellipsisText}
-                  </Button>
-                )}
-
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className={btnArrowClasses}
-                  onClick={() => onPageChange(pageIndex + 1)}
-                  disabled={pageIndex >= pageCount - 1}
-                >
-                  <span className="sr-only">{nextPageLabel}</span>
-                  <ChevronRightIcon className="size-4" />
-                </Button>
-              </div>
-            )}
-          </>
-        )}
-      </div>
+      {showSize ? (
+        <PaginationSize
+          pageSize={pageSize}
+          sizes={sizes}
+          onPageSizeChange={onPageSizeChange}
+          label={rowsPerPageLabel}
+          isLoading={isLoading}
+          skeleton={sizesSkeleton}
+        />
+      ) : null}
+      <PaginationNav
+        pageIndex={pageIndex}
+        pageCount={pageCount}
+        onPageChange={onPageChange}
+        firstPageLabel={firstPageLabel}
+        previousPageLabel={previousPageLabel}
+        nextPageLabel={nextPageLabel}
+        lastPageLabel={lastPageLabel}
+        isLoading={isLoading}
+        skeleton={navSkeleton}
+      />
     </div>
   );
 }
 
-export { Pagination, type PaginationProps };
+export {
+  Pagination,
+  PaginationNav,
+  PaginationSize,
+  type PaginationNavProps,
+  type PaginationProps,
+  type PaginationSizeProps,
+};

@@ -304,13 +304,6 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
             canSelectMore={Object.keys(rowSelection).length < MAX_SOURCE_TOKENS}
           />
           <div className="flex flex-col items-center gap-2 mt-6">
-            <p
-              className={`text-sm ${
-                Object.keys(rowSelection).length >= MAX_SOURCE_TOKENS ? "text-amber-600" : "text-muted-foreground"
-              }`}
-            >
-              {Object.keys(rowSelection).length} / {MAX_SOURCE_TOKENS} selected
-            </p>
             <ConsolidateTokensModal
               tokens={tokens}
               rowSelection={rowSelection}

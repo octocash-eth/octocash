@@ -17,12 +17,13 @@ import { Coins, Link, RotateCw, Wallet } from "lucide-react";
 import * as React from "react";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
 import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "~/components/token";
+import { MAX_SOURCE_TOKENS } from "~/lib/planning";
 import { getChainName, getTokenId } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
 import { ChainIcon } from "../chain/chain-icon";
 import { Button } from "../ui/button";
 import { DataGrid, DataGridContainer } from "../ui/data-grid";
-import { DataGridPagination } from "../ui/data-grid-pagination";
+import { DataGridPaginationNav, DataGridPaginationSize } from "../ui/data-grid-pagination";
 import { DataGridTable } from "../ui/data-grid-table";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import type { WalletTableFilterConfig } from "./wallet-table-filters";
@@ -207,8 +208,16 @@ export function DataTable<TData extends TokenAmount, TValue>({
           </ScrollArea>
         </DataGridContainer>
 
-        <div className="flex items-center justify-between px-2 py-4">
-          <DataGridPagination sizes={[10, 25, 50, 100]} />
+        <div className="grid grid-cols-3 items-center gap-4 px-2 pt-1 pb-2">
+          <p
+            className={`text-sm whitespace-nowrap justify-self-start ${
+              Object.keys(rowSelection).length >= MAX_SOURCE_TOKENS ? "text-amber-600" : "text-muted-foreground"
+            }`}
+          >
+            {Object.keys(rowSelection).length} of {MAX_SOURCE_TOKENS} token(s) selected.
+          </p>
+          <DataGridPaginationNav className="justify-self-center" />
+          <DataGridPaginationSize sizes={[10, 25, 50, 100]} className="justify-self-end" />
         </div>
       </DataGrid>
     </div>
