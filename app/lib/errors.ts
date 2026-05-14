@@ -13,7 +13,14 @@ export const ERROR_MESSAGES: Record<ErrorCode, [string, string]> = {
   ],
   [ERROR_CODES.SLIPPAGE_EXCEEDED]: ["Price changed too much", "Retry for new quote."],
   [ERROR_CODES.RPC_ERROR]: ["Network error", "Check connection and retry."],
-  [ERROR_CODES.TIMEOUT]: ["Transaction took too long", "It may still be processing - check your wallet."],
+  [ERROR_CODES.TIMEOUT]: [
+    "Transaction took too long",
+    "It may still be processing, retry to override the transaction.",
+  ],
+  [ERROR_CODES.TX_NOT_BROADCAST]: [
+    "Transaction wasn't broadcast",
+    "Your wallet signed the transaction, but it wasn't broadcast to the network. Please try again.",
+  ],
   [ERROR_CODES.ATTESTATION_TIMEOUT]: [
     "Bridge attestation not received within 1 minute",
     "The money may be stuck in CCTPv2, use the history page to resume the transaction.",
@@ -55,6 +62,8 @@ export function createTransactionError(
   const errName = (error as { name?: string } | null | undefined)?.name;
   if (errName === "InsufficientInputBalanceError") {
     code = ERROR_CODES.INSUFFICIENT_INPUT_BALANCE;
+  } else if (errName === "TransactionNotBroadcastError") {
+    code = ERROR_CODES.TX_NOT_BROADCAST;
   } else if (messageIncludes("USER_REJECTED") || messageIncludes("user rejected")) {
     code = ERROR_CODES.USER_REJECTED;
   } else if (messageIncludes("INSUFFICIENT_GAS") || messageIncludes("insufficient funds")) {

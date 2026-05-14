@@ -1,7 +1,7 @@
 import type { Account, Address, Chain, Hex, HttpTransport, WalletClient } from "viem";
 import type { WaitForTransactionReceiptReturnType } from "viem/actions";
 import { beforeEach, describe, expect, type Mock, test, vi } from "vitest";
-import { prepareSendCalls, SendCallsError, switchChain } from "./send-calls";
+import { prepareSendCalls, SendCallsError, switchChain, TransactionNotBroadcastError } from "./send-calls";
 
 // Mock the estimateGas and getTransactionCount functions
 vi.mock("viem/actions", async () => {
@@ -13,14 +13,19 @@ vi.mock("viem/actions", async () => {
   };
 });
 
-// Mock public-client for fee estimation
-vi.mock("./public-client", () => ({
-  getPublicClient: vi.fn().mockReturnValue({
-    estimateFeesPerGas: vi.fn().mockResolvedValue({
-      maxFeePerGas: 20000000000n,
-      maxPriorityFeePerGas: 1000000000n,
-    }),
+// Mock public-client for fee estimation and mempool watchdog. The default
+// `getTransaction` mock returns a non-null value so existing tests behave as
+// if the tx is immediately visible in the mempool (watchdog exits early).
+// Mempool-watchdog tests override `getTransaction` per case.
+const mockPublicClient = {
+  estimateFeesPerGas: vi.fn().mockResolvedValue({
+    maxFeePerGas: 20000000000n,
+    maxPriorityFeePerGas: 1000000000n,
   }),
+  getTransaction: vi.fn().mockResolvedValue({ hash: "0xseen" }),
+};
+vi.mock("./public-client", () => ({
+  getPublicClient: vi.fn(() => mockPublicClient),
   retryOnRateLimit: vi.fn((fn: () => unknown) => fn()),
 }));
 
@@ -102,6 +107,9 @@ describe("sendCalls", () => {
       vi.mocked(estimateGas).mockResolvedValue(100000n);
       vi.mocked(getTransactionCount).mockReset();
       vi.mocked(getTransactionCount).mockResolvedValue(0);
+      // Reset mempool watchdog mock to "tx visible" default.
+      mockPublicClient.getTransaction.mockReset();
+      mockPublicClient.getTransaction.mockResolvedValue({ hash: "0xseen" });
     });
 
     describe("empty calls", () => {
@@ -1155,6 +1163,109 @@ describe("sendCalls", () => {
           const callArgs = vi.mocked(mockClient.sendTransaction).mock.calls[0][0];
           expect(callArgs.gas).toBeUndefined();
         });
+      });
+    });
+
+    describe("mempool watchdog", () => {
+      // These tests drive the 60s watchdog with fake timers. They use the
+      // atomic-steps path because it's the simplest single-tx code path.
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+
+      // Use afterEach via a beforeEach pattern — vitest resets after each test.
+      // Restore real timers in a finalizer per test to avoid bleeding into
+      // sibling describes.
+
+      test("rejects with TransactionNotBroadcastError when public RPC never sees the tx", async () => {
+        try {
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xneverseen");
+          // Public RPC always reports the tx as missing.
+          mockPublicClient.getTransaction.mockReset();
+          mockPublicClient.getTransaction.mockResolvedValue(null);
+          // Receipt promise never resolves on its own — watchdog must win.
+          mockWaitForReceipt.mockReturnValueOnce(new Promise(() => {}));
+
+          const sendPromise = prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+            "atomic-steps",
+          );
+
+          // Attach an early handler so the rejection (which fires during timer
+          // advancement below) isn't briefly flagged as unhandled by Node.
+          const caughtP: Promise<unknown> = sendPromise.then(
+            () => new Error("expected sendCalls to reject but it resolved"),
+            (e) => e,
+          );
+
+          // Drain the 60s watchdog window plus a little slack for poll ticks.
+          await vi.advanceTimersByTimeAsync(61_000);
+
+          const caught = await caughtP;
+
+          expect(caught).toBeInstanceOf(SendCallsError);
+          expect(caught).toBeInstanceOf(TransactionNotBroadcastError);
+          expect((caught as TransactionNotBroadcastError).transactionHash).toBe("0xneverseen");
+          expect(mockPublicClient.getTransaction).toHaveBeenCalledWith({ hash: "0xneverseen" });
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      test("returns receipt normally when public RPC sees the tx during polling", async () => {
+        try {
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xvisible");
+          // First two polls miss, then the tx becomes visible.
+          mockPublicClient.getTransaction.mockReset();
+          mockPublicClient.getTransaction
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(null)
+            .mockResolvedValue({ hash: "0xvisible" });
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+
+          const sendPromise = prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+            "atomic-steps",
+          );
+
+          await vi.advanceTimersByTimeAsync(15_000);
+          const [tx] = await sendPromise;
+
+          expect(tx).toBe("0xvisible");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      test("returns receipt normally when receipt resolves before watchdog deadline", async () => {
+        try {
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xfast");
+          // Even if mempool never reports the tx, a fast receipt wins the race.
+          mockPublicClient.getTransaction.mockReset();
+          mockPublicClient.getTransaction.mockResolvedValue(null);
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+
+          const sendPromise = prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+            "atomic-steps",
+          );
+
+          await vi.advanceTimersByTimeAsync(1_000);
+          const [tx] = await sendPromise;
+
+          expect(tx).toBe("0xfast");
+        } finally {
+          vi.useRealTimers();
+        }
       });
     });
   });

@@ -57,9 +57,9 @@ describe("gas-estimation", () => {
 
     test("fetches gas price from chain when not provided", async () => {
       const result = await estimateChainGasCosts(1, ["transfer-native"]);
-      // mocked 20gwei * 1.5 fast multiplier = 30gwei effective
-      // 21_000 * 30gwei = 630_000_000_000_000, with 30% buffer = 819_000_000_000_000
-      expect(result.totalGasCost).toBe(819000000000000n);
+      // mocked 20gwei * 2.5 fast multiplier = 50gwei effective
+      // 21_000 * 50gwei = 1_050_000_000_000_000, with 30% buffer = 1_365_000_000_000_000
+      expect(result.totalGasCost).toBe(1365000000000000n);
     });
   });
 
@@ -248,9 +248,9 @@ describe("gas-estimation", () => {
     test("populates fees, prices, and symbols for each chain", async () => {
       const ctx = await buildGasContext([1, 137]);
 
-      // mocked 20gwei * 1.5 fast multiplier = 30gwei
-      expect(ctx.maxFeePerGas[1]).toBe(30000000000n);
-      expect(ctx.maxFeePerGas[137]).toBe(30000000000n);
+      // mocked 20gwei * 2.5 fast multiplier = 50gwei
+      expect(ctx.maxFeePerGas[1]).toBe(50000000000n);
+      expect(ctx.maxFeePerGas[137]).toBe(50000000000n);
       expect(ctx.nativeTokenPriceUsd[1]).toBe(1000);
       expect(ctx.nativeTokenPriceUsd[137]).toBe(1000);
       expect(ctx.nativeSymbol[1]).toBe("ETH");

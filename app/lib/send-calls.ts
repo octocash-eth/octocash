@@ -3,6 +3,7 @@ import { BaseError, encodeFunctionData, parseAbi } from "viem";
 import { estimateGas, getTransactionCount, waitForTransactionReceipt } from "viem/actions";
 import { chains } from "~/data/supported-chains";
 import { fetchFastFees } from "./gas-estimation";
+import { getPublicClient } from "./public-client";
 
 /**
  * Thrown when a `sendCalls` invocation fails after a transaction has been
@@ -14,13 +15,115 @@ import { fetchFastFees } from "./gas-estimation";
  * `createTransactionError` keeps working.
  */
 export class SendCallsError extends Error {
-  override name = "SendCallsError" as const;
+  override name: string = "SendCallsError";
   transactionHash?: string;
   constructor(message: string, opts: { transactionHash?: string; cause?: unknown } = {}) {
     super(message, { cause: opts.cause });
     this.transactionHash = opts.transactionHash;
   }
 }
+
+/**
+ * Thrown when the wallet returned a tx hash but no public RPC sees the tx
+ * within the watchdog window. Most commonly produced by MetaMask's "Smart
+ * Transactions" feature: the wallet submits to a private relay; if the relay
+ * can't include the tx within ~1 minute it cancels the bundle and the tx never
+ * hits any mempool. Without this watchdog, we'd sit on `waitForTransactionReceipt`
+ * until viem's internal timeout (minutes), surfacing a generic timeout error.
+ *
+ * Extends {@link SendCallsError} so the existing catch-and-rethrow path in
+ * step modes preserves the class (and `error.name`), letting `createTransactionError`
+ * map this to a specific error code instead of falling back to generic timeout.
+ */
+export class TransactionNotBroadcastError extends SendCallsError {
+  override name = "TransactionNotBroadcastError";
+  constructor(transactionHash: string) {
+    super(`Transaction ${transactionHash} not seen on any public mempool after watchdog window`, {
+      transactionHash,
+    });
+  }
+}
+
+/** Window over which the mempool watchdog gives up; matches MetaMask STX's cancellation window. */
+const MEMPOOL_WATCHDOG_TIMEOUT_MS = 60_000;
+/** Interval between `eth_getTransactionByHash` polls — 15 polls over the 60s window. */
+const MEMPOOL_WATCHDOG_POLL_INTERVAL_MS = 4_000;
+
+/**
+ * Wraps {@link waitForTransactionReceipt} with a mempool-visibility watchdog.
+ *
+ * After the wallet returns a hash, races two promises:
+ *  - the normal receipt wait
+ *  - a poll loop that asks a *public* RPC (not the wallet's) whether the tx
+ *    is visible anywhere. If we never see it for 60s, we reject with
+ *    {@link TransactionNotBroadcastError}.
+ *
+ * Using a public RPC (via {@link getPublicClient}) is deliberate: the wallet's
+ * own RPC may misreport STX-submitted txs as pending even after MetaMask has
+ * cancelled them. The public RPC reflects whether the tx ever hit a mempool
+ * or a block, which is what we actually care about.
+ *
+ * Failure modes treated as "not seen yet" (keep polling, don't fail fast):
+ *  - public RPC throws (rate limit, network) — we'd rather wait than
+ *    false-positive on a flaky RPC.
+ */
+const waitForReceiptWithMempoolCheck = (
+  client: Client<HttpTransport, Chain, Account>,
+  waitForReceipt: typeof waitForTransactionReceipt,
+  hash: Hex,
+  chainId: number,
+) => {
+  return new Promise<Awaited<ReturnType<typeof waitForTransactionReceipt>>>((resolve, reject) => {
+    let stopped = false;
+    let resolveWatchdog: () => void;
+    const watchdogStop = new Promise<void>((r) => {
+      resolveWatchdog = r;
+    });
+
+    // Mempool watchdog. The async IIFE catches its own thrown error and
+    // routes it to `reject()` so the underlying promise never rejects —
+    // sidesteps Node's "PromiseRejectionHandledWarning" caused by handler
+    // attachment racing with fake timers / microtask ordering in tests.
+    (async () => {
+      try {
+        const pub = getPublicClient(chainId);
+        const deadline = Date.now() + MEMPOOL_WATCHDOG_TIMEOUT_MS;
+        while (Date.now() < deadline && !stopped) {
+          try {
+            const tx = await pub.getTransaction({ hash });
+            if (tx) return; // visible — defer to the receipt wait below
+          } catch {
+            // RPC error: treat as "not seen yet" rather than false-positive.
+          }
+          if (stopped) return;
+          const settled = await Promise.race([
+            watchdogStop.then(() => "stop" as const),
+            new Promise<"continue">((r) => setTimeout(() => r("continue"), MEMPOOL_WATCHDOG_POLL_INTERVAL_MS)),
+          ]);
+          if (settled === "stop") return;
+        }
+        if (!stopped) reject(new TransactionNotBroadcastError(hash));
+      } catch (err) {
+        // Defensive: shouldn't happen since RPC errors are swallowed above,
+        // but if anything else escapes, surface it instead of silently dropping.
+        if (!stopped) reject(err);
+      }
+    })();
+
+    waitForReceipt(client, { hash }).then(
+      (receipt) => {
+        stopped = true;
+        resolveWatchdog();
+        resolve(receipt);
+      },
+      (err) => {
+        stopped = true;
+        resolveWatchdog();
+        reject(err);
+      },
+    );
+  });
+};
 
 /**
  * Detects "nonce too low" errors thrown by the wallet/RPC.
@@ -223,8 +326,9 @@ export const prepareSendCalls = (
 
           lastTx = hash; // Always track last attempted transaction
 
-          // Wait for transaction receipt
-          const receipt = await waitForReceipt(client, { hash });
+          // Wait for transaction receipt with mempool watchdog (catches MetaMask
+          // Smart Transactions silent cancellations — see TransactionNotBroadcastError).
+          const receipt = await waitForReceiptWithMempoolCheck(client, waitForReceipt, hash, chainId);
 
           if (receipt.status === "success") {
             // Collect logs from this transaction
@@ -286,8 +390,9 @@ export const prepareSendCalls = (
           chain,
         });
 
-        // Wait for transaction receipt
-        const receipt = await waitForReceipt(client, { hash: multicallHash });
+        // Wait for transaction receipt with mempool watchdog (catches MetaMask
+        // Smart Transactions silent cancellations — see TransactionNotBroadcastError).
+        const receipt = await waitForReceiptWithMempoolCheck(client, waitForReceipt, multicallHash, chainId);
 
         if (receipt.status !== "success") {
           throw new SendCallsError(`${txId} transaction reverted`, { transactionHash: multicallHash });

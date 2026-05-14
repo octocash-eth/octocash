@@ -39,9 +39,11 @@ const SAFETY_BUFFER_PCT = 130n;
  * "standard" tier and land within ~1 minute on slow chains (mainnet ~5 blocks
  * of headroom). Applied to both `maxFeePerGas` and `maxPriorityFeePerGas` and
  * fed into the same budget calc so reserved native covers the boosted price.
- * 150 = +50%.
+ * Calibrated to roughly match MetaMask's "Market" tier: viem's
+ * `estimateFeesPerGas` derives from `eth_feeHistory` (historical/conservative),
+ * while MetaMask uses a more aggressive oracle. 250 = +150%.
  */
-const FAST_FEE_MULTIPLIER_PCT = 150n;
+const FAST_FEE_MULTIPLIER_PCT = 250n;
 
 export interface GasEstimateResult {
   totalGasCost: bigint;
