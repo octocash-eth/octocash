@@ -17,11 +17,21 @@ vi.mock("viem/actions", async () => {
 // `getTransaction` mock returns a non-null value so existing tests behave as
 // if the tx is immediately visible in the mempool (watchdog exits early).
 // Mempool-watchdog tests override `getTransaction` per case.
+//
+// `getBlock` + `getFeeHistory` feed `fetchFastFees` (see gas-estimation.ts).
+// With these mocks: pendingBaseFee = 20 gwei (gasUsed == target), bufferedBase
+// = 40 gwei, priority = max(2 gwei history, 1 gwei mainnet floor) = 2 gwei,
+// so maxFeePerGas = 42 gwei and maxPriorityFeePerGas = 2 gwei.
 const mockPublicClient = {
-  estimateFeesPerGas: vi.fn().mockResolvedValue({
-    maxFeePerGas: 20000000000n,
-    maxPriorityFeePerGas: 1000000000n,
+  getBlock: vi.fn().mockResolvedValue({
+    baseFeePerGas: 20_000_000_000n,
+    gasUsed: 15_000_000n,
+    gasLimit: 30_000_000n,
   }),
+  getFeeHistory: vi.fn().mockResolvedValue({
+    reward: [[2_000_000_000n], [2_000_000_000n]],
+  }),
+  getGasPrice: vi.fn().mockResolvedValue(20_000_000_000n),
   getTransaction: vi.fn().mockResolvedValue({ hash: "0xseen" }),
 };
 vi.mock("./public-client", () => ({
@@ -662,9 +672,9 @@ describe("sendCalls", () => {
           expect(caught).toBeInstanceOf(SendCallsError);
           expect(caught?.transactionHash).toBe("0xpending");
           expect(caught?.nonce).toBe(11);
-          // fast-fee mock returns maxFeePerGas=20gwei boosted ×2.5 → 50gwei
-          expect(caught?.maxFeePerGas).toBe(50000000000n);
-          expect(caught?.maxPriorityFeePerGas).toBe(2500000000n);
+          // fetchFastFees: bufferedBase 40gwei + priority 2gwei = 42gwei.
+          expect(caught?.maxFeePerGas).toBe(42_000_000_000n);
+          expect(caught?.maxPriorityFeePerGas).toBe(2_000_000_000n);
         });
       });
 
@@ -686,14 +696,13 @@ describe("sendCalls", () => {
             },
           );
 
-          // fast-fee mock returns 20gwei × 2.5 = 50gwei (current × 2 = 100gwei),
-          // priority 1gwei × 2.5 = 2.5gwei (current × 2 = 5gwei).
-          // Hint × 2 = 20gwei / 1gwei → current × 2 wins.
+          // fetchFastFees returns 42gwei / 2gwei (current × 2 = 84gwei / 4gwei).
+          // Hint × 2 = 20gwei / 1gwei → current × 2 wins on both fields.
           expect(mockClient.sendTransaction).toHaveBeenCalledWith(
             expect.objectContaining({
               nonce: 42,
-              maxFeePerGas: 100000000000n,
-              maxPriorityFeePerGas: 5000000000n,
+              maxFeePerGas: 84_000_000_000n,
+              maxPriorityFeePerGas: 4_000_000_000n,
             }),
           );
           // Did not fetch the next nonce — used the hint directly.
@@ -966,8 +975,8 @@ describe("sendCalls", () => {
           // Carries the nonce + fees of the failed submission so the retry
           // path can replace it.
           expect((caught as TransactionNotBroadcastError).nonce).toBe(23);
-          expect((caught as TransactionNotBroadcastError).maxFeePerGas).toBe(50000000000n);
-          expect((caught as TransactionNotBroadcastError).maxPriorityFeePerGas).toBe(2500000000n);
+          expect((caught as TransactionNotBroadcastError).maxFeePerGas).toBe(42_000_000_000n);
+          expect((caught as TransactionNotBroadcastError).maxPriorityFeePerGas).toBe(2_000_000_000n);
           expect(mockPublicClient.getTransaction).toHaveBeenCalledWith({ hash: "0xneverseen" });
         } finally {
           vi.useRealTimers();

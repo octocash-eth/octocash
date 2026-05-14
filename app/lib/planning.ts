@@ -988,7 +988,7 @@ export async function planConsolidation(
   }
 
   // Attach per-step gas estimates for UI display
-  attachGasEstimates(steps, gasCtx);
+  await attachGasEstimates(steps, gasCtx);
 
   // Validate plan constraints
   const attestationSteps = steps.filter((s) => s.type === "attestation");

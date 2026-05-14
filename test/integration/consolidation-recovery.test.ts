@@ -8,7 +8,14 @@ vi.mock("../../app/lib/odos");
 vi.mock("../../app/lib/cctp");
 vi.mock("../../app/lib/public-client", () => ({
   getPublicClient: vi.fn(() => ({
-    estimateFeesPerGas: vi.fn().mockResolvedValue({ maxFeePerGas: 1_000_000_000n }),
+    getBlock: vi.fn().mockResolvedValue({
+      baseFeePerGas: 500_000_000n,
+      gasUsed: 15_000_000n,
+      gasLimit: 30_000_000n,
+    }),
+    getFeeHistory: vi.fn().mockResolvedValue({ reward: [] }),
+    getGasPrice: vi.fn().mockResolvedValue(500_000_000n),
+    estimateGas: vi.fn().mockRejectedValue(new Error("revert")),
     readContract: vi.fn().mockResolvedValue(2n ** 128n),
     getCode: vi.fn().mockResolvedValue("0x"),
   })),

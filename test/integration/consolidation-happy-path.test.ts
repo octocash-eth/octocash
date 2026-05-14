@@ -8,7 +8,18 @@ vi.mock("../../app/lib/odos");
 vi.mock("../../app/lib/cctp");
 vi.mock("../../app/lib/public-client", () => ({
   getPublicClient: vi.fn(() => ({
-    estimateFeesPerGas: vi.fn().mockResolvedValue({ maxFeePerGas: 1_000_000_000n }),
+    // Feeds the EIP-1559 path in `fetchFastFees`. baseFee 0.5 gwei (gasUsed
+    // == target ⇒ pendingBase = baseFee), so bufferedBase = 1 gwei. Empty
+    // feeHistory falls back to the chain's priority floor.
+    getBlock: vi.fn().mockResolvedValue({
+      baseFeePerGas: 500_000_000n,
+      gasUsed: 15_000_000n,
+      gasLimit: 30_000_000n,
+    }),
+    getFeeHistory: vi.fn().mockResolvedValue({ reward: [] }),
+    getGasPrice: vi.fn().mockResolvedValue(500_000_000n),
+    // Simulation reverts ⇒ buildStepGasEstimate falls back to GAS_BUDGETS.
+    estimateGas: vi.fn().mockRejectedValue(new Error("revert")),
     readContract: vi.fn().mockResolvedValue(2n ** 128n),
     getCode: vi.fn().mockResolvedValue("0x"),
   })),
