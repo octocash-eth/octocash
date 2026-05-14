@@ -10,8 +10,9 @@ import {
   InsufficientNativeForGasError,
   type OperationType,
 } from "./gas-estimation";
-import { executeOdosSwap, getSwapQuote } from "./odos";
-import { prepareSendCalls } from "./send-calls";
+import { deriveSwapOutputAmount, executeOdosSwap, getSwapQuote } from "./odos";
+import { getPublicClient } from "./public-client";
+import { prepareSendCalls, SendCallsError } from "./send-calls";
 import { getTokenBalance } from "./tokens";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
 
@@ -174,6 +175,31 @@ export async function* executeConsolidationPlan(
     // Yield state when starting step execution
     yield structuredClone(workingState);
 
+    // Verify-before-retry: if a prior attempt left a tx hash on this step
+    // (e.g. log parsing threw after a successful on-chain swap, or
+    // waitForReceipt failed after broadcast), check the chain before
+    // re-broadcasting. If the tx actually succeeded, reconcile in place
+    // instead of double-spending the input.
+    if (executingStep.transactionHash) {
+      const reconciled = await tryReconcileFromChain(executingStep, workingState);
+      if (reconciled) {
+        workingState.results = { ...workingState.results, [executingStep.id]: reconciled };
+        workingState.plan = [...workingState.plan];
+        workingState.plan[i] = {
+          ...executingStep,
+          status: "success",
+          transactionHash: reconciled.transactionHash,
+          executedAt: Date.now(),
+        };
+        if (reconciled.actualOutput) {
+          await recalculatePlan(workingState, i, reconciled.actualOutput);
+        }
+        workingState.updatedAt = Date.now();
+        yield structuredClone(workingState);
+        continue;
+      }
+    }
+
     try {
       const result = await executeStep(executingStep, workingState, walletClient);
 
@@ -201,12 +227,18 @@ export async function* executeConsolidationPlan(
       // Yield state after successful step execution
       yield structuredClone(workingState);
     } catch (error) {
-      // Failure - create new step reference with failed status
+      // Failure - create new step reference with failed status. If the failure
+      // surfaced after the wallet broadcast a tx (SendCallsError), preserve
+      // the hash so the user has a chain link and the retry path can verify
+      // on-chain status before re-broadcasting (avoids double-spend when the
+      // tx actually succeeded but our parsing / receipt wait failed).
       const txError = createTransactionError(error);
+      const recoveredHash = error instanceof SendCallsError ? error.transactionHash : undefined;
       const failedStep = {
         ...executingStep,
         status: "failed" as const,
         error: txError,
+        transactionHash: recoveredHash ?? executingStep.transactionHash,
       };
       workingState.results = {
         ...workingState.results,
@@ -215,6 +247,7 @@ export async function* executeConsolidationPlan(
           status: "failed",
           chainId: failedStep.chainId,
           error: txError,
+          transactionHash: recoveredHash,
         },
       };
       workingState.plan = [...workingState.plan];
@@ -249,6 +282,82 @@ export async function* executeConsolidationPlan(
     // Yield final state and return
     yield structuredClone(workingState);
     return;
+  }
+}
+
+/**
+ * Best-effort reconciliation for a step that already has an on-chain tx hash
+ * from a prior attempt. Returns a success `StepResult` if the chain confirms
+ * the tx succeeded; returns `null` to fall through to normal execution if the
+ * tx reverted, isn't found, or the RPC fails (we'd rather re-broadcast than
+ * block the user behind a flaky RPC).
+ */
+async function tryReconcileFromChain(step: TransactionStep, state: ConsolidationState): Promise<StepResult | null> {
+  const hash = step.transactionHash;
+  if (!hash) return null;
+
+  try {
+    const client = getPublicClient(step.chainId);
+    const receipt = await client.getTransactionReceipt({ hash: hash as `0x${string}` });
+    if (receipt.status !== "success") return null;
+
+    switch (step.type) {
+      case "swap": {
+        // `receipt.logs ?? []` defends against flaky RPCs that return a
+        // success receipt without the logs array. `deriveSwapOutputAmount`
+        // itself already falls back to the quoted amount when logs are empty.
+        const amount = deriveSwapOutputAmount(receipt.logs ?? [], step.outputToken);
+        return {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          transactionHash: hash,
+          actualOutput: { ...step.outputToken, amount, provenance: step.id },
+        };
+      }
+      case "bridge": {
+        return {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          transactionHash: hash,
+          actualOutput: { ...step.outputToken, provenance: step.id },
+        };
+      }
+      case "claim": {
+        const attestations = state.metadata?.attestations;
+        if (!attestations || attestations.length === 0) return null;
+        const amount = attestations.reduce(
+          (sum, a) =>
+            sum +
+            BigInt(a.decodedMessage.decodedMessageBody.amount) -
+            BigInt(a.decodedMessage.decodedMessageBody.feeExecuted),
+          0n,
+        );
+        return {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          transactionHash: hash,
+          actualOutput: { ...step.outputToken, amount, provenance: step.id },
+        };
+      }
+      case "transfer": {
+        const amount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+        return {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          transactionHash: hash,
+          actualOutput: { ...step.outputToken, amount, provenance: step.id },
+        };
+      }
+      default:
+        return null;
+    }
+  } catch (error) {
+    console.warn("[execution] reconcile-from-chain failed; falling through to normal execution", error);
+    return null;
   }
 }
 

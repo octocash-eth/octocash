@@ -1,7 +1,7 @@
 import type { Account, Address, Chain, Hex, HttpTransport, WalletClient } from "viem";
 import type { WaitForTransactionReceiptReturnType } from "viem/actions";
 import { beforeEach, describe, expect, type Mock, test, vi } from "vitest";
-import { prepareSendCalls, switchChain } from "./send-calls";
+import { prepareSendCalls, SendCallsError, switchChain } from "./send-calls";
 
 // Mock the estimateGas and getTransactionCount functions
 vi.mock("viem/actions", async () => {
@@ -659,6 +659,54 @@ describe("sendCalls", () => {
           ).rejects.toThrow("user rejected");
 
           expect(mockClient.sendTransaction).toHaveBeenCalledTimes(1);
+        });
+
+        test("throws SendCallsError carrying the last broadcast tx hash when waitForReceipt fails", async () => {
+          // Simulates the real-world scenario where the wallet successfully
+          // broadcasts the swap (we get a hash back) but the RPC poll for the
+          // receipt errors out. The caller MUST be able to recover the hash
+          // so the verify-before-retry path can reconcile against the chain.
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xbroadcasted");
+          mockWaitForReceipt.mockRejectedValueOnce(new Error("RPC poll timed out"));
+
+          let caught: unknown;
+          try {
+            await prepareSendCalls(mockClient, mockWaitForReceipt)(
+              "test",
+              1,
+              "0x0000000000000000000000000000000000000000",
+              [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+              "atomic-steps",
+            );
+          } catch (e) {
+            caught = e;
+          }
+
+          expect(caught).toBeInstanceOf(SendCallsError);
+          expect((caught as SendCallsError).transactionHash).toBe("0xbroadcasted");
+          expect((caught as SendCallsError).cause).toBeInstanceOf(Error);
+        });
+
+        test("throws SendCallsError with hash when receipt status is reverted", async () => {
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xreverted");
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("reverted"));
+
+          let caught: unknown;
+          try {
+            await prepareSendCalls(mockClient, mockWaitForReceipt)(
+              "test",
+              1,
+              "0x0000000000000000000000000000000000000000",
+              [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+              "atomic-steps",
+            );
+          } catch (e) {
+            caught = e;
+          }
+
+          expect(caught).toBeInstanceOf(SendCallsError);
+          expect((caught as SendCallsError).transactionHash).toBe("0xreverted");
+          expect((caught as SendCallsError).message).toContain("reverted");
         });
       });
 

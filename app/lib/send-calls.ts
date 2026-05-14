@@ -5,6 +5,24 @@ import { chains } from "~/data/supported-chains";
 import { fetchFastFees } from "./gas-estimation";
 
 /**
+ * Thrown when a `sendCalls` invocation fails after a transaction has been
+ * broadcast. Carries the last attempted on-chain tx hash so callers can
+ * reconcile against the chain (verify-before-retry) instead of blindly
+ * re-broadcasting and risking a double-spend.
+ *
+ * `cause` preserves the original error so message-based detection in
+ * `createTransactionError` keeps working.
+ */
+export class SendCallsError extends Error {
+  override name = "SendCallsError" as const;
+  transactionHash?: string;
+  constructor(message: string, opts: { transactionHash?: string; cause?: unknown } = {}) {
+    super(message, { cause: opts.cause });
+    this.transactionHash = opts.transactionHash;
+  }
+}
+
+/**
  * Detects "nonce too low" errors thrown by the wallet/RPC.
  * Walks viem's error cause chain so wrapped errors (TransactionExecutionError ->
  * RpcRequestError -> NonceTooLowError) are correctly recognized.
@@ -214,14 +232,18 @@ export const prepareSendCalls = (
           } else {
             // Transaction reverted
             if (!continueOnFailure) {
-              throw new Error(`${txId} step ${i} reverted`);
+              throw new SendCallsError(`${txId} step ${i} reverted`, { transactionHash: lastTx });
             }
             allLogs.push([]);
           }
         } catch (error) {
           // Transaction failed
           if (!continueOnFailure) {
-            throw error;
+            if (error instanceof SendCallsError) throw error;
+            throw new SendCallsError(error instanceof Error ? error.message : String(error), {
+              transactionHash: lastTx,
+              cause: error,
+            });
           }
           allLogs.push([]);
         }
@@ -255,23 +277,32 @@ export const prepareSendCalls = (
       });
 
       // Estimate gas and send transaction to Multicall3
-      const hash = await estimateAndSendTransaction(client, {
-        account: from,
-        to: MULTICALL3_ADDRESS,
-        data: callData,
-        chain,
-      });
+      let multicallHash: Hex | undefined;
+      try {
+        multicallHash = await estimateAndSendTransaction(client, {
+          account: from,
+          to: MULTICALL3_ADDRESS,
+          data: callData,
+          chain,
+        });
 
-      // Wait for transaction receipt
-      const receipt = await waitForReceipt(client, { hash });
+        // Wait for transaction receipt
+        const receipt = await waitForReceipt(client, { hash: multicallHash });
 
-      if (receipt.status !== "success") {
-        throw new Error(`${txId} transaction reverted`);
+        if (receipt.status !== "success") {
+          throw new SendCallsError(`${txId} transaction reverted`, { transactionHash: multicallHash });
+        }
+
+        // Transaction succeeded (even if some/all calls failed internally)
+        const logs = (receipt.logs ?? []) as { address: Address; data: Hex; topics: Hex[] }[];
+        return [multicallHash, [logs]];
+      } catch (error) {
+        if (error instanceof SendCallsError) throw error;
+        throw new SendCallsError(error instanceof Error ? error.message : String(error), {
+          transactionHash: multicallHash,
+          cause: error,
+        });
       }
-
-      // Transaction succeeded (even if some/all calls failed internally)
-      const logs = (receipt.logs ?? []) as { address: Address; data: Hex; topics: Hex[] }[];
-      return [hash, [logs]];
     }
 
     // Batch modes (using sendCalls)
@@ -287,13 +318,13 @@ export const prepareSendCalls = (
     // In atomic-batch mode, throw on any failure
     if (mode === "atomic-batch") {
       if (status.status !== "success" || !status.receipts || !tx) {
-        throw new Error(`${txId} transaction reverted`);
+        throw new SendCallsError(`${txId} transaction reverted`, { transactionHash: tx });
       }
     } else {
       // In non-atomic-batch mode, only throw if we have no receipts at all
       // Allow partial success - some calls may have succeeded
       if (!status.receipts || status.receipts.length === 0 || !tx) {
-        throw new Error(`${txId} transaction failed with no receipts`);
+        throw new SendCallsError(`${txId} transaction failed with no receipts`, { transactionHash: tx });
       }
     }
 

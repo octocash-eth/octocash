@@ -4,9 +4,27 @@ import { consumeGenerator, makeState, makeStep, makeToken, WALLET } from "../../
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
 
 // Mock dependencies BEFORE imports
-vi.mock("./odos");
+// Keep `deriveSwapOutputAmount` real so the verify-before-retry reconcile path
+// computes the actual fallback amount instead of an auto-mock undefined.
+vi.mock("./odos", async () => {
+  const actual = await vi.importActual<typeof import("./odos")>("./odos");
+  return {
+    ...actual,
+    executeOdosSwap: vi.fn(),
+    getSwapQuote: vi.fn(),
+    buildOdosCalls: vi.fn(),
+  };
+});
 vi.mock("./cctp");
-vi.mock("./send-calls");
+// Keep SendCallsError real so `instanceof` checks in the executor work;
+// only mock the runtime entrypoints.
+vi.mock("./send-calls", async () => {
+  const actual = await vi.importActual<typeof import("./send-calls")>("./send-calls");
+  return {
+    ...actual,
+    prepareSendCalls: vi.fn(),
+  };
+});
 
 // `validateInputBalances` reads on-chain balances via `getTokenBalance` in
 // `./tokens`, which itself dispatches to `getPublicClient(...).readContract`
@@ -146,6 +164,127 @@ describe("executeConsolidationPlan", () => {
     expect(finalState.status).toBe("paused");
     expect(finalState.results["step-1"].status).toBe("success");
     expect(finalState.results["step-2"].status).toBe("failed");
+  });
+
+  test("preserves transactionHash on failed step when error is a SendCallsError", async () => {
+    // Replicates the real-world bug: the swap broadcast succeeded but the
+    // executor (e.g. log parsing in executeOdosSwap) threw afterwards.
+    // We need the failed StepResult and the failed step to keep the hash
+    // so the UI shows a tx link and the verify-before-retry path can run.
+    const { SendCallsError } = await import("./send-calls");
+
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+    };
+
+    mockState.plan = [swapStep];
+
+    vi.mocked(executeOdosSwap).mockRejectedValueOnce(
+      new SendCallsError("No output token amount found", { transactionHash: "0xpostbroadcast" }),
+    );
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.results["swap-1"].status).toBe("failed");
+    expect(finalState.results["swap-1"].transactionHash).toBe("0xpostbroadcast");
+    expect(finalState.plan[0].transactionHash).toBe("0xpostbroadcast");
+  });
+
+  test("reconciles a failed step in place when the chain confirms its prior tx succeeded", async () => {
+    // Simulates a retry of a previously-failed swap that *did* land on-chain.
+    // The verify-before-retry check should mark the step as success using the
+    // existing hash and never re-broadcast (executeOdosSwap must not be called).
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      transactionHash: "0xpreviouslybroadcast",
+    };
+
+    mockState.plan = [swapStep];
+
+    // Public client returns a successful receipt for the stored hash.
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockResolvedValue({ status: "success", logs: [] }),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub for verify-before-retry
+    } as any);
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.results["swap-1"].status).toBe("success");
+    expect(finalState.results["swap-1"].transactionHash).toBe("0xpreviouslybroadcast");
+    // RPC returned empty logs (flaky scenario): we still mark success and fall
+    // back to the quoted output amount rather than re-broadcasting.
+    expect(finalState.results["swap-1"].actualOutput?.amount).toBe(1000000n);
+    expect(executeOdosSwap).not.toHaveBeenCalled();
+  });
+
+  test("reconciles a swap as success even when the receipt has no logs (flaky RPC)", async () => {
+    // Variant of the case above with the receipt's logs field undefined,
+    // not just []. Some RPCs strip logs from receipts under load. The
+    // executor must not crash on `parseEventLogs` and must still treat
+    // the on-chain success as success.
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      transactionHash: "0xnologs",
+    };
+
+    mockState.plan = [swapStep];
+
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockResolvedValue({ status: "success" }), // no `logs` key
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub for verify-before-retry
+    } as any);
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.results["swap-1"].status).toBe("success");
+    expect(finalState.results["swap-1"].transactionHash).toBe("0xnologs");
+    expect(finalState.results["swap-1"].actualOutput?.amount).toBe(1000000n);
+    expect(executeOdosSwap).not.toHaveBeenCalled();
+  });
+
+  test("falls through to normal execution when stored hash is reverted on-chain", async () => {
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      transactionHash: "0xdeadtxhash",
+    };
+
+    mockState.plan = [swapStep];
+
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockResolvedValue({ status: "reverted", logs: [] }),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub for verify-before-retry
+    } as any);
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    // Normal execution path runs: executeOdosSwap is invoked, success with the
+    // mocked default hash 0xswap123.
+    expect(executeOdosSwap).toHaveBeenCalled();
+    expect(finalState.results["swap-1"].status).toBe("success");
+    expect(finalState.results["swap-1"].transactionHash).toBe("0xswap123");
   });
 
   test("continue after failure with skip - should skip dependent steps", async () => {

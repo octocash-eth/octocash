@@ -553,12 +553,80 @@ describe("odos", () => {
       ).rejects.toThrow("Swap destination chain must be the same as the source chain");
     });
 
-    test("throws error when no output amount found in logs", async () => {
+    test("marks swap valid with quoted amount when both Swap and Transfer events are missing (flaky RPC)", async () => {
+      // The tx succeeded on chain (sendCalls returned with a tx hash) but the
+      // receipt's logs came back empty — sometimes RPCs strip logs under load.
+      // We must NOT throw: the swap actually executed; return the most recent
+      // quoted amount so the step is marked success.
       const mockSendCalls = vi.fn(async () => ["0xtxhash" as Hex, [[]]]) as unknown as SendCallsFn;
 
-      await expect(executeOdosSwap([mockTokenUSDC], mockTokenUSDT, mockSendCalls)).rejects.toThrow(
-        "No output token amount found",
-      );
+      const result = await executeOdosSwap([mockTokenUSDC], mockTokenUSDT, mockSendCalls);
+
+      // mockTokenUSDT.amount === 2000000n (the quote pre-call)
+      expect(result.amount).toBe(2000000n);
+      expect(result.transactionHash).toBe("0xtxhash");
+    });
+
+    test("falls back to ERC20 Transfer events when Swap event is missing", async () => {
+      // Simulates the real-world bug: Odos routed through a path that didn't
+      // emit a `Swap`/`SwapMulti` event we recognize, but the user received
+      // the output token via standard ERC20 Transfers.
+      const transferAbi = parseAbi(["event Transfer(address indexed from, address indexed to, uint256 value)"]);
+
+      const transferTopics = encodeEventTopics({
+        abi: transferAbi,
+        eventName: "Transfer",
+        args: { from: "0x000000000000000000000000000000000000dead" as Address, to: mockTokenUSDC.walletAddress },
+      });
+      const transferData = encodeAbiParameters(parseAbiParameters("uint256"), [2950000n]);
+
+      // A second Transfer to the same user (e.g. final hop payout) — should sum.
+      const transferTopics2 = encodeEventTopics({
+        abi: transferAbi,
+        eventName: "Transfer",
+        args: { from: "0x000000000000000000000000000000000000beef" as Address, to: mockTokenUSDC.walletAddress },
+      });
+      const transferData2 = encodeAbiParameters(parseAbiParameters("uint256"), [50000n]);
+
+      // A Transfer for a DIFFERENT token / DIFFERENT recipient — must be ignored.
+      const irrelevantTopics = encodeEventTopics({
+        abi: transferAbi,
+        eventName: "Transfer",
+        args: {
+          from: mockTokenUSDC.walletAddress,
+          to: "0x000000000000000000000000000000000000feed" as Address,
+        },
+      });
+      const irrelevantData = encodeAbiParameters(parseAbiParameters("uint256"), [9_999_999n]);
+
+      const mockSendCalls = vi.fn(async () => [
+        "0xtxhash" as Hex,
+        [
+          [
+            {
+              address: mockTokenUSDT.token,
+              topics: transferTopics as Hex[],
+              data: transferData,
+            } as Log,
+            {
+              address: mockTokenUSDT.token,
+              topics: transferTopics2 as Hex[],
+              data: transferData2,
+            } as Log,
+            {
+              address: mockTokenUSDC.token, // wrong output token -> ignored
+              topics: irrelevantTopics as Hex[],
+              data: irrelevantData,
+            } as Log,
+          ],
+        ],
+      ]) as unknown as SendCallsFn;
+
+      const result = await executeOdosSwap([mockTokenUSDC], mockTokenUSDT, mockSendCalls);
+
+      // 2950000 + 50000 = 3000000 — both Transfers to the user for USDT.
+      expect(result.amount).toBe(3000000n);
+      expect(result.transactionHash).toBe("0xtxhash");
     });
   });
 });

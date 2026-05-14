@@ -3,7 +3,9 @@ import {
   type Call,
   decodeFunctionData,
   encodeFunctionData,
+  erc20Abi,
   type Hex,
+  isAddressEqual,
   type Log,
   parseAbi,
   parseEventLogs,
@@ -219,25 +221,64 @@ export async function executeOdosSwap(
   const [transactionHash, logs] = await sendCalls("swap", chainId, wallet, calls, "atomic-steps");
   const flattenedLogs = logs.flat();
 
+  const amount = deriveSwapOutputAmount(flattenedLogs as Log[], tokenOut);
+
+  return { amount, transactionHash };
+}
+
+/**
+ * Derive the swap's actual output amount from receipt logs.
+ *
+ * Primary path: parse Odos `Swap` / `SwapMulti` events from the V3 router.
+ *
+ * Fallback (matters when Odos routes through a path that doesn't emit those
+ * events, or when the on-chain event signature drifts from our ABI): sum
+ * standard ERC20 `Transfer` events to the user's wallet for the output token.
+ * Multiple transfers to the user (e.g. fee remainder + main payout) naturally
+ * sum to the net amount received.
+ *
+ * Last resort: if neither path yields a positive amount, return the most
+ * recent quoted amount (`tokenOut.amount`) rather than throw — the on-chain
+ * swap has already executed by the time we're here, and reporting failure
+ * for a successful tx is worse than a slightly stale `actualOutput`.
+ *
+ * Native-token output is not handled here (Odos returns wrapped tokens for
+ * native swaps in current routes); a balance-delta backstop via
+ * `getTokenBalance` would be the natural extension if that changes.
+ */
+export function deriveSwapOutputAmount(logs: Log[], tokenOut: TokenAmount): bigint {
   const singleSwapLogs = parseEventLogs({
     abi: odosRouterV3Abi,
     eventName: "Swap",
-    logs: flattenedLogs as Log[],
+    logs,
   });
-
   const multiSwapLogs = parseEventLogs({
     abi: odosRouterV3Abi,
     eventName: "SwapMulti",
-    logs: flattenedLogs as Log[],
+    logs,
   });
 
-  const amount = singleSwapLogs[0]?.args?.amountOut || multiSwapLogs[0]?.args?.amountsOut?.[0] || 0n;
+  const primary = singleSwapLogs[0]?.args?.amountOut ?? multiSwapLogs[0]?.args?.amountsOut?.[0];
+  if (primary !== undefined && primary > 0n) return primary;
 
-  if (!amount) {
-    throw new Error("No output token amount found");
+  const transfers = parseEventLogs({
+    abi: erc20Abi,
+    eventName: "Transfer",
+    logs,
+  });
+
+  let summed = 0n;
+  for (const log of transfers) {
+    if (!isAddressEqual(log.address, tokenOut.token)) continue;
+    if (!isAddressEqual(log.args.to, tokenOut.walletAddress)) continue;
+    summed += log.args.value;
   }
+  if (summed > 0n) return summed;
 
-  return { amount, transactionHash };
+  console.warn(
+    "[odos] No Swap/SwapMulti event and no matching ERC20 Transfer found in receipt; falling back to quoted amount.",
+  );
+  return tokenOut.amount;
 }
 
 /**
