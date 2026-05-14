@@ -231,7 +231,7 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
   }
 }
 
-function GasCostTooltip({ gas, chainId }: { gas: StepGasEstimate; chainId: number }) {
+function GasCostDisplay({ gas, chainId }: { gas: StepGasEstimate; chainId: number }) {
   const formatFiat = useFormatFiat();
   const { price: nativePrice } = usePrice(chainId, zeroAddress);
   const nativeAmount = Number.parseFloat(formatUnits(gas.gasCostWei, 18));
@@ -239,25 +239,25 @@ function GasCostTooltip({ gas, chainId }: { gas: StepGasEstimate; chainId: numbe
   const gasCostUsd = nativePrice !== undefined ? nativeAmount * nativePrice : undefined;
   const hasUsd = gasCostUsd !== undefined && gasCostUsd > 0;
 
-  const ariaLabel = hasUsd
-    ? `Estimated gas: ${nativeAmount.toFixed(6)} ${gas.nativeSymbol} (~${formatFiat(gasCostUsd)})`
-    : `Estimated gas: ${nativeAmount.toFixed(6)} ${gas.nativeSymbol}`;
-
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex items-center cursor-help" aria-label={ariaLabel} role="img">
-          <Fuel className="w-3.5 h-3.5 text-muted-foreground" />
-        </span>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="space-y-1">
-        <div className="font-medium">
-          ~{nativeAmount.toFixed(6)} {gas.nativeSymbol}
-        </div>
-        <div className="text-muted-foreground">{gweiPrice.toFixed(2)} gwei</div>
-        {hasUsd && <div className="text-muted-foreground">~{formatFiat(gasCostUsd)}</div>}
-      </TooltipContent>
-    </Tooltip>
+    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className="inline-flex items-center cursor-help"
+            aria-label={`Gas price ${gweiPrice.toFixed(2)} gwei`}
+            role="img"
+          >
+            <Fuel className="w-3.5 h-3.5" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top">{gweiPrice.toFixed(2)} gwei</TooltipContent>
+      </Tooltip>
+      <span>
+        ~{nativeAmount.toFixed(6)} {gas.nativeSymbol}
+        {hasUsd && <span className="text-muted-foreground/80"> ({formatFiat(gasCostUsd)})</span>}
+      </span>
+    </span>
   );
 }
 
@@ -294,7 +294,9 @@ export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
 
       {/* Right side: Gas cost + Transaction link or status */}
       <div className="flex items-center gap-2 shrink-0 ml-4">
-        {step.estimatedGas && <GasCostTooltip gas={step.estimatedGas} chainId={step.chainId} />}
+        {step.estimatedGas && !isFailed && !(isSuccess && result?.transactionHash) && (
+          <GasCostDisplay gas={step.estimatedGas} chainId={step.chainId} />
+        )}
         {isSuccess && result?.transactionHash && (
           <a
             href={getExplorerUrl(step.chainId, result.transactionHash)}
