@@ -22,6 +22,9 @@ import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } fro
  * the user knows exactly which token / wallet is short rather than seeing a
  * cryptic on-chain revert.
  */
+/** Quotes younger than this are reused; older ones get a fresh Odos round-trip. */
+const SWAP_QUOTE_STALE_MS = 10_000;
+
 export class InsufficientInputBalanceError extends Error {
   override name = "InsufficientInputBalanceError" as const;
   chainId: number;
@@ -148,9 +151,12 @@ export async function* executeConsolidationPlan(
       continue;
     }
 
-    // Always refresh swap quote immediately before execution so the UI shows
-    // the freshest amount (and any delta vs the previously displayed quote).
-    if (step.type === "swap") {
+    // Refresh swap quote immediately before execution so the UI shows the
+    // freshest amount (and any delta vs the previously displayed quote).
+    // Skip when the quote was fetched within `SWAP_QUOTE_STALE_MS` to avoid
+    // an extra Odos round-trip on rapid retry/skip cycles — Odos quotes don't
+    // meaningfully drift on that timescale.
+    if (step.type === "swap" && (step.quotedAt === undefined || Date.now() - step.quotedAt >= SWAP_QUOTE_STALE_MS)) {
       const refreshedStep = await refreshSwapQuote(step);
       if (refreshedStep.outputToken.amount !== step.outputToken.amount) {
         // Quote changed - update plan and recalculate downstream steps
