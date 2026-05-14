@@ -50,13 +50,14 @@ export type SourceToken = TokenAmount;
 export type DestinationToken = Omit<TokenAmount, "amount">;
 
 /**
- * Estimated gas cost for a single transaction step
+ * Estimated gas cost for a single transaction step.
+ * Cost is tracked in native wei only; fiat conversion happens at the UI layer
+ * via the shared token-price provider.
  */
 export interface StepGasEstimate {
   gasUnits: bigint;
   maxFeePerGas: bigint;
   gasCostWei: bigint;
-  gasCostUsd: number;
   nativeSymbol: string;
 }
 

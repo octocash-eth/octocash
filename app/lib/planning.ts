@@ -941,7 +941,7 @@ export async function planConsolidation(
       type: s.type,
       chainId: s.chainId,
       estimatedGas: s.estimatedGas
-        ? { gasCostWei: s.estimatedGas.gasCostWei.toString(), gasCostUsd: s.estimatedGas.gasCostUsd }
+        ? { gasCostWei: s.estimatedGas.gasCostWei.toString(), nativeSymbol: s.estimatedGas.nativeSymbol }
         : null,
       inputTokens: s.inputTokens.map((t) => ({
         symbol: t.symbol,

@@ -153,7 +153,6 @@ describe("PlanCard", () => {
         gasUnits: 500000n,
         maxFeePerGas: 20000000000n,
         gasCostWei: 13000000000000000n, // ~0.013 ETH
-        gasCostUsd: 26,
         nativeSymbol: "ETH",
       },
     };

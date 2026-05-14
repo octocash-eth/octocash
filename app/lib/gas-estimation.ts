@@ -4,6 +4,11 @@ import { chains } from "~/data/supported-chains";
 import { getPublicClient, retryOnRateLimit } from "./public-client";
 import type { TransactionStep } from "./types";
 
+// Note: native-token USD pricing is intentionally not handled here. Gas costs are
+// tracked in native wei; fiat conversion belongs at the UI layer (see
+// `GasCostTooltip` in `plan-card.tsx`, which reads native price via
+// `usePrice(chainId, zeroAddress)` and formats with `useFormatFiat`).
+
 export type OperationType =
   | "erc20-approval"
   | "swap"
@@ -222,24 +227,17 @@ export function estimateDestinationChainOperations(
 export function buildStepGasEstimate(
   operations: OperationType[],
   maxFeePerGas: bigint,
-  nativeTokenPriceUsd: number,
   nativeSymbol: string,
-  nativeDecimals = 18,
 ): {
   gasUnits: bigint;
   maxFeePerGas: bigint;
   gasCostWei: bigint;
-  gasCostUsd: number;
   nativeSymbol: string;
 } {
   const gasUnits = operations.reduce((sum, op) => sum + GAS_BUDGETS[op], 0n);
   const gasCostWei = (gasUnits * maxFeePerGas * SAFETY_BUFFER_PCT) / 100n;
-  // Use formatUnits to avoid Number() precision loss for wei values that exceed
-  // MAX_SAFE_INTEGER (anything > ~0.009 ETH at 18 decimals).
-  const gasCostNative = Number.parseFloat(formatUnits(gasCostWei, nativeDecimals));
-  const gasCostUsd = gasCostNative * nativeTokenPriceUsd;
 
-  return { gasUnits, maxFeePerGas, gasCostWei, gasCostUsd, nativeSymbol };
+  return { gasUnits, maxFeePerGas, gasCostWei, nativeSymbol };
 }
 
 /**
@@ -251,34 +249,11 @@ export function getNativeSymbol(chainId: number): string {
 }
 
 /**
- * Fetches native token USD price from the Odos pricing API.
- * Falls back to 0 if the API call fails.
- */
-export async function fetchNativeTokenPriceUsd(chainId: number): Promise<number> {
-  try {
-    const url = new URL(`https://api.odos.xyz/pricing/token/${chainId}`);
-    url.searchParams.append("token_addresses", zeroAddress);
-
-    const response = await fetch(url.toString(), {
-      headers: { accept: "application/json" },
-    });
-
-    if (!response.ok) return 0;
-
-    const data = (await response.json()) as { tokenPrices: Record<string, number> };
-    return data.tokenPrices[zeroAddress] ?? data.tokenPrices[zeroAddress.toLowerCase()] ?? 0;
-  } catch {
-    return 0;
-  }
-}
-
-/**
  * Pre-computed gas context for a planning session.
  * Fetched once per chain and reused across all steps.
  */
 export interface GasContext {
   maxFeePerGas: Record<number, bigint>;
-  nativeTokenPriceUsd: Record<number, number>;
   nativeSymbol: Record<number, string>;
 }
 
@@ -313,19 +288,16 @@ export function formatGasCostNative(wei: bigint, decimals = 18): string {
 export async function buildGasContext(chainIds: number[]): Promise<GasContext> {
   const unique = [...new Set(chainIds)];
   const maxFeePerGas: Record<number, bigint> = {};
-  const nativeTokenPriceUsd: Record<number, number> = {};
   const nativeSymbol: Record<number, string> = {};
 
   await Promise.all(
     unique.map(async (chainId) => {
-      const [fee, price] = await Promise.all([fetchMaxFeePerGas(chainId), fetchNativeTokenPriceUsd(chainId)]);
-      maxFeePerGas[chainId] = fee;
-      nativeTokenPriceUsd[chainId] = price;
+      maxFeePerGas[chainId] = await fetchMaxFeePerGas(chainId);
       nativeSymbol[chainId] = getNativeSymbol(chainId);
     }),
   );
 
-  return { maxFeePerGas, nativeTokenPriceUsd, nativeSymbol };
+  return { maxFeePerGas, nativeSymbol };
 }
 
 /**
@@ -338,10 +310,9 @@ export function attachGasEstimates(steps: TransactionStep[], gasCtx: GasContext)
     const ops = getStepOperations(step);
     const chainId = step.chainId;
     const fee = gasCtx.maxFeePerGas[chainId] ?? 0n;
-    const price = gasCtx.nativeTokenPriceUsd[chainId] ?? 0;
     const symbol = gasCtx.nativeSymbol[chainId] ?? "ETH";
 
-    step.estimatedGas = buildStepGasEstimate(ops, fee, price, symbol);
+    step.estimatedGas = buildStepGasEstimate(ops, fee, symbol);
   }
 }
 

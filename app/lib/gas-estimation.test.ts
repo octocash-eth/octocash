@@ -1,6 +1,6 @@
 import type { Address } from "viem";
 import { zeroAddress } from "viem";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 vi.mock("./public-client", () => ({
   getPublicClient: vi.fn().mockReturnValue({
@@ -26,7 +26,6 @@ import {
   estimateChainGasCosts,
   estimateDestinationChainOperations,
   estimateOperationsForChainWallet,
-  fetchNativeTokenPriceUsd,
   formatGasCostNative,
   getNativeSymbol,
   type OperationType,
@@ -128,14 +127,13 @@ describe("gas-estimation", () => {
   });
 
   describe("buildStepGasEstimate", () => {
-    test("computes gas cost in wei and USD", () => {
-      const estimate = buildStepGasEstimate(["swap"], 20000000000n, 2000, "ETH");
+    test("computes gas cost in wei", () => {
+      const estimate = buildStepGasEstimate(["swap"], 20000000000n, "ETH");
 
       // 500_000 units * 20gwei * 130 / 100 = 13_000_000_000_000_000 wei
       expect(estimate.gasUnits).toBe(500000n);
       expect(estimate.gasCostWei).toBe(13000000000000000n);
       expect(estimate.nativeSymbol).toBe("ETH");
-      expect(estimate.gasCostUsd).toBeGreaterThan(0);
     });
   });
 
@@ -180,79 +178,23 @@ describe("gas-estimation", () => {
     });
   });
 
-  describe("buildStepGasEstimate USD precision", () => {
-    test("computes USD without losing precision for large gas costs", () => {
-      // 10M gas units * 100 gwei = 1 ETH-equivalent (10^18 wei) * 1.3 buffer = 1.3 ETH
+  describe("buildStepGasEstimate precision", () => {
+    test("preserves precision for large gas costs", () => {
+      // 16M gas units * 100 gwei * 1.3 buffer = 2.08 ETH worth of wei
       const ops = Array<OperationType>(20).fill("swap-multi"); // 16M units
-      const estimate = buildStepGasEstimate(ops, 100_000_000_000n, 2000, "ETH");
-      // 16_000_000 * 100 gwei = 1.6 ETH * 1.3 = 2.08 ETH * $2000 = $4160
-      expect(estimate.gasCostUsd).toBeCloseTo(4160, 0);
-    });
-  });
-
-  describe("fetchNativeTokenPriceUsd", () => {
-    const originalFetch = global.fetch;
-
-    afterEach(() => {
-      global.fetch = originalFetch;
-    });
-
-    test("returns price for valid response", async () => {
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            tokenPrices: { [zeroAddress]: 2500.5 },
-          }),
-      }) as unknown as typeof fetch;
-
-      const price = await fetchNativeTokenPriceUsd(1);
-      expect(price).toBe(2500.5);
-    });
-
-    test("returns 0 when response is not ok", async () => {
-      global.fetch = vi
-        .fn()
-        .mockResolvedValue({ ok: false, json: () => Promise.resolve({}) }) as unknown as typeof fetch;
-      expect(await fetchNativeTokenPriceUsd(1)).toBe(0);
-    });
-
-    test("returns 0 when fetch throws", async () => {
-      global.fetch = vi.fn().mockRejectedValue(new Error("network down")) as unknown as typeof fetch;
-      expect(await fetchNativeTokenPriceUsd(1)).toBe(0);
-    });
-
-    test("handles missing token entry gracefully", async () => {
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ tokenPrices: {} }),
-      }) as unknown as typeof fetch;
-      expect(await fetchNativeTokenPriceUsd(1)).toBe(0);
+      const estimate = buildStepGasEstimate(ops, 100_000_000_000n, "ETH");
+      // 16_000_000 * 100 gwei = 1.6 ETH * 1.3 = 2.08 ETH = 2.08e18 wei
+      expect(estimate.gasCostWei).toBe(2_080_000_000_000_000_000n);
     });
   });
 
   describe("buildGasContext", () => {
-    const originalFetch = global.fetch;
-
-    beforeEach(() => {
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ tokenPrices: { [zeroAddress]: 1000 } }),
-      }) as unknown as typeof fetch;
-    });
-
-    afterEach(() => {
-      global.fetch = originalFetch;
-    });
-
-    test("populates fees, prices, and symbols for each chain", async () => {
+    test("populates fees and symbols for each chain", async () => {
       const ctx = await buildGasContext([1, 137]);
 
       // mocked 20gwei * 2.5 fast multiplier = 50gwei
       expect(ctx.maxFeePerGas[1]).toBe(50000000000n);
       expect(ctx.maxFeePerGas[137]).toBe(50000000000n);
-      expect(ctx.nativeTokenPriceUsd[1]).toBe(1000);
-      expect(ctx.nativeTokenPriceUsd[137]).toBe(1000);
       expect(ctx.nativeSymbol[1]).toBe("ETH");
       expect(ctx.nativeSymbol[137]).toBe("POL");
     });
@@ -265,7 +207,6 @@ describe("gas-estimation", () => {
     test("handles empty chain list", async () => {
       const ctx = await buildGasContext([]);
       expect(ctx.maxFeePerGas).toEqual({});
-      expect(ctx.nativeTokenPriceUsd).toEqual({});
       expect(ctx.nativeSymbol).toEqual({});
     });
   });
@@ -287,7 +228,6 @@ describe("gas-estimation", () => {
 
     const ctx = {
       maxFeePerGas: { 1: 20_000_000_000n },
-      nativeTokenPriceUsd: { 1: 2000 },
       nativeSymbol: { 1: "ETH" },
     };
 

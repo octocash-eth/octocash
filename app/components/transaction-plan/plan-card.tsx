@@ -1,6 +1,6 @@
 import { Check, Circle, ExternalLink, Fuel, Loader2, X } from "lucide-react";
 import type { Address } from "viem";
-import { formatUnits } from "viem";
+import { formatUnits, zeroAddress } from "viem";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
 import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "~/components/token";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
@@ -231,14 +231,16 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
   }
 }
 
-function GasCostTooltip({ gas }: { gas: StepGasEstimate }) {
+function GasCostTooltip({ gas, chainId }: { gas: StepGasEstimate; chainId: number }) {
   const formatFiat = useFormatFiat();
+  const { price: nativePrice } = usePrice(chainId, zeroAddress);
   const nativeAmount = Number.parseFloat(formatUnits(gas.gasCostWei, 18));
   const gweiPrice = Number.parseFloat(formatUnits(gas.maxFeePerGas, 9));
-  const hasUsd = gas.gasCostUsd > 0;
+  const gasCostUsd = nativePrice !== undefined ? nativeAmount * nativePrice : undefined;
+  const hasUsd = gasCostUsd !== undefined && gasCostUsd > 0;
 
   const ariaLabel = hasUsd
-    ? `Estimated gas: ${nativeAmount.toFixed(6)} ${gas.nativeSymbol} (~${formatFiat(gas.gasCostUsd)})`
+    ? `Estimated gas: ${nativeAmount.toFixed(6)} ${gas.nativeSymbol} (~${formatFiat(gasCostUsd)})`
     : `Estimated gas: ${nativeAmount.toFixed(6)} ${gas.nativeSymbol}`;
 
   return (
@@ -253,7 +255,7 @@ function GasCostTooltip({ gas }: { gas: StepGasEstimate }) {
           ~{nativeAmount.toFixed(6)} {gas.nativeSymbol}
         </div>
         <div className="text-muted-foreground">{gweiPrice.toFixed(2)} gwei</div>
-        {hasUsd && <div className="text-muted-foreground">~{formatFiat(gas.gasCostUsd)}</div>}
+        {hasUsd && <div className="text-muted-foreground">~{formatFiat(gasCostUsd)}</div>}
       </TooltipContent>
     </Tooltip>
   );
@@ -292,7 +294,7 @@ export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
 
       {/* Right side: Gas cost + Transaction link or status */}
       <div className="flex items-center gap-2 shrink-0 ml-4">
-        {step.estimatedGas && <GasCostTooltip gas={step.estimatedGas} />}
+        {step.estimatedGas && <GasCostTooltip gas={step.estimatedGas} chainId={step.chainId} />}
         {isSuccess && result?.transactionHash && (
           <a
             href={getExplorerUrl(step.chainId, result.transactionHash)}

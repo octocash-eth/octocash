@@ -12,7 +12,6 @@ vi.mock("./gas", () => ({
 vi.mock("./gas-estimation", () => ({
   buildGasContext: vi.fn().mockResolvedValue({
     maxFeePerGas: { 1: 20000000000n, 10: 1000000n, 137: 50000000000n, 42161: 100000000n },
-    nativeTokenPriceUsd: { 1: 2000, 10: 2000, 137: 0.5, 42161: 2000 },
     nativeSymbol: { 1: "ETH", 10: "ETH", 137: "POL", 42161: "ETH" },
   }),
   estimateChainGasCosts: vi.fn().mockResolvedValue({
