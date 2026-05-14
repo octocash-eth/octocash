@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { planConsolidation } from "~/lib/planning";
 import type { ConsolidationState, DestinationToken, SourceToken } from "~/lib/types";
 import { useConnectedAddresses } from "./use-connected-addresses";
@@ -62,10 +62,20 @@ export function useConsolidationPlanning({
 
   const generatePlan = useCallback(() => refetch(), [refetch]);
 
+  // Track how many times planning has failed in a row. Resets to 0 on success.
+  // The countdown UI keys off this so a fresh failure restarts the timer even
+  // when TanStack reuses the same Error instance across renders.
+  const [attemptCount, setAttemptCount] = useState(0);
+  useEffect(() => {
+    if (error) setAttemptCount((n) => n + 1);
+    else if (plan) setAttemptCount(0);
+  }, [error, plan]);
+
   return {
     state,
     isPlanning: isLoading,
     planError: error instanceof Error ? error.message : "",
     generatePlan,
+    attemptCount,
   };
 }

@@ -1,6 +1,8 @@
 import * as React from "react";
 import { useConsolidationExecution } from "~/hooks/use-consolidation-execution";
 import { useConsolidationPlanning } from "~/hooks/use-consolidation-planning";
+import { createTransactionError } from "~/lib/errors";
+import { ERROR_CODES } from "~/lib/types";
 import { ExecutionActions } from "./actions/execution-actions";
 import { PausedActions } from "./actions/paused-actions";
 import { ExecutionStatusAlert } from "./execution-status-alert";
@@ -27,6 +29,8 @@ export function TransactionPlanExecutor({
     state: plannedState,
     isPlanning,
     planError,
+    generatePlan,
+    attemptCount,
   } = useConsolidationPlanning({
     sourceTokens,
     destinationToken,
@@ -49,9 +53,13 @@ export function TransactionPlanExecutor({
     return <PlanningLoader />;
   }
 
-  // Show error if planning failed
+  // Show error if planning failed. Auto-retry only for transient external API
+  // failures (Odos 5xx) — other errors render statically so we never loop on
+  // unrecoverable conditions like UnsupportedRouteError.
   if (planError) {
-    return <PlanError error={planError} />;
+    const classified = createTransactionError(new Error(planError));
+    const autoRetry = classified.code === ERROR_CODES.EXTERNAL_API_ERROR;
+    return <PlanError error={planError} onRetry={generatePlan} autoRetry={autoRetry} attemptNumber={attemptCount} />;
   }
 
   // Wait for state to be ready
