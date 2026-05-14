@@ -1,5 +1,6 @@
 import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
 import { type Call, encodeFunctionData, getAddress, isAddressEqual, parseAbi, zeroAddress } from "viem";
+import { tokenMessenger } from "~/data/cctp-contracts";
 import { chains, transports } from "~/data/supported-chains";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import { createTransactionError } from "./errors";
@@ -450,6 +451,20 @@ async function tryReconcileFromChain(
       };
     }
     case "bridge": {
+      // Defensive discriminator: a bridge step's `transactionHash` should
+      // only ever point to a CCTP burn (the call routed to TokenMessenger),
+      // never to the preceding USDC approve. The send-calls per-iteration
+      // scoping fix ensures this in normal flow, but a stale hash could
+      // still arrive here from older persisted state. If the receipt's `to`
+      // isn't the TokenMessenger, treat the prior tx as unrelated to this
+      // step — return `reverted` so the executor clears retryHints (the
+      // leaked approve's nonce was already consumed on chain) and falls
+      // through to a fresh burn broadcast.
+      const expectedTo = tokenMessenger[step.chainId];
+      const receiptTo = (receipt as { to?: Address | null }).to;
+      if (expectedTo && receiptTo && !isAddressEqual(receiptTo, expectedTo)) {
+        return { kind: "reverted" };
+      }
       return {
         kind: "success",
         result: {

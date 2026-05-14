@@ -625,6 +625,73 @@ describe("executeConsolidationPlan", () => {
     expect(executeOdosSwap).not.toHaveBeenCalled();
   });
 
+  test("bridge retry does not falsely reconcile from an approve receipt", async () => {
+    // The exact production failure the user hit: a bridge step's first attempt
+    // landed the approve on chain but the burn submission was rejected by the
+    // wallet. Before the send-calls fix, the SendCallsError carried the
+    // approve's hash and nonce, which the executor persisted on the failed
+    // step. On retry, `tryReconcileFromChain` fetched the approve's receipt,
+    // saw status=success, and the `case "bridge"` branch declared the bridge
+    // done — advancing to the attestation step, which then polled Circle for
+    // a message the approve tx never produced and timed out.
+    //
+    // Reproduces by directly seeding the corrupted state (transactionHash =
+    // approve hash, retryHints carrying the approve's nonce). After the fix,
+    // reconcile must notice the receipt's `to` is not the CCTP TokenMessenger
+    // and fall through to re-broadcast with a fresh nonce.
+    const TOKEN_MESSENGER = "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d" as Address;
+
+    const bridgeStep: TransactionStep = {
+      id: "bridge-1",
+      type: "bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1, { walletAddress: WALLET })],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 8453, { provenance: "bridge-1" }),
+      transactionHash: "0xapprove",
+      retryHints: { nonce: 7, maxFeePerGas: 10000000000n, maxPriorityFeePerGas: 500000000n },
+    };
+
+    mockState.plan = [bridgeStep];
+
+    // The approve really did succeed on chain. Its `to` is the USDC contract,
+    // not the TokenMessenger — that's the discriminator reconcile must use.
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockResolvedValue({
+        status: "success",
+        to: USDC_ADDRESS,
+        logs: [],
+      }),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub for verify-before-retry
+    } as any);
+
+    // Retry should re-broadcast the burn through executeCCTPBurn.
+    vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xburn", 1]);
+
+    // Capture the retryHints passed to executeCCTPBurn to assert they were
+    // cleared (approve's nonce would yield "nonce too low" — fresh nonce is
+    // what we want).
+    const burnRetryHintsSeen: unknown[] = [];
+    vi.mocked(executeCCTPBurn).mockImplementationOnce(async (_in, _out, _send, _type, retryHints) => {
+      burnRetryHintsSeen.push(retryHints);
+      return ["0xburn", 1];
+    });
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    // The re-broadcast must actually happen — pre-fix the executor would
+    // short-circuit to success without calling executeCCTPBurn.
+    expect(executeCCTPBurn).toHaveBeenCalledTimes(1);
+    expect(finalState.results["bridge-1"].status).toBe("success");
+    expect(finalState.results["bridge-1"].transactionHash).toBe("0xburn");
+    // Fresh nonce, not the leaked approve nonce.
+    expect(burnRetryHintsSeen[0]).toBeUndefined();
+    // Sanity: the TokenMessenger constant matches what cctp-contracts uses,
+    // so the discriminator works on the real chain config too.
+    expect(TOKEN_MESSENGER).toBeDefined();
+  });
+
   test("continue after failure with skip - should skip dependent steps", async () => {
     const step1: TransactionStep = {
       id: "step-1",

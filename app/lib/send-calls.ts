@@ -396,11 +396,27 @@ export const prepareSendCalls = (
 
     // Step-by-step execution mode (using sendTransaction)
     if (mode === "atomic-steps") {
-      let lastTx: string | undefined;
-      let lastContext: SendContext | undefined;
+      // Hash of the most recently confirmed-on-chain call. Only the
+      // success-path return value uses this — the failure path uses each
+      // iteration's own `currentTx`, so an earlier successful call's hash
+      // cannot bleed into an error wrapping a later call's failure.
+      //
+      // Why this matters for CCTP bridges: a bridge step is approve + burn
+      // in this single mode. If iteration 0 (approve) lands on chain and
+      // iteration 1 (burn) throws before producing a hash (user reject in
+      // wallet, gas estimation error, RPC blip), bookkeeping that spans
+      // both iterations would surface the approve's hash on the thrown
+      // SendCallsError. The executor would then persist that approve hash
+      // on the failed bridge step, and on retry `tryReconcileFromChain`
+      // would probe the approve's (successful) receipt and falsely declare
+      // the bridge done — advancing to the attestation step, which polls
+      // Circle forever for a message the approve tx never produced.
+      let lastSuccessfulTx: string | undefined;
       const allLogs: { address: Address; data: Hex; topics: Hex[] }[][] = [];
 
       for (let i = 0; i < calls.length; i++) {
+        let currentTx: string | undefined;
+        let currentContext: SendContext | undefined;
         try {
           // Retry hints apply only to the first call in the loop. A
           // multi-call step that failed past index 0 will surface "nonce too
@@ -418,8 +434,8 @@ export const prepareSendCalls = (
             i === 0 ? retryHints : undefined,
           );
 
-          lastTx = sendResult.hash; // Always track last attempted transaction
-          lastContext = {
+          currentTx = sendResult.hash;
+          currentContext = {
             nonce: sendResult.nonce,
             maxFeePerGas: sendResult.maxFeePerGas,
             maxPriorityFeePerGas: sendResult.maxPriorityFeePerGas,
@@ -432,34 +448,39 @@ export const prepareSendCalls = (
             waitForReceipt,
             sendResult.hash,
             chainId,
-            lastContext,
+            currentContext,
           );
 
           // viem's `waitForTransactionReceipt` follows replacements (wallet
           // speed-up / cancellation send a new tx at the same nonce, dropping
           // the original). Record the actually-mined hash so explorer links
           // resolve and the executor's reconcile path probes the right tx.
-          if (receipt.transactionHash) lastTx = receipt.transactionHash;
+          if (receipt.transactionHash) currentTx = receipt.transactionHash;
 
           if (receipt.status === "success") {
             allLogs.push((receipt.logs ?? []) as { address: Address; data: Hex; topics: Hex[] }[]);
+            lastSuccessfulTx = currentTx;
           } else {
             throw new SendCallsError(`${txId} step ${i} reverted`, {
-              transactionHash: lastTx,
-              ...lastContext,
+              transactionHash: currentTx,
+              ...currentContext,
             });
           }
         } catch (error) {
           if (error instanceof SendCallsError) throw error;
           throw new SendCallsError(error instanceof Error ? error.message : String(error), {
-            transactionHash: lastTx,
-            ...(lastContext ?? {}),
+            // `currentTx` / `currentContext` are scoped to this iteration:
+            // they're undefined unless the wallet actually returned a hash
+            // for THIS call. Never carries an earlier successful call's
+            // identity into the failure of a later one.
+            transactionHash: currentTx,
+            ...(currentContext ?? {}),
             cause: error,
           });
         }
       }
 
-      return [lastTx ?? "", allLogs];
+      return [lastSuccessfulTx ?? "", allLogs];
     }
 
     // Multicall3 mode

@@ -372,6 +372,54 @@ describe("sendCalls", () => {
           expect(mockWaitForReceipt).toHaveBeenCalledTimes(1);
         });
 
+        test("does not leak prior call's hash/nonce when a later call fails before broadcast", async () => {
+          // Bridge-style approve + burn case the user hit:
+          //  1. iteration 0 (approve) broadcasts at nonce 7 and the receipt
+          //     confirms success on chain.
+          //  2. iteration 1 (burn) is rejected in the wallet before any hash
+          //     comes back (user cancel, gas estimation failure, RPC error...).
+          // The thrown SendCallsError must NOT carry the approve's hash/nonce.
+          // If it did, the executor would store `step.transactionHash = approveHash`
+          // on the failed bridge step, and on retry `tryReconcileFromChain` would
+          // probe the approve's (successful) receipt, declare the bridge done,
+          // and march on to the attestation step — where Circle has no message
+          // for an approve tx and the poll times out.
+          vi.mocked(getTransactionCount).mockResolvedValueOnce(7);
+          vi.mocked(mockClient.sendTransaction)
+            .mockResolvedValueOnce("0xapprove")
+            .mockRejectedValueOnce(new Error("user rejected"));
+
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", [], "0xapprove" as Hex));
+
+          let caught: SendCallsError | undefined;
+          try {
+            await prepareSendCalls(mockClient, mockWaitForReceipt)(
+              "burn",
+              1,
+              "0x0000000000000000000000000000000000000000",
+              [
+                { to: "0x1111111111111111111111111111111111111111", data: "0xapprovedata" },
+                { to: "0x2222222222222222222222222222222222222222", data: "0xburndata" },
+              ],
+              "atomic-steps",
+            );
+          } catch (e) {
+            caught = e as SendCallsError;
+          }
+
+          expect(caught).toBeInstanceOf(SendCallsError);
+          expect(caught?.message).toContain("user rejected");
+          // The burn submission never produced a hash, so the error must not
+          // carry one — definitely not the approve's hash.
+          expect(caught?.transactionHash).not.toBe("0xapprove");
+          expect(caught?.transactionHash).toBeUndefined();
+          // Same for the retry context: leaking the approve's nonce would
+          // build retryHints that replay at the wrong nonce on the next attempt.
+          expect(caught?.nonce).toBeUndefined();
+          expect(caught?.maxFeePerGas).toBeUndefined();
+          expect(caught?.maxPriorityFeePerGas).toBeUndefined();
+        });
+
         test("throws when receipt shows reverted status", async () => {
           vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xfirst").mockResolvedValueOnce("0xsecond");
 
