@@ -10,6 +10,7 @@ vi.mock("../../app/lib/public-client", () => ({
   getPublicClient: vi.fn(() => ({
     estimateFeesPerGas: vi.fn().mockResolvedValue({ maxFeePerGas: 1_000_000_000n }),
     readContract: vi.fn().mockResolvedValue(2n ** 128n),
+    getCode: vi.fn().mockResolvedValue("0x"),
   })),
   retryOnRateLimit: <T>(fn: () => Promise<T>) => fn(),
 }));

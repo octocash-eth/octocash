@@ -969,7 +969,6 @@ describe("odos", () => {
         token: HIDDEN_TOKEN,
         decimals: 18,
         unitaryPrice: 1,
-        walletAddress: WALLET,
       });
 
       expect(result).toBe(true);
@@ -986,7 +985,7 @@ describe("odos", () => {
       expect(body.chainId).toBe(1);
       expect(body.inputTokens[0].tokenAddress).toBe(HIDDEN_TOKEN);
       expect(body.outputTokens[0].tokenAddress.toLowerCase()).toBe(USDC[1].toLowerCase());
-      expect(body.userAddr).toBe(WALLET);
+      expect(body.userAddr).toBe(zeroAddress);
       expect(body.simple).toBe(true);
     });
 
@@ -998,7 +997,6 @@ describe("odos", () => {
         token: HIDDEN_TOKEN,
         decimals: 18,
         unitaryPrice: 1,
-        walletAddress: WALLET,
       });
 
       expect(result).toBe(false);
@@ -1012,7 +1010,6 @@ describe("odos", () => {
         token: HIDDEN_TOKEN,
         decimals: 18,
         unitaryPrice: 1,
-        walletAddress: WALLET,
       });
 
       expect(result).toBe(false);
@@ -1029,7 +1026,6 @@ describe("odos", () => {
         token: HIDDEN_TOKEN,
         decimals: 18,
         unitaryPrice: 1,
-        walletAddress: WALLET,
       });
 
       expect(result).toBe(false);
@@ -1046,7 +1042,6 @@ describe("odos", () => {
         token: HIDDEN_TOKEN,
         decimals: 18,
         unitaryPrice: 1,
-        walletAddress: WALLET,
       });
 
       expect(result).toBe(false);
@@ -1058,7 +1053,6 @@ describe("odos", () => {
         token: USDC[1],
         decimals: 6,
         unitaryPrice: 1,
-        walletAddress: WALLET,
       });
 
       expect(result).toBe(false);
@@ -1071,7 +1065,6 @@ describe("odos", () => {
         token: HIDDEN_TOKEN,
         decimals: 18,
         unitaryPrice: 1,
-        walletAddress: WALLET,
       });
 
       expect(result).toBe(false);
@@ -1084,14 +1077,12 @@ describe("odos", () => {
         token: HIDDEN_TOKEN,
         decimals: 18,
         unitaryPrice: 0,
-        walletAddress: WALLET,
       });
       const negativePrice = await checkOdosRoutableToUsdc({
         chainId: 1,
         token: HIDDEN_TOKEN,
         decimals: 18,
         unitaryPrice: -1,
-        walletAddress: WALLET,
       });
 
       expect(zeroPrice).toBe(false);
@@ -1110,7 +1101,6 @@ describe("odos", () => {
         token: HIDDEN_TOKEN,
         decimals: 18,
         unitaryPrice: 2,
-        walletAddress: WALLET,
       });
 
       const init = mockFetch.mock.calls[0][1] as RequestInit;
@@ -1135,7 +1125,6 @@ describe("odos", () => {
         token: HIDDEN_TOKEN,
         decimals: 0,
         unitaryPrice: 1_000_000,
-        walletAddress: WALLET,
       });
 
       const init = mockFetch.mock.calls[0][1] as RequestInit;
@@ -1165,7 +1154,6 @@ describe("odos", () => {
           token: HIDDEN_TOKEN,
           decimals: 18,
           unitaryPrice: 1,
-          walletAddress: WALLET,
         },
         controller.signal,
       );

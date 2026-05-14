@@ -146,7 +146,6 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
               token: t.token,
               decimals: t.decimals,
               unitaryPrice: price,
-              walletAddress: t.walletAddress,
             },
             signal,
           ),

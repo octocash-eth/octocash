@@ -62,13 +62,15 @@ export async function fetchOdosTokensForChain(chainId: number, signal?: AbortSig
  * Input for {@link checkOdosRoutableToUsdc}. `unitaryPrice` is required so we
  * can normalise the probe to a $1-equivalent amount regardless of the token's
  * decimals/price — callers that don't have a price should skip the probe.
+ *
+ * Requests use viem `zeroAddress` as `userAddr` so routability discovery does
+ * not disclose real wallet addresses to Odos (only route existence is needed).
  */
 export interface RoutabilityProbe {
   chainId: number;
   token: Address;
   decimals: number;
   unitaryPrice: number;
-  walletAddress: Address;
 }
 
 const ODOS_QUOTE_V3_URL = "https://api.odos.xyz/sor/quote/v3";
@@ -80,7 +82,8 @@ const ODOS_QUOTE_V3_URL = "https://api.odos.xyz/sor/quote/v3";
  * catalog but still have a live route through `/sor/quote/v3` (the same
  * endpoint planning uses). We send a normalised ~$1-equivalent input amount
  * derived from `unitaryPrice` so the probe is stable across token decimals
- * and price magnitudes.
+ * and price magnitudes. `userAddr` on the quote request is the zero address
+ * so Odos logs do not record the viewer's wallet for this discovery-only call.
  *
  * Returns `false` (without making a request) when the chain has no mapped
  * USDC address or when the input token already *is* USDC, since neither is a
@@ -118,7 +121,7 @@ export async function checkOdosRoutableToUsdc(probe: RoutabilityProbe, signal?: 
         chainId: probe.chainId,
         inputTokens: [{ tokenAddress: probe.token, amount: amount.toString() }],
         outputTokens: [{ tokenAddress: usdc, proportion: 1 }],
-        userAddr: probe.walletAddress,
+        userAddr: zeroAddress,
         slippageLimitPercent: 0.3,
         referralCode: 0,
         disableRFQs: true,
