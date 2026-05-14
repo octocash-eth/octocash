@@ -353,11 +353,8 @@ const estimateAndSendTransaction = async (
 
 export type SendCallsMode =
   | "atomic-batch" // All calls in one batch, atomic (all-or-nothing)
-  | "non-atomic-batch" // All calls in one batch, non-atomic (partial success allowed)
   | "atomic-steps" // One call at a time, stop on first failure
-  | "non-atomic-steps" // One call at a time, continue on failures
-  | "atomic-multicall" // All calls via Multicall3, must all succeed
-  | "non-atomic-multicall"; // All calls via Multicall3, partial success OK
+  | "atomic-multicall"; // All calls via Multicall3, must all succeed
 
 export type SendCallsFn = (
   txId: string,
@@ -381,11 +378,8 @@ export type SendCallsFn = (
  *
  * Modes:
  * - atomic-batch: All calls in one batch via sendCalls, throws if any call fails
- * - non-atomic-batch: All calls in one batch via sendCalls, allows partial success
  * - atomic-steps: Execute calls one by one via sendTransaction, stop on first failure
- * - non-atomic-steps: Execute calls one by one via sendTransaction, continue on failures
  * - atomic-multicall: All calls via Multicall3, must all succeed
- * - non-atomic-multicall: All calls via Multicall3, partial success OK
  */
 export const prepareSendCalls = (
   client: WalletClient<HttpTransport, Chain, Account>,
@@ -400,9 +394,8 @@ export const prepareSendCalls = (
 
     const chain = chains[chainId as keyof typeof chains] as Chain;
 
-    // Step-by-step execution modes (using sendTransaction)
-    if (mode === "atomic-steps" || mode === "non-atomic-steps") {
-      const continueOnFailure = mode === "non-atomic-steps";
+    // Step-by-step execution mode (using sendTransaction)
+    if (mode === "atomic-steps") {
       let lastTx: string | undefined;
       let lastContext: SendContext | undefined;
       const allLogs: { address: Address; data: Hex; topics: Hex[] }[][] = [];
@@ -443,47 +436,36 @@ export const prepareSendCalls = (
           );
 
           if (receipt.status === "success") {
-            // Collect logs from this transaction
             allLogs.push((receipt.logs ?? []) as { address: Address; data: Hex; topics: Hex[] }[]);
           } else {
-            // Transaction reverted
-            if (!continueOnFailure) {
-              throw new SendCallsError(`${txId} step ${i} reverted`, {
-                transactionHash: lastTx,
-                ...lastContext,
-              });
-            }
-            allLogs.push([]);
-          }
-        } catch (error) {
-          // Transaction failed
-          if (!continueOnFailure) {
-            if (error instanceof SendCallsError) throw error;
-            throw new SendCallsError(error instanceof Error ? error.message : String(error), {
+            throw new SendCallsError(`${txId} step ${i} reverted`, {
               transactionHash: lastTx,
-              ...(lastContext ?? {}),
-              cause: error,
+              ...lastContext,
             });
           }
-          allLogs.push([]);
+        } catch (error) {
+          if (error instanceof SendCallsError) throw error;
+          throw new SendCallsError(error instanceof Error ? error.message : String(error), {
+            transactionHash: lastTx,
+            ...(lastContext ?? {}),
+            cause: error,
+          });
         }
       }
 
       return [lastTx ?? "", allLogs];
     }
 
-    // Multicall3 modes
-    if (mode === "atomic-multicall" || mode === "non-atomic-multicall") {
+    // Multicall3 mode
+    if (mode === "atomic-multicall") {
       if (calls.some((call) => (call.value ?? 0n) > 0n)) {
         throw new Error("Sending value is not supported currently in multicall mode");
       }
 
-      const allowFailure = mode === "non-atomic-multicall";
-
       // Build Call3[] array for Multicall3
       const call3Array = calls.map((call) => ({
         target: call.to ?? "0x0000000000000000000000000000000000000000",
-        allowFailure,
+        allowFailure: false,
         callData: call.data ?? "0x",
       }));
 
@@ -547,27 +529,18 @@ export const prepareSendCalls = (
       }
     }
 
-    // Batch modes (using sendCalls)
+    // Batch mode (using sendCalls)
     const _calls = await client.sendCalls({
       account: from,
       chain,
-      forceAtomic: mode === "atomic-batch",
+      forceAtomic: true,
       calls,
     });
     const status = await client.waitForCallsStatus({ id: _calls.id });
     const tx = status.receipts?.[0]?.transactionHash;
 
-    // In atomic-batch mode, throw on any failure
-    if (mode === "atomic-batch") {
-      if (status.status !== "success" || !status.receipts || !tx) {
-        throw new SendCallsError(`${txId} transaction reverted`, { transactionHash: tx });
-      }
-    } else {
-      // In non-atomic-batch mode, only throw if we have no receipts at all
-      // Allow partial success - some calls may have succeeded
-      if (!status.receipts || status.receipts.length === 0 || !tx) {
-        throw new SendCallsError(`${txId} transaction failed with no receipts`, { transactionHash: tx });
-      }
+    if (status.status !== "success" || !status.receipts || !tx) {
+      throw new SendCallsError(`${txId} transaction reverted`, { transactionHash: tx });
     }
 
     const logs = status.receipts.map((r) => r.logs ?? []);

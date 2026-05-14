@@ -6,6 +6,11 @@ import type { TokenAmount, TransactionStep } from "./types";
 // Mock external dependencies BEFORE imports
 vi.mock("./odos");
 vi.mock("./cctp");
+vi.mock("./public-client", () => ({
+  getPublicClient: vi.fn(() => ({
+    getCode: vi.fn().mockResolvedValue("0x"),
+  })),
+}));
 vi.mock("./gas", () => ({
   getNativeBalance: vi.fn().mockResolvedValue(1000000000000000000n), // 1 ETH
 }));

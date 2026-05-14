@@ -218,64 +218,10 @@ describe("send-calls integration tests", () => {
 		});
 	});
 
-	describe("non-atomic-steps mode", () => {
-		test("continues execution despite failures", async () => {
-			const sendCalls = prepareSendCalls(mainnetWallet, waitForTransactionReceipt, noOpSwitchChain);
-			
-			const recipient = "0x6000000000000000000000000000000000000001" as Address;
-			const amount = parseEther("0.05");
-
-			const initialBalance = await mainnetPublicClient.getBalance({ address: recipient });
-
-			const calls: Call[] = [
-				{ to: recipient, data: "0x" as Hex, value: amount }, // Will succeed
-				{ to: USDC_MAINNET, data: "0xbadbad" as Hex }, // Will fail
-				{ to: recipient, data: "0x" as Hex, value: amount }, // Will succeed
-			];
-
-			const [txHash, logs] = await sendCalls(
-				"test-non-atomic",
-				mainnet.id,
-				testAccount.address,
-				calls,
-				"non-atomic-steps",
-			);
-
-			expect(txHash).not.toBe("");
-			expect(logs).toHaveLength(3);
-			// First succeeded, second failed, third succeeded
-			expect(logs[1].length).toBe(0); // Failed call has no logs
-
-			// Verify 2 transfers succeeded
-			const finalBalance = await mainnetPublicClient.getBalance({ address: recipient });
-			expect(finalBalance - initialBalance).toBe(amount * 2n);
-		});
-
-		test("returns last transaction hash even when it fails", async () => {
-			const sendCalls = prepareSendCalls(mainnetWallet, waitForTransactionReceipt, noOpSwitchChain);
-			
-			const calls: Call[] = [
-				{ to: "0x7000000000000000000000000000000000000001" as Address, data: "0x", value: parseEther("0.01") },
-				{ to: USDC_MAINNET, data: "0xfailure" as Hex }, // Will fail but continue
-			];
-
-			const [txHash, logs] = await sendCalls(
-				"test-last-hash",
-				mainnet.id,
-				testAccount.address,
-				calls,
-				"non-atomic-steps",
-			);
-
-			expect(txHash).not.toBe("");
-			expect(logs).toHaveLength(2);
-		});
-	});
-
 	describe("atomic-multicall mode", () => {
 		test("batches multiple ERC20 approvals via Multicall3", async () => {
 			// Note: Multicall3 aggregate3 doesn't support ETH value transfers to individual calls
-			// It only supports calldata. Use atomic-steps or non-atomic-steps for ETH transfers.
+			// It only supports calldata. Use atomic-steps for ETH transfers.
 			const sendCalls = prepareSendCalls(mainnetWallet, waitForTransactionReceipt, noOpSwitchChain);
 			
 			const spenders = Array.from({ length: 3 }, (_, i) => 
@@ -349,69 +295,6 @@ describe("send-calls integration tests", () => {
 		});
 	});
 
-	describe("non-atomic-multicall mode", () => {
-		test("succeeds with partial failures allowed", async () => {
-			const sendCalls = prepareSendCalls(mainnetWallet, waitForTransactionReceipt, noOpSwitchChain);
-			
-			const spender1 = "0xa000000000000000000000000000000000000001" as Address;
-			const spender2 = "0xb000000000000000000000000000000000000001" as Address;
-			const amount = parseUnits("150", 6);
-
-			const calls: Call[] = [
-				{
-					to: USDC_MAINNET,
-					data: encodeFunctionData({
-						abi: erc20Abi,
-						functionName: "approve",
-						args: [spender1, amount],
-					}),
-				},
-				{ to: USDC_MAINNET, data: "0xbadcafe" as Hex }, // Fails but allowed
-				{
-					to: USDC_MAINNET,
-					data: encodeFunctionData({
-						abi: erc20Abi,
-						functionName: "approve",
-						args: [spender2, amount],
-					}),
-				},
-			];
-
-			const [txHash, logs] = await sendCalls(
-				"test-partial-multicall",
-				mainnet.id,
-				testAccount.address,
-				calls,
-				"non-atomic-multicall",
-			);
-
-			expect(txHash).not.toBe("");
-			expect(logs).toHaveLength(1);
-			expect(logs[0].length).toBeGreaterThan(0); // Should have Approval events from successful calls
-		});
-
-		test("succeeds even when all internal calls fail", async () => {
-			const sendCalls = prepareSendCalls(mainnetWallet, waitForTransactionReceipt, noOpSwitchChain);
-			
-			const calls: Call[] = [
-				{ to: USDC_MAINNET, data: "0xdead" as Hex },
-				{ to: USDC_MAINNET, data: "0xbeef" as Hex },
-			];
-
-			const [txHash, logs] = await sendCalls(
-				"test-all-fail-allowed",
-				mainnet.id,
-				testAccount.address,
-				calls,
-				"non-atomic-multicall",
-			);
-
-			expect(txHash).not.toBe("");
-			expect(logs).toHaveLength(1);
-			// Multicall3 transaction succeeded but no events emitted
-		});
-	});
-
 	describe("multi-chain coordination", () => {
 		test("sequential ETH transfers across multiple chains", async () => {
 			const recipient = "0xc000000000000000000000000000000000000001" as Address;
@@ -480,10 +363,9 @@ describe("send-calls integration tests", () => {
 					testAccount.address,
 					[
 						{ to: recipient1, data: "0x", value: amount },
-						{ to: USDC_MAINNET, data: "0xbad" as Hex }, // Fails
 						{ to: recipient1, data: "0x", value: amount },
 					],
-					"non-atomic-steps",
+					"atomic-steps",
 				),
 				optimismSendCalls(
 					"parallel-optimism",
@@ -497,11 +379,9 @@ describe("send-calls integration tests", () => {
 			expect(mainnetResult[0]).not.toBe("");
 			expect(optimismResult[0]).not.toBe("");
 
-			// Verify mainnet had 2 successful transfers
 			const mainnetBalance = await mainnetPublicClient.getBalance({ address: recipient1 });
 			expect(mainnetBalance - initialMainnetBalance).toBe(amount * 2n);
 
-			// Verify optimism had 1 successful transfer
 			const optimismBalance = await optimismPublicClient.getBalance({ address: recipient2 });
 			expect(optimismBalance - initialOptimismBalance).toBe(amount * 2n);
 		});
@@ -553,74 +433,14 @@ describe("send-calls integration tests", () => {
 			expect(logs2[0].length).toBeGreaterThan(0);
 		});
 
-		test("mixed-mode workflow: atomic setup, non-atomic execution", async () => {
-			// Simulates real consolidation pattern:
-			// 1. Atomic approval setup
-			// 2. Non-atomic execution with potential failures
-			
-			const sendCalls = prepareSendCalls(mainnetWallet, waitForTransactionReceipt, noOpSwitchChain);
-			const spender = "0xf111000000000000000000000000000000000001" as Address;
-			const recipient = "0xf222000000000000000000000000000000000001" as Address;
-
-			const initialMainnetBalance = await mainnetPublicClient.getBalance({ address: recipient });
-
-			// Step 1: Atomic approval (must succeed)
-			const [tx1] = await sendCalls(
-				"setup-approval",
-				mainnet.id,
-				testAccount.address,
-				[{
-					to: USDC_MAINNET,
-					data: encodeFunctionData({
-						abi: erc20Abi,
-						functionName: "approve",
-						args: [spender, parseUnits("1000", 6)],
-					}),
-				}],
-				"atomic-steps",
-			);
-			expect(tx1).not.toBe("");
-
-			// Step 2: Non-atomic operations (partial success OK)
-			const [tx2, logs2] = await sendCalls(
-				"execute-operations",
-				mainnet.id,
-				testAccount.address,
-				[
-					{ to: recipient, data: "0x", value: parseEther("0.05") },
-					{ to: USDC_MAINNET, data: "0xfail" as Hex }, // Expected to fail
-					{ to: recipient, data: "0x", value: parseEther("0.05") },
-				],
-				"non-atomic-steps",
-			);
-			expect(tx2).not.toBe("");
-			expect(logs2).toHaveLength(3);
-
-			// Verify partial success
-			const balance = await mainnetPublicClient.getBalance({ address: recipient });
-			expect(balance - initialMainnetBalance).toBe(parseEther("0.1"));
-		});
 	});
 
 	describe("batch modes", () => {
-		// Note: atomic-batch and non-atomic-batch modes use wallet_sendCalls (EIP-5792)
-		// which Anvil does not support. These modes are fully tested in unit tests with mocks.
-		// 
-		// Integration tests focus on:
-		// - atomic-steps and non-atomic-steps (individual sendTransaction)
-		// - atomic-multicall and non-atomic-multicall (Multicall3 contract)
-		//
-		// In production with EIP-5792 wallets, batch modes provide better UX
-		// (single signature for multiple operations).
+		// atomic-batch uses wallet_sendCalls (EIP-5792) which Anvil does not support.
+		// It is fully tested in unit tests with mocks.
 
 		test.skip("atomic-batch mode requires EIP-5792 wallet support", () => {
 			// Skipped: Anvil doesn't support wallet_sendCalls
-			// Would test: batch transaction with all-or-nothing atomicity
-		});
-
-		test.skip("non-atomic-batch mode requires EIP-5792 wallet support", () => {
-			// Skipped: Anvil doesn't support wallet_sendCalls
-			// Would test: batch transaction with partial success allowed
 		});
 	});
 });

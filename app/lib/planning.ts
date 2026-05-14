@@ -14,6 +14,7 @@ import {
   type OperationType,
 } from "./gas-estimation";
 import { getSwapQuote } from "./odos";
+import { getPublicClient } from "./public-client";
 import { groupTokensByChainAndWallet } from "./tokens";
 import type { DestinationToken, TokenAmount, TransactionStep } from "./types";
 
@@ -28,6 +29,48 @@ function throwInsufficientGas(chainId: number, walletAddress: Address, gasCost: 
 }
 
 const SUPPORTED_CHAINS = Object.keys(chains).map(Number);
+
+/**
+ * Source wallets sign on their source chain and (since the same address is the
+ * default CCTP mintRecipient and the intermediate-wallet candidate pool) need
+ * to be reachable as EOAs everywhere. Smart-account wallets (Safe, ERC-4337)
+ * have counterfactual addresses that may not be controllable on other chains —
+ * bridging risks stranded funds. The destination wallet only needs this check
+ * when it's itself a connected wallet (intermediate-wallet candidate); an
+ * arbitrary destination address can be a contract and just receive ERC20.
+ */
+async function assertEoaWallets(
+  sourceTokens: TokenAmount[],
+  destinationToken: DestinationToken,
+  connectedWallets: readonly Address[],
+): Promise<void> {
+  const pairs = new Map<string, { address: Address; chainId: number }>();
+  for (const t of sourceTokens) {
+    pairs.set(`${t.chainId}:${t.walletAddress.toLowerCase()}`, { address: t.walletAddress, chainId: t.chainId });
+  }
+  const destinationIsConnected = connectedWallets.some((w) => isAddressEqual(w, destinationToken.walletAddress));
+  if (destinationIsConnected) {
+    pairs.set(`${destinationToken.chainId}:${destinationToken.walletAddress.toLowerCase()}`, {
+      address: destinationToken.walletAddress,
+      chainId: destinationToken.chainId,
+    });
+  }
+
+  const checks = await Promise.all(
+    Array.from(pairs.values()).map(async ({ address, chainId }) => {
+      const code = await getPublicClient(chainId).getCode({ address });
+      return { address, chainId, isContract: code !== undefined && code !== "0x" };
+    }),
+  );
+
+  const contract = checks.find((c) => c.isContract);
+  if (contract) {
+    const chainName = chains[contract.chainId as keyof typeof chains]?.name ?? `chain ${contract.chainId}`;
+    throw new Error(
+      `PlanningError: Smart-account wallets are not supported. ${contract.address} is a contract on ${chainName}.`,
+    );
+  }
+}
 
 /** Max source tokens accepted by a single consolidation plan. */
 export const MAX_SOURCE_TOKENS = 50;
@@ -895,6 +938,7 @@ export async function planConsolidation(
 ): Promise<TransactionStep[]> {
   // Validate inputs
   validateInputs(sourceTokens, destinationToken, connectedWallets, log);
+  await assertEoaWallets(sourceTokens, destinationToken, connectedWallets);
 
   // Build gas context for all involved chains (fetches gas prices + native token prices)
   const allChainIds = [...new Set([...sourceTokens.map((t) => t.chainId), destinationToken.chainId])];
