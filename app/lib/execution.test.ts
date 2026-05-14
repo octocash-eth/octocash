@@ -195,6 +195,125 @@ describe("executeConsolidationPlan", () => {
     expect(finalState.plan[0].transactionHash).toBe("0xpostbroadcast");
   });
 
+  test("captures retryHints on failed step when error is TransactionNotBroadcastError", async () => {
+    // TX_NOT_BROADCAST and TIMEOUT failures attach the prior submission's
+    // nonce + fees to the failed step so the retry path can replace the
+    // pending tx (same nonce, doubled fee bid).
+    const { TransactionNotBroadcastError } = await import("./send-calls");
+
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+    };
+
+    mockState.plan = [swapStep];
+
+    vi.mocked(executeOdosSwap).mockRejectedValueOnce(
+      new TransactionNotBroadcastError("0xstalebroadcast", {
+        nonce: 42,
+        maxFeePerGas: 10000000000n,
+        maxPriorityFeePerGas: 500000000n,
+      }),
+    );
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.plan[0].status).toBe("failed");
+    expect(finalState.plan[0].retryHints).toEqual({
+      nonce: 42,
+      maxFeePerGas: 10000000000n,
+      maxPriorityFeePerGas: 500000000n,
+    });
+  });
+
+  test("does not set retryHints for unrelated SendCallsError codes (e.g. revert)", async () => {
+    // Reverts and other non-TX_NOT_BROADCAST/TIMEOUT failures should not
+    // produce retryHints — re-broadcasting at the same nonce wouldn't help.
+    const { SendCallsError } = await import("./send-calls");
+
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+    };
+
+    mockState.plan = [swapStep];
+
+    vi.mocked(executeOdosSwap).mockRejectedValueOnce(
+      new SendCallsError("swap step 0 reverted", {
+        transactionHash: "0xreverted",
+        nonce: 7,
+        maxFeePerGas: 10000000000n,
+      }),
+    );
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.plan[0].status).toBe("failed");
+    expect(finalState.plan[0].retryHints).toBeUndefined();
+  });
+
+  test("clears retryHints on the success step after a successful retry", async () => {
+    // After a successful execution, the step must not carry stale retryHints
+    // from a prior failure — a fresh failure later should start the
+    // replacement cycle anew.
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      retryHints: {
+        nonce: 42,
+        maxFeePerGas: 10000000000n,
+      },
+    };
+
+    mockState.plan = [swapStep];
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.plan[0].status).toBe("success");
+    expect(finalState.plan[0].retryHints).toBeUndefined();
+  });
+
+  test("passes step.retryHints through to executeOdosSwap", async () => {
+    // The retry path is wired end-to-end: hints stored on the step must be
+    // forwarded to sendCalls (via the helper) so the wallet sees the same
+    // nonce and the doubled fee bid.
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      retryHints: {
+        nonce: 42,
+        maxFeePerGas: 10000000000n,
+        maxPriorityFeePerGas: 500000000n,
+      },
+    };
+
+    mockState.plan = [swapStep];
+
+    await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(executeOdosSwap).toHaveBeenCalledWith(expect.any(Array), expect.any(Object), expect.any(Function), {
+      nonce: 42,
+      maxFeePerGas: 10000000000n,
+      maxPriorityFeePerGas: 500000000n,
+    });
+  });
+
   test("reconciles a failed step in place when the chain confirms its prior tx succeeded", async () => {
     // Simulates a retry of a previously-failed swap that *did* land on-chain.
     // The verify-before-retry check should mark the step as success using the
@@ -1604,6 +1723,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       ]),
       expect.anything(),
       expect.anything(),
+      undefined, // retryHints
     );
 
     // Verify zero-amount token was filtered out
@@ -1687,6 +1807,8 @@ describe("recalculatePlan - comprehensive coverage", () => {
       expect.objectContaining({ amount: 1500000n }), // 1000000n + 500000n (zero filtered out)
       expect.anything(),
       expect.anything(),
+      "fast", // transferType
+      undefined, // retryHints
     );
   });
 

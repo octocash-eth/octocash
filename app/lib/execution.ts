@@ -203,12 +203,15 @@ export async function* executeConsolidationPlan(
     try {
       const result = await executeStep(executingStep, workingState, walletClient);
 
-      // Success - create new step reference with success status
+      // Success - create new step reference with success status. Clear any
+      // retryHints carried from a prior failed attempt so a fresh failure
+      // starts the replacement cycle anew.
       const successStep = {
         ...executingStep,
         status: "success" as const,
         transactionHash: result.transactionHash,
         executedAt: Date.now(),
+        retryHints: undefined,
       };
       workingState.results = {
         ...workingState.results,
@@ -234,11 +237,26 @@ export async function* executeConsolidationPlan(
       // tx actually succeeded but our parsing / receipt wait failed).
       const txError = createTransactionError(error);
       const recoveredHash = error instanceof SendCallsError ? error.transactionHash : undefined;
+      // For TX_NOT_BROADCAST / TIMEOUT, capture the nonce + fees of the
+      // failed submission so the next retry replaces the pending tx at the
+      // same nonce with a doubled bid (see `RetryHints` in send-calls.ts).
+      const retryHints =
+        error instanceof SendCallsError &&
+        (txError.code === "TX_NOT_BROADCAST" || txError.code === "TIMEOUT") &&
+        error.nonce !== undefined &&
+        error.maxFeePerGas !== undefined
+          ? {
+              nonce: error.nonce,
+              maxFeePerGas: error.maxFeePerGas,
+              maxPriorityFeePerGas: error.maxPriorityFeePerGas,
+            }
+          : undefined;
       const failedStep = {
         ...executingStep,
         status: "failed" as const,
         error: txError,
         transactionHash: recoveredHash ?? executingStep.transactionHash,
+        retryHints: retryHints ?? executingStep.retryHints,
       };
       workingState.results = {
         ...workingState.results,
@@ -557,6 +575,7 @@ async function executeStep(
         nonZeroTokens,
         step.outputToken,
         sendCalls,
+        step.retryHints,
       );
 
       const actualOutput: TokenAmount = {
@@ -604,7 +623,7 @@ async function executeStep(
       await validateInputBalances(step, state);
 
       // Execute CCTP burn
-      const [burnTx] = await executeCCTPBurn(combinedInput, step.outputToken, sendCalls);
+      const [burnTx] = await executeCCTPBurn(combinedInput, step.outputToken, sendCalls, "fast", step.retryHints);
 
       return {
         stepId: step.id,
@@ -671,7 +690,7 @@ async function executeStep(
       }
 
       // Execute CCTP mint
-      const [mintTx] = await executeCCTPMint(attestations, step.outputToken, sendCalls);
+      const [mintTx] = await executeCCTPMint(attestations, step.outputToken, sendCalls, step.retryHints);
 
       // Calculate actual amount from attestations
       const actualAmount = attestations.reduce(
@@ -748,7 +767,14 @@ async function executeStep(
       }
 
       // Execute transfer
-      const [transactionHash] = await sendCalls("transfer", step.chainId, sourceWallet, calls);
+      const [transactionHash] = await sendCalls(
+        "transfer",
+        step.chainId,
+        sourceWallet,
+        calls,
+        undefined,
+        step.retryHints,
+      );
 
       return {
         stepId: step.id,

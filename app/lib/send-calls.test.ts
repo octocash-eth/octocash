@@ -716,6 +716,149 @@ describe("sendCalls", () => {
           expect((caught as SendCallsError).transactionHash).toBe("0xreverted");
           expect((caught as SendCallsError).message).toContain("reverted");
         });
+
+        test("SendCallsError carries the nonce + fees used for the failed broadcast", async () => {
+          vi.mocked(getTransactionCount).mockResolvedValueOnce(11);
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xpending");
+          mockWaitForReceipt.mockRejectedValueOnce(new Error("RPC poll timed out"));
+
+          let caught: SendCallsError | undefined;
+          try {
+            await prepareSendCalls(mockClient, mockWaitForReceipt)(
+              "test",
+              1,
+              "0x0000000000000000000000000000000000000000",
+              [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+              "atomic-steps",
+            );
+          } catch (e) {
+            caught = e as SendCallsError;
+          }
+
+          expect(caught).toBeInstanceOf(SendCallsError);
+          expect(caught?.transactionHash).toBe("0xpending");
+          expect(caught?.nonce).toBe(11);
+          // fast-fee mock returns maxFeePerGas=20gwei boosted ×2.5 → 50gwei
+          expect(caught?.maxFeePerGas).toBe(50000000000n);
+          expect(caught?.maxPriorityFeePerGas).toBe(2500000000n);
+        });
+      });
+
+      describe("retryHints", () => {
+        test("uses hinted nonce and applies max(hint × 2, currentFast × 2) to fees on first call", async () => {
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xreplaced");
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+            "atomic-steps",
+            {
+              nonce: 42,
+              maxFeePerGas: 10000000000n, // 10 gwei, hint × 2 = 20 gwei
+              maxPriorityFeePerGas: 500000000n, // 0.5 gwei, hint × 2 = 1 gwei
+            },
+          );
+
+          // fast-fee mock returns 20gwei × 2.5 = 50gwei (current × 2 = 100gwei),
+          // priority 1gwei × 2.5 = 2.5gwei (current × 2 = 5gwei).
+          // Hint × 2 = 20gwei / 1gwei → current × 2 wins.
+          expect(mockClient.sendTransaction).toHaveBeenCalledWith(
+            expect.objectContaining({
+              nonce: 42,
+              maxFeePerGas: 100000000000n,
+              maxPriorityFeePerGas: 5000000000n,
+            }),
+          );
+          // Did not fetch the next nonce — used the hint directly.
+          expect(getTransactionCount).not.toHaveBeenCalled();
+        });
+
+        test("hinted fee wins when greater than 2× current fast fee", async () => {
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xreplaced");
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+            "atomic-steps",
+            {
+              nonce: 7,
+              maxFeePerGas: 80000000000n, // 80 gwei × 2 = 160 gwei (beats current × 2 = 100 gwei)
+              maxPriorityFeePerGas: 4000000000n, // 4 gwei × 2 = 8 gwei (beats current × 2 = 5 gwei)
+            },
+          );
+
+          expect(mockClient.sendTransaction).toHaveBeenCalledWith(
+            expect.objectContaining({
+              nonce: 7,
+              maxFeePerGas: 160000000000n,
+              maxPriorityFeePerGas: 8000000000n,
+            }),
+          );
+        });
+
+        test("does not auto-refresh on nonce-too-low when retryHints is active", async () => {
+          vi.mocked(mockClient.sendTransaction).mockRejectedValueOnce(new Error("nonce too low"));
+
+          await expect(
+            prepareSendCalls(mockClient, mockWaitForReceipt)(
+              "test",
+              1,
+              "0x0000000000000000000000000000000000000000",
+              [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+              "atomic-steps",
+              { nonce: 3, maxFeePerGas: 10000000000n },
+            ),
+          ).rejects.toThrow("nonce too low");
+
+          // With hints, we must NOT call getTransactionCount to refresh — the
+          // verify-before-retry path handles the case where the original mined.
+          expect(getTransactionCount).not.toHaveBeenCalled();
+          expect(mockClient.sendTransaction).toHaveBeenCalledTimes(1);
+        });
+
+        test("applies hints only to first call in a multi-call step", async () => {
+          vi.mocked(getTransactionCount).mockResolvedValueOnce(99); // second call uses fresh nonce
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xfirst").mockResolvedValueOnce("0xsecond");
+          mockWaitForReceipt
+            .mockResolvedValueOnce(createMockReceipt("success", []))
+            .mockResolvedValueOnce(createMockReceipt("success", []));
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [
+              { to: "0x1111111111111111111111111111111111111111", data: "0x" },
+              { to: "0x2222222222222222222222222222222222222222", data: "0x" },
+            ],
+            "atomic-steps",
+            { nonce: 5, maxFeePerGas: 1000000000n },
+          );
+
+          expect(mockClient.sendTransaction).toHaveBeenNthCalledWith(1, expect.objectContaining({ nonce: 5 }));
+          expect(mockClient.sendTransaction).toHaveBeenNthCalledWith(2, expect.objectContaining({ nonce: 99 }));
+        });
+
+        test("applies hints in atomic-multicall mode", async () => {
+          mockWaitForReceipt.mockResolvedValue(createMockReceipt("success", []));
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x3333333333333333333333333333333333333333" as Address,
+            [{ to: "0x1111111111111111111111111111111111111111" as Address, data: "0xcalldata1" as Hex }],
+            "atomic-multicall",
+            { nonce: 17, maxFeePerGas: 10000000000n },
+          );
+
+          expect(mockClient.sendTransaction).toHaveBeenCalledWith(expect.objectContaining({ nonce: 17 }));
+        });
       });
 
       describe("non-atomic-steps", () => {
@@ -1179,6 +1322,7 @@ describe("sendCalls", () => {
 
       test("rejects with TransactionNotBroadcastError when public RPC never sees the tx", async () => {
         try {
+          vi.mocked(getTransactionCount).mockResolvedValueOnce(23);
           vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xneverseen");
           // Public RPC always reports the tx as missing.
           mockPublicClient.getTransaction.mockReset();
@@ -1209,6 +1353,11 @@ describe("sendCalls", () => {
           expect(caught).toBeInstanceOf(SendCallsError);
           expect(caught).toBeInstanceOf(TransactionNotBroadcastError);
           expect((caught as TransactionNotBroadcastError).transactionHash).toBe("0xneverseen");
+          // Carries the nonce + fees of the failed submission so the retry
+          // path can replace it.
+          expect((caught as TransactionNotBroadcastError).nonce).toBe(23);
+          expect((caught as TransactionNotBroadcastError).maxFeePerGas).toBe(50000000000n);
+          expect((caught as TransactionNotBroadcastError).maxPriorityFeePerGas).toBe(2500000000n);
           expect(mockPublicClient.getTransaction).toHaveBeenCalledWith({ hash: "0xneverseen" });
         } finally {
           vi.useRealTimers();

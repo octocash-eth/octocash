@@ -246,6 +246,7 @@ export const executeCCTPBurn = async (
   tokenOut: TokenAmount,
   sendCalls: SendCallsFn,
   transferType: TransferType = "fast",
+  retryHints?: Parameters<SendCallsFn>[5],
 ): Promise<[string, number]> => {
   if (tokenIn.chainId === tokenOut.chainId) {
     throw new Error("Token is already on the destination chain");
@@ -260,6 +261,7 @@ export const executeCCTPBurn = async (
     from,
     await getApproveAndBurnUsdcCalls(sourceChainId, amount, destinationChainId, destinationAddress, from, transferType),
     "atomic-steps",
+    retryHints,
   );
 
   return [burnTx, sourceChainId];
@@ -290,6 +292,7 @@ export const executeCCTPMint = async (
   attestations: Attestation[],
   tokenOut: TokenAmount,
   sendCalls: SendCallsFn,
+  retryHints?: Parameters<SendCallsFn>[5],
 ): Promise<[string, { address: Address; data: Hex; topics: Hex[] }[][]]> => {
   if (attestations.length === 0) {
     throw new Error("No attestations");
@@ -303,7 +306,7 @@ export const executeCCTPMint = async (
     return ["", []];
   }
 
-  const [mintTx, mintLogs] = await sendCalls("mint", chainId, walletAddress, calls, "atomic-multicall");
+  const [mintTx, mintLogs] = await sendCalls("mint", chainId, walletAddress, calls, "atomic-multicall", retryHints);
   return [mintTx, mintLogs];
 };
 

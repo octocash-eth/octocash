@@ -85,6 +85,9 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
       const stepIndex = state.plan.findIndex((s) => s.id === stepId);
       const { [stepId]: _, ...remainingResults } = state.results;
 
+      // Preserve `retryHints` (carried on the failed step) through the spread
+      // so the next execution attempt replaces the pending tx at the same
+      // nonce with a doubled bid. Cleared on success in execution.ts.
       const newState: ConsolidationState = {
         ...state,
         plan: state.plan.map((s) => (s.id === stepId ? { ...s, status: "pending" as const, error: undefined } : s)),

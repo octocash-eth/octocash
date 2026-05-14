@@ -6,10 +6,26 @@ import { fetchFastFees } from "./gas-estimation";
 import { getPublicClient } from "./public-client";
 
 /**
+ * Context describing how a transaction was submitted, attached to errors so a
+ * retry can replace the pending tx instead of letting the wallet pick a fresh
+ * nonce. Populated when the watchdog or receipt-wait surfaces a failure after
+ * the wallet has already broadcast.
+ */
+export interface SendContext {
+  nonce?: number;
+  maxFeePerGas?: bigint;
+  maxPriorityFeePerGas?: bigint;
+}
+
+/**
  * Thrown when a `sendCalls` invocation fails after a transaction has been
  * broadcast. Carries the last attempted on-chain tx hash so callers can
  * reconcile against the chain (verify-before-retry) instead of blindly
  * re-broadcasting and risking a double-spend.
+ *
+ * Also carries the nonce + fees used for that broadcast so the retry path can
+ * replace the same pending tx with a doubled-fee bid (mempool replacement
+ * rules require ~10% bump on both `maxFeePerGas` and `maxPriorityFeePerGas`).
  *
  * `cause` preserves the original error so message-based detection in
  * `createTransactionError` keeps working.
@@ -17,9 +33,24 @@ import { getPublicClient } from "./public-client";
 export class SendCallsError extends Error {
   override name: string = "SendCallsError";
   transactionHash?: string;
-  constructor(message: string, opts: { transactionHash?: string; cause?: unknown } = {}) {
+  nonce?: number;
+  maxFeePerGas?: bigint;
+  maxPriorityFeePerGas?: bigint;
+  constructor(
+    message: string,
+    opts: {
+      transactionHash?: string;
+      nonce?: number;
+      maxFeePerGas?: bigint;
+      maxPriorityFeePerGas?: bigint;
+      cause?: unknown;
+    } = {},
+  ) {
     super(message, { cause: opts.cause });
     this.transactionHash = opts.transactionHash;
+    this.nonce = opts.nonce;
+    this.maxFeePerGas = opts.maxFeePerGas;
+    this.maxPriorityFeePerGas = opts.maxPriorityFeePerGas;
   }
 }
 
@@ -37,11 +68,23 @@ export class SendCallsError extends Error {
  */
 export class TransactionNotBroadcastError extends SendCallsError {
   override name = "TransactionNotBroadcastError";
-  constructor(transactionHash: string) {
+  constructor(transactionHash: string, context: SendContext = {}) {
     super(`Transaction ${transactionHash} not seen on any public mempool after watchdog window`, {
       transactionHash,
+      ...context,
     });
   }
+}
+
+/**
+ * Hints passed by the caller to replace a pending tx that previously failed
+ * with `TX_NOT_BROADCAST` or `TIMEOUT`. Reusing the nonce lets the new tx
+ * supersede the prior one; doubled fees satisfy mempool replacement rules.
+ */
+export interface RetryHints {
+  nonce: number;
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas?: bigint;
 }
 
 /** Window over which the mempool watchdog gives up; matches MetaMask STX's cancellation window. */
@@ -72,6 +115,7 @@ const waitForReceiptWithMempoolCheck = (
   waitForReceipt: typeof waitForTransactionReceipt,
   hash: Hex,
   chainId: number,
+  context: SendContext = {},
 ) => {
   return new Promise<Awaited<ReturnType<typeof waitForTransactionReceipt>>>((resolve, reject) => {
     let stopped = false;
@@ -102,7 +146,7 @@ const waitForReceiptWithMempoolCheck = (
           ]);
           if (settled === "stop") return;
         }
-        if (!stopped) reject(new TransactionNotBroadcastError(hash));
+        if (!stopped) reject(new TransactionNotBroadcastError(hash, context));
       } catch (err) {
         // Defensive: shouldn't happen since RPC errors are swallowed above,
         // but if anything else escapes, surface it instead of silently dropping.
@@ -119,7 +163,22 @@ const waitForReceiptWithMempoolCheck = (
       (err) => {
         stopped = true;
         resolveWatchdog();
-        reject(err);
+        // Wrap receipt-wait failures (e.g. viem's internal timeout) into
+        // SendCallsError so the retry path has the same nonce/fee context as
+        // the TransactionNotBroadcastError path. Preserves the original
+        // message — `createTransactionError`'s "timed out" matcher still maps
+        // to TIMEOUT.
+        if (err instanceof SendCallsError) {
+          reject(err);
+        } else {
+          reject(
+            new SendCallsError(err instanceof Error ? err.message : String(err), {
+              transactionHash: hash,
+              ...context,
+              cause: err,
+            }),
+          );
+        }
       },
     );
   });
@@ -192,6 +251,17 @@ export const switchChain = async (client: WalletClient<HttpTransport, Chain, Acc
  * This defends against the race where back-to-back sends (e.g. approve +
  * bridge) reuse the same nonce because the wallet hasn't yet seen the
  * previously-included transaction.
+ *
+ * When `retryHints` is set, this is a retry of a prior submission that failed
+ * with `TX_NOT_BROADCAST` or `TIMEOUT`. We reuse the prior nonce to replace
+ * the pending tx and apply `max(hint × 2, currentFast × 2)` so the new bid
+ * outbids both the original tx and the current network floor. The
+ * "nonce too low" auto-refresh is also suppressed in this mode — if the
+ * wallet says the nonce is consumed, the original tx mined and the caller's
+ * verify-before-retry path should reconcile it on the next attempt.
+ *
+ * The returned context (nonce, fees) is attached to errors thrown later so
+ * the caller can persist it on the failed step.
  */
 const estimateAndSendTransaction = async (
   client: WalletClient<HttpTransport, Chain, Account>,
@@ -202,7 +272,8 @@ const estimateAndSendTransaction = async (
     value?: bigint;
     chain: Chain;
   },
-): Promise<Hex> => {
+  retryHints?: RetryHints,
+): Promise<{ hash: Hex; nonce?: number; maxFeePerGas?: bigint; maxPriorityFeePerGas?: bigint }> => {
   let gas: bigint | undefined;
   let maxFeePerGas: bigint | undefined;
   let maxPriorityFeePerGas: bigint | undefined;
@@ -227,6 +298,20 @@ const estimateAndSendTransaction = async (
     // Fall back to wallet/RPC defaults
   }
 
+  // Replacement bid: take the larger of last-attempt × 2 and current-fast × 2
+  // so we both outbid our pending tx (mempool replacement rule) and stay above
+  // the current network floor.
+  if (retryHints) {
+    const hintedMax = retryHints.maxFeePerGas * 2n;
+    const currentMax = maxFeePerGas !== undefined ? maxFeePerGas * 2n : 0n;
+    maxFeePerGas = hintedMax > currentMax ? hintedMax : currentMax;
+    if (retryHints.maxPriorityFeePerGas !== undefined || maxPriorityFeePerGas !== undefined) {
+      const hintedPri = (retryHints.maxPriorityFeePerGas ?? 0n) * 2n;
+      const currentPri = (maxPriorityFeePerGas ?? 0n) * 2n;
+      maxPriorityFeePerGas = hintedPri > currentPri ? hintedPri : currentPri;
+    }
+  }
+
   const send = (nonce: number | undefined) =>
     client.sendTransaction({
       account: params.account,
@@ -240,12 +325,18 @@ const estimateAndSendTransaction = async (
       chain: params.chain,
     });
 
-  let nonce = await getNextNonce(client, params.account);
+  let nonce: number | undefined = retryHints?.nonce ?? (await getNextNonce(client, params.account));
 
   try {
-    return await send(nonce);
+    const hash = await send(nonce);
+    return { hash, nonce, maxFeePerGas, maxPriorityFeePerGas };
   } catch (error) {
     if (!isNonceTooLowError(error)) throw error;
+    // With explicit retry hints, do not auto-refresh: the whole point of
+    // reusing this nonce is to replace the pending tx; "nonce too low" means
+    // the original already mined, and the verify-before-retry path will
+    // reconcile on-chain.
+    if (retryHints) throw error;
     // Refresh nonce and retry once. The wallet's view (or our RPC's mempool
     // view) may have been a fraction of a second behind a just-included tx.
     const refreshed = await getNextNonce(client, params.account);
@@ -255,7 +346,8 @@ const estimateAndSendTransaction = async (
       throw error;
     }
     nonce = refreshed;
-    return await send(nonce);
+    const hash = await send(nonce);
+    return { hash, nonce, maxFeePerGas, maxPriorityFeePerGas };
   }
 };
 
@@ -273,6 +365,7 @@ export type SendCallsFn = (
   from: Address,
   calls: Call[],
   mode?: SendCallsMode,
+  retryHints?: RetryHints,
 ) => Promise<[string, { address: Address; data: Hex; topics: Hex[] }[][]]>;
 
 /**
@@ -299,7 +392,7 @@ export const prepareSendCalls = (
   waitForReceipt: typeof waitForTransactionReceipt = waitForTransactionReceipt,
   switchChainFn: typeof switchChain = switchChain,
 ): SendCallsFn => {
-  return async (txId, chainId, from, calls, mode = "atomic-steps") => {
+  return async (txId, chainId, from, calls, mode = "atomic-steps", retryHints) => {
     if (!calls?.length) {
       return ["", []];
     }
@@ -311,24 +404,43 @@ export const prepareSendCalls = (
     if (mode === "atomic-steps" || mode === "non-atomic-steps") {
       const continueOnFailure = mode === "non-atomic-steps";
       let lastTx: string | undefined;
+      let lastContext: SendContext | undefined;
       const allLogs: { address: Address; data: Hex; topics: Hex[] }[][] = [];
 
       for (let i = 0; i < calls.length; i++) {
         try {
-          // Estimate gas and send individual transaction
-          const hash = await estimateAndSendTransaction(client, {
-            account: from,
-            to: calls[i].to,
-            data: calls[i].data,
-            value: calls[i].value,
-            chain,
-          });
+          // Retry hints apply only to the first call in the loop. A
+          // multi-call step that failed past index 0 will surface "nonce too
+          // low" here and the executor's verify-before-retry path reconciles
+          // it on the next attempt.
+          const sendResult = await estimateAndSendTransaction(
+            client,
+            {
+              account: from,
+              to: calls[i].to,
+              data: calls[i].data,
+              value: calls[i].value,
+              chain,
+            },
+            i === 0 ? retryHints : undefined,
+          );
 
-          lastTx = hash; // Always track last attempted transaction
+          lastTx = sendResult.hash; // Always track last attempted transaction
+          lastContext = {
+            nonce: sendResult.nonce,
+            maxFeePerGas: sendResult.maxFeePerGas,
+            maxPriorityFeePerGas: sendResult.maxPriorityFeePerGas,
+          };
 
           // Wait for transaction receipt with mempool watchdog (catches MetaMask
           // Smart Transactions silent cancellations — see TransactionNotBroadcastError).
-          const receipt = await waitForReceiptWithMempoolCheck(client, waitForReceipt, hash, chainId);
+          const receipt = await waitForReceiptWithMempoolCheck(
+            client,
+            waitForReceipt,
+            sendResult.hash,
+            chainId,
+            lastContext,
+          );
 
           if (receipt.status === "success") {
             // Collect logs from this transaction
@@ -336,7 +448,10 @@ export const prepareSendCalls = (
           } else {
             // Transaction reverted
             if (!continueOnFailure) {
-              throw new SendCallsError(`${txId} step ${i} reverted`, { transactionHash: lastTx });
+              throw new SendCallsError(`${txId} step ${i} reverted`, {
+                transactionHash: lastTx,
+                ...lastContext,
+              });
             }
             allLogs.push([]);
           }
@@ -346,6 +461,7 @@ export const prepareSendCalls = (
             if (error instanceof SendCallsError) throw error;
             throw new SendCallsError(error instanceof Error ? error.message : String(error), {
               transactionHash: lastTx,
+              ...(lastContext ?? {}),
               cause: error,
             });
           }
@@ -382,20 +498,40 @@ export const prepareSendCalls = (
 
       // Estimate gas and send transaction to Multicall3
       let multicallHash: Hex | undefined;
+      let multicallContext: SendContext | undefined;
       try {
-        multicallHash = await estimateAndSendTransaction(client, {
-          account: from,
-          to: MULTICALL3_ADDRESS,
-          data: callData,
-          chain,
-        });
+        const sendResult = await estimateAndSendTransaction(
+          client,
+          {
+            account: from,
+            to: MULTICALL3_ADDRESS,
+            data: callData,
+            chain,
+          },
+          retryHints,
+        );
+        multicallHash = sendResult.hash;
+        multicallContext = {
+          nonce: sendResult.nonce,
+          maxFeePerGas: sendResult.maxFeePerGas,
+          maxPriorityFeePerGas: sendResult.maxPriorityFeePerGas,
+        };
 
         // Wait for transaction receipt with mempool watchdog (catches MetaMask
         // Smart Transactions silent cancellations — see TransactionNotBroadcastError).
-        const receipt = await waitForReceiptWithMempoolCheck(client, waitForReceipt, multicallHash, chainId);
+        const receipt = await waitForReceiptWithMempoolCheck(
+          client,
+          waitForReceipt,
+          multicallHash,
+          chainId,
+          multicallContext,
+        );
 
         if (receipt.status !== "success") {
-          throw new SendCallsError(`${txId} transaction reverted`, { transactionHash: multicallHash });
+          throw new SendCallsError(`${txId} transaction reverted`, {
+            transactionHash: multicallHash,
+            ...multicallContext,
+          });
         }
 
         // Transaction succeeded (even if some/all calls failed internally)
@@ -405,6 +541,7 @@ export const prepareSendCalls = (
         if (error instanceof SendCallsError) throw error;
         throw new SendCallsError(error instanceof Error ? error.message : String(error), {
           transactionHash: multicallHash,
+          ...(multicallContext ?? {}),
           cause: error,
         });
       }

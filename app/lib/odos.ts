@@ -200,6 +200,7 @@ export async function executeOdosSwap(
   tokensIn: TokenAmount[],
   tokenOut: TokenAmount,
   sendCalls: SendCallsFn,
+  retryHints?: Parameters<SendCallsFn>[5],
 ): Promise<{ amount: bigint; transactionHash: string }> {
   const chainId = tokensIn[0].chainId;
   const wallet = tokensIn[0].walletAddress;
@@ -218,7 +219,7 @@ export async function executeOdosSwap(
 
   // Build and execute swap calls
   const calls = await buildOdosCalls(tokensIn, tokenOut);
-  const [transactionHash, logs] = await sendCalls("swap", chainId, wallet, calls, "atomic-steps");
+  const [transactionHash, logs] = await sendCalls("swap", chainId, wallet, calls, "atomic-steps", retryHints);
   const flattenedLogs = logs.flat();
 
   const amount = deriveSwapOutputAmount(flattenedLogs as Log[], tokenOut);

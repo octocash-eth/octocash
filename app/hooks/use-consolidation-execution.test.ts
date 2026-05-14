@@ -512,6 +512,43 @@ describe("useConsolidationExecution", () => {
 
       expect(mockExecuteConsolidationPlan).not.toHaveBeenCalled();
     });
+
+    test("preserves retryHints on the failed step through the reset", async () => {
+      // The hints captured on a TX_NOT_BROADCAST / TIMEOUT failure must
+      // survive the status reset so the next execution attempt replaces
+      // the pending tx at the same nonce.
+      const failedStep = createMockStep({
+        id: "step-1",
+        status: "failed",
+        retryHints: {
+          nonce: 42,
+          maxFeePerGas: 10000000000n,
+          maxPriorityFeePerGas: 500000000n,
+        },
+      });
+      const mockState = createMockState({ plan: [failedStep] });
+
+      mockExecuteConsolidationPlan.mockReturnValue(
+        (async function* () {
+          yield createMockState({ status: "completed" });
+        })(),
+      );
+
+      const { result } = renderHook(() => useConsolidationExecution({ state: mockState }));
+
+      await act(async () => {
+        await result.current.retryFailedStep();
+      });
+
+      const [forwardedState] = mockExecuteConsolidationPlan.mock.calls[0];
+      expect(forwardedState.plan[0].status).toBe("pending");
+      expect(forwardedState.plan[0].error).toBeUndefined();
+      expect(forwardedState.plan[0].retryHints).toEqual({
+        nonce: 42,
+        maxFeePerGas: 10000000000n,
+        maxPriorityFeePerGas: 500000000n,
+      });
+    });
   });
 
   describe("skipFailedStep", () => {

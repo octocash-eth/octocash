@@ -81,6 +81,15 @@ export interface TransactionStep {
   error?: TransactionError; // Error details if failed
   executedAt?: number; // Timestamp of execution
   quotedAt?: number; // When the quote was obtained (for swap steps)
+
+  // Replacement-tx hints captured when the prior attempt failed with
+  // TX_NOT_BROADCAST or TIMEOUT. On retry, the executor reuses this nonce so
+  // the new tx supersedes the pending one and bids `max(× 2, currentFast × 2)`.
+  retryHints?: {
+    nonce: number;
+    maxFeePerGas: bigint;
+    maxPriorityFeePerGas?: bigint;
+  };
 }
 
 // ============================================================================

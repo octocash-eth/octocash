@@ -53,7 +53,7 @@ describe("errors", () => {
     it("should return correct message for TIMEOUT", () => {
       const [title, message] = getErrorMessage(ERROR_CODES.TIMEOUT);
       expect(title).toBe("Transaction took too long");
-      expect(message).toBe("It may still be processing - check your wallet.");
+      expect(message).toBe("It may still be processing, retry to override the transaction.");
     });
 
     it("should return correct message for ATTESTATION_TIMEOUT", () => {
