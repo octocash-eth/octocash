@@ -22,7 +22,7 @@ export const ERROR_MESSAGES: Record<ErrorCode, [string, string]> = {
     "Your wallet signed the transaction, but it wasn't broadcast to the network. Please try again.",
   ],
   [ERROR_CODES.ATTESTATION_TIMEOUT]: [
-    "Bridge attestation not received within 1 minute",
+    "Bridge attestation not received within 20 minutes",
     "The money may be stuck in CCTPv2, use the history page to resume the transaction.",
   ],
   [ERROR_CODES.PLANNING_ERROR]: ["Failed to plan transaction", "Please try again."],

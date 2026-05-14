@@ -179,10 +179,7 @@ const retrieveAttestation = async (
       }
 
       const responseData = (await response.json()) as { messages: Attestation[] };
-      if (
-        responseData?.messages?.length > 0 &&
-        responseData.messages.every((message) => message.status === "complete")
-      ) {
+      if (responseData?.messages?.length === 1 && responseData.messages[0].status === "complete") {
         console.log("Attestation retrieved!", url);
         return responseData.messages;
       }

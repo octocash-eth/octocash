@@ -58,7 +58,7 @@ describe("errors", () => {
 
     it("should return correct message for ATTESTATION_TIMEOUT", () => {
       const [title, message] = getErrorMessage(ERROR_CODES.ATTESTATION_TIMEOUT);
-      expect(title).toBe("Bridge attestation not received within 1 minute");
+      expect(title).toBe("Bridge attestation not received within 20 minutes");
       expect(message).toBe("The money may be stuck in CCTPv2, use the history page to resume the transaction.");
     });
 
