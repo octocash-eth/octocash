@@ -3,14 +3,12 @@ import { arbitrum, base, linea, mainnet, optimism, polygon, unichain } from "vie
 
 export const chains = {
   [mainnet.id]: mainnet,
-  // [avalanche.id]: avalanche,
   [optimism.id]: optimism,
   [arbitrum.id]: arbitrum,
   [base.id]: base,
   [polygon.id]: polygon,
   [unichain.id]: unichain,
   [linea.id]: linea,
-  // [sonic.id]: sonic,
 };
 
 export const transports = import.meta.env.VITE_ALCHEMY_API_KEY
@@ -45,7 +43,6 @@ export const supportedChains = Object.entries(chains).map(([chainId, chain]) => 
 
 export const blockExplorers = {
   [mainnet.id]: "https://eth.blockscout.com",
-  // [avalanche.id]: avalanche.blockExplorers.default,
   [optimism.id]: "https://explorer.optimism.io",
   [arbitrum.id]: "https://arbitrum.blockscout.com",
   [base.id]: "https://base.blockscout.com",
