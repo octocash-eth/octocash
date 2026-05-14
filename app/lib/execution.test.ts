@@ -44,12 +44,14 @@ vi.mock("./gas", () => ({
 
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import {
+  estimateRemainingChainOps,
   executeConsolidationPlan,
   InsufficientInputBalanceError,
   shouldSkipStep,
   validateInputBalances,
 } from "./execution";
 import { getNativeBalance } from "./gas";
+import { estimateOperationsForChainWallet, type OperationType } from "./gas-estimation";
 import { executeOdosSwap, getSwapQuote } from "./odos";
 import { getPublicClient } from "./public-client";
 import { prepareSendCalls } from "./send-calls";
@@ -2670,4 +2672,105 @@ describe("validateInputBalances", () => {
 
     await expect(validateInputBalances(step, baseState())).rejects.toThrow("rpc unreachable");
   });
+});
+
+describe("planning/execution op estimator equivalence", () => {
+  // Planning reserves native gas via `estimateOperationsForChainWallet` (per-wallet
+  // token grouping). Execution re-reserves via `estimateRemainingChainOps` (walks
+  // the built plan). The two MUST produce the same op multiset for the same wallet
+  // — otherwise planning's reserved native ≠ execution's expected gas, and the
+  // delta surfaces as a slightly oversized or undersized swap input.
+
+  const NATIVE = "0x0000000000000000000000000000000000000000" as Address;
+  const SRC_USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+  const SRC_CHAIN = 1;
+  const DST_CHAIN = 10;
+
+  // Distinct ERC20 addresses for swap inputs (1..N).
+  const erc20At = (n: number): Address => `0x${n.toString(16).padStart(40, "0")}` as Address;
+
+  // Mirrors planning's `batchTokens(tokens, 6)`.
+  const batchOf6 = <T>(arr: T[]): T[][] => {
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += 6) out.push(arr.slice(i, i + 6));
+    return out;
+  };
+
+  const sourceChainPlanAndPlanningOps = (erc20Count: number, hasNative: boolean) => {
+    const swapInputs: TokenAmount[] = [];
+    for (let i = 0; i < erc20Count; i++) {
+      swapInputs.push(makeToken(erc20At(i + 1), 1_000_000n, SRC_CHAIN, { symbol: `T${i}` }));
+    }
+    if (hasNative) {
+      swapInputs.push(makeToken(NATIVE, 1_000_000_000_000_000n, SRC_CHAIN, { symbol: "ETH", decimals: 18 }));
+    }
+
+    // Planning's view: ops derived directly from the wallet's tokens.
+    const planningOps = estimateOperationsForChainWallet(
+      swapInputs.map((t) => ({ token: t.token, symbol: t.symbol, decimals: t.decimals, amount: t.amount })),
+      SRC_CHAIN,
+      DST_CHAIN,
+      SRC_USDC,
+    );
+
+    // Plan as planning would build it: batched swap steps (max 6 inputs) + a bridge.
+    const plan: TransactionStep[] = [];
+    let stepIdx = 0;
+    if (swapInputs.length > 0) {
+      for (const batch of batchOf6(swapInputs)) {
+        const id = `step-${++stepIdx}`;
+        plan.push(
+          makeStep({
+            id,
+            type: "swap",
+            status: "pending",
+            inputTokens: batch,
+            outputToken: makeToken(SRC_USDC, 0n, SRC_CHAIN, { provenance: id }),
+          }),
+        );
+      }
+    }
+    if (swapInputs.length > 0) {
+      const id = `step-${++stepIdx}`;
+      plan.push(
+        makeStep({
+          id,
+          type: "bridge",
+          status: "pending",
+          inputTokens: [makeToken(SRC_USDC, 0n, SRC_CHAIN, { provenance: `step-${stepIdx - 1}` })],
+          outputToken: makeToken(SRC_USDC, 0n, DST_CHAIN, { provenance: id }),
+        }),
+      );
+    }
+
+    return { planningOps, plan };
+  };
+
+  const sorted = (ops: OperationType[]) => [...ops].sort();
+
+  const cases: { description: string; erc20Count: number; hasNative: boolean }[] = [
+    { description: "single ERC20", erc20Count: 1, hasNative: false },
+    { description: "6 ERC20 (one full batch)", erc20Count: 6, hasNative: false },
+    { description: "7 ERC20 (straddles 6-token boundary)", erc20Count: 7, hasNative: false },
+    { description: "12 ERC20 (two full batches)", erc20Count: 12, hasNative: false },
+    { description: "13 ERC20 (two full batches + one)", erc20Count: 13, hasNative: false },
+    { description: "native only", erc20Count: 0, hasNative: true },
+    { description: "5 ERC20 + native (batch fills exactly)", erc20Count: 5, hasNative: true },
+    { description: "6 ERC20 + native (straddles boundary with native)", erc20Count: 6, hasNative: true },
+    { description: "11 ERC20 + native (two batches with native)", erc20Count: 11, hasNative: true },
+  ];
+
+  for (const c of cases) {
+    test(`${c.description}: planning ops == execution ops`, () => {
+      const { planningOps, plan } = sourceChainPlanAndPlanningOps(c.erc20Count, c.hasNative);
+      const state = makeState({
+        plan,
+        sourceTokens: [],
+        destinationToken: makeToken(SRC_USDC, 0n, DST_CHAIN),
+      });
+      // Execution's view: walk the plan from the first step on this chain.
+      const executionOps = plan.length > 0 ? estimateRemainingChainOps(plan[0], state) : [];
+      expect(sorted(executionOps)).toEqual(sorted(planningOps));
+    });
+  }
 });

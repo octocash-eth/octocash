@@ -513,7 +513,7 @@ async function adjustNativeTokenForGas(
 /**
  * Determines remaining gas-consuming operations on the same chain as the given step.
  */
-function estimateRemainingChainOps(currentStep: TransactionStep, state: ConsolidationState): OperationType[] {
+export function estimateRemainingChainOps(currentStep: TransactionStep, state: ConsolidationState): OperationType[] {
   const ops: OperationType[] = [];
   const chainId = currentStep.chainId;
   let foundCurrent = false;
