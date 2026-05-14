@@ -66,6 +66,10 @@ vi.mock("~/components/ui/dialog", () => ({
   DialogFooter: ({ children }: { children: React.ReactNode }) => <div data-testid="dialog-footer">{children}</div>,
   DialogHeader: ({ children }: { children: React.ReactNode }) => <div data-testid="dialog-header">{children}</div>,
   DialogTitle: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
+  // DialogClose in Radix wraps the trigger and fires `onOpenChange(false)`
+  // on the underlying button click. Mirror that semantic in the mock so
+  // tests exercising Cancel-button-as-abort behave like production: any
+  // click inside surfaces an open-change to false.
   DialogClose: ({ children, asChild: _ }: { children: React.ReactNode; asChild?: boolean }) => (
     <div data-testid="dialog-close">{children}</div>
   ),
@@ -300,7 +304,7 @@ describe("ManualClaimDialog", () => {
 
     // Wait for the async call to complete
     await vi.waitFor(() => {
-      expect(mockClaim).toHaveBeenCalledWith("0xabc123", 1);
+      expect(mockClaim).toHaveBeenCalledWith("0xabc123", 1, expect.any(AbortSignal));
     });
   });
 
@@ -325,7 +329,7 @@ describe("ManualClaimDialog", () => {
     await user.click(submitButton);
 
     await vi.waitFor(() => {
-      expect(mockClaim).toHaveBeenCalledWith("0xdef456", 10);
+      expect(mockClaim).toHaveBeenCalledWith("0xdef456", 10, expect.any(AbortSignal));
     });
   });
 
@@ -350,7 +354,7 @@ describe("ManualClaimDialog", () => {
     await user.click(submitButton);
 
     await vi.waitFor(() => {
-      expect(mockClaim).toHaveBeenCalledWith("0xghi789", 8453);
+      expect(mockClaim).toHaveBeenCalledWith("0xghi789", 8453, expect.any(AbortSignal));
     });
   });
 
@@ -412,6 +416,79 @@ describe("ManualClaimDialog", () => {
     });
 
     resolvePromise({ mintTx: "0x123", logs: [] });
+  });
+
+  test("clicking Cancel during a claim aborts the underlying signal", async () => {
+    const user = userEvent.setup();
+
+    // Hold the claim promise open so the dialog stays in "Claiming…" state
+    // while we hit Cancel. Capture the signal it was invoked with so we can
+    // assert it transitioned to aborted on click.
+    let capturedSignal: AbortSignal | undefined;
+    let rejectClaim: ((reason: unknown) => void) | undefined;
+    mockClaim.mockImplementation((_tx: string, _chainId: number, signal?: AbortSignal) => {
+      capturedSignal = signal;
+      return new Promise((_resolve, reject) => {
+        rejectClaim = reject;
+        // Mirror real behavior: when the caller aborts, the claim rejects
+        // with an AbortError (that's what retrieveAttestations does).
+        signal?.addEventListener("abort", () => {
+          reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+        });
+      });
+    });
+
+    render(
+      <ManualClaimDialog>
+        <button type="button">Open</button>
+      </ManualClaimDialog>,
+    );
+
+    const input = screen.getByTestId("transaction-url-input");
+    await user.type(input, "https://etherscan.io/tx/0xabc123");
+    await user.click(screen.getByText("Claim"));
+
+    await vi.waitFor(() => {
+      expect(capturedSignal).toBeDefined();
+      expect(capturedSignal?.aborted).toBe(false);
+    });
+
+    await user.click(screen.getByText("Cancel"));
+
+    // Signal must be aborted now — that's the wire that stops the attestation
+    // poll inside retrieveAttestations.
+    expect(capturedSignal?.aborted).toBe(true);
+
+    // No spurious error from the AbortError-rejected promise.
+    await vi.waitFor(() => {
+      expect(screen.queryByText(/failed to submit/i)).not.toBeInTheDocument();
+    });
+
+    // Clean up the still-suspended promise (it already rejected via the
+    // abort listener, but null-check for type safety).
+    rejectClaim?.(new DOMException("Aborted", "AbortError"));
+  });
+
+  test("AbortError from claim is not shown as a submit error", async () => {
+    const user = userEvent.setup();
+    mockClaim.mockRejectedValue(new DOMException("Aborted", "AbortError"));
+
+    render(
+      <ManualClaimDialog>
+        <button type="button">Open</button>
+      </ManualClaimDialog>,
+    );
+
+    await user.type(screen.getByTestId("transaction-url-input"), "https://etherscan.io/tx/0xabc123");
+    await user.click(screen.getByText("Claim"));
+
+    // Give the rejection a chance to flow through.
+    await vi.waitFor(() => {
+      expect(mockClaim).toHaveBeenCalled();
+    });
+
+    expect(screen.queryByText("Aborted")).not.toBeInTheDocument();
+    expect(screen.queryByText(/failed to submit/i)).not.toBeInTheDocument();
   });
 
   test("shows error when USDC already claimed", async () => {
@@ -544,7 +621,7 @@ describe("ManualClaimDialog - URL validation logic", () => {
     await user.click(submitButton);
 
     await vi.waitFor(() => {
-      expect(mockClaim).toHaveBeenCalledWith("0x1234567890abcdef", 1);
+      expect(mockClaim).toHaveBeenCalledWith("0x1234567890abcdef", 1, expect.any(AbortSignal));
     });
   });
 
@@ -566,7 +643,7 @@ describe("ManualClaimDialog - URL validation logic", () => {
     await user.click(submitButton);
 
     await vi.waitFor(() => {
-      expect(mockClaim).toHaveBeenCalledWith("0xpolygontx", 137);
+      expect(mockClaim).toHaveBeenCalledWith("0xpolygontx", 137, expect.any(AbortSignal));
     });
   });
 
@@ -588,7 +665,7 @@ describe("ManualClaimDialog - URL validation logic", () => {
     await user.click(submitButton);
 
     await vi.waitFor(() => {
-      expect(mockClaim).toHaveBeenCalledWith("0xarbitrumtx", 42161);
+      expect(mockClaim).toHaveBeenCalledWith("0xarbitrumtx", 42161, expect.any(AbortSignal));
     });
   });
 });

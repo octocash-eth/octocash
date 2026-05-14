@@ -97,7 +97,7 @@ describe("useCCTPClaim", () => {
         await result.current.claim(txHash, sourceChainId);
       });
 
-      expect(mockRetrieveAttestations).toHaveBeenCalledWith([[txHash, sourceChainId]]);
+      expect(mockRetrieveAttestations).toHaveBeenCalledWith([[txHash, sourceChainId]], undefined);
     });
 
     test("throws error when no attestations found", async () => {

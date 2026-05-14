@@ -304,7 +304,9 @@ describe("cctp", () => {
 
       expect(result).toHaveLength(1);
       expect(result[0]).toEqual(mockAttestation);
-      expect(global.fetch).toHaveBeenCalledWith("https://iris-api.circle.com/v2/messages/0?transactionHash=0xtxhash");
+      expect(global.fetch).toHaveBeenCalledWith("https://iris-api.circle.com/v2/messages/0?transactionHash=0xtxhash", {
+        signal: undefined,
+      });
     });
 
     test("retrieves multiple attestations sequentially", async () => {
@@ -485,6 +487,76 @@ describe("cctp", () => {
 
       await expectation;
       vi.useRealTimers();
+    });
+
+    test("aborting the signal mid-poll rejects with AbortError without further fetches", async () => {
+      // The manual-claim dialog's Cancel button wires an AbortController.signal
+      // through here. Aborting must:
+      //   - reject the in-flight or next-pending request promptly,
+      //   - skip the 5s inter-poll wait so the user doesn't sit on a closing
+      //     dialog while the timer drains, and
+      //   - surface the cancellation as AbortError so callers can suppress it
+      //     instead of mapping it to "Attestation retrieval failed".
+      vi.useFakeTimers();
+
+      const pending: Attestation = {
+        message: "0xmessage",
+        attestation: "0xattestation",
+        status: "pending_confirmations",
+        decodedMessage: {
+          nonce: "0xnonce1",
+          destinationDomain: "7",
+          decodedMessageBody: { amount: "1000000", feeExecuted: "0" },
+        },
+      };
+
+      // First response is "still pending" — the poll will sleep for 5s before
+      // the next iteration. We abort during that sleep.
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ messages: [pending] }),
+      } as Response);
+
+      const controller = new AbortController();
+      const promise = retrieveAttestations([["0xtxhash", 1]], controller.signal);
+      // Attach rejection handler before aborting to avoid unhandled-rejection noise.
+      const caught = promise.catch((e) => e);
+
+      // Let the first fetch resolve and the sleep start.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+
+      controller.abort();
+
+      const err = (await caught) as Error;
+      expect(err.name).toBe("AbortError");
+      // Crucially: no further fetch attempts after abort.
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+
+      vi.useRealTimers();
+    });
+
+    test("pre-aborted signal short-circuits before any fetch", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      global.fetch = vi.fn();
+
+      const err = (await retrieveAttestations([["0xtxhash", 1]], controller.signal).catch((e) => e)) as Error;
+      expect(err.name).toBe("AbortError");
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    test("fetch's own AbortError propagates as AbortError, not 'retrieval failed'", async () => {
+      // When the in-flight fetch is the one observing the abort, fetch itself
+      // throws DOMException("AbortError"). The catch-all in retrieveAttestation
+      // must let it through rather than wrap it into the generic error.
+      global.fetch = vi.fn().mockRejectedValue(new DOMException("aborted", "AbortError"));
+
+      const controller = new AbortController();
+      const promise = retrieveAttestations([["0xtxhash", 1]], controller.signal);
+      const err = (await promise.catch((e) => e)) as Error;
+      expect(err.name).toBe("AbortError");
     });
   });
 

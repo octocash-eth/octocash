@@ -50,6 +50,46 @@ export class AttestationTimeoutError extends Error {
   }
 }
 
+/**
+ * True when `e` is a fetch/AbortController cancellation (DOMException with
+ * name "AbortError", or Node's "ABORT_ERR" code).
+ *
+ * Avoids the `e instanceof Error` gate because DOMException doesn't extend
+ * Error in some runtimes (older Node, jsdom) — the standardized way to
+ * detect cancellation is by the `name` / numeric `code` fields.
+ */
+const isAbortError = (e: unknown): boolean => {
+  if (!e || typeof e !== "object") return false;
+  const name = (e as { name?: unknown }).name;
+  const code = (e as { code?: unknown }).code;
+  return name === "AbortError" || code === "ABORT_ERR" || code === 20;
+};
+
+/**
+ * Sleeps for `ms` but rejects immediately if the signal is/becomes aborted.
+ *
+ * Why: the attestation poll has a 5s wait between attempts. Without aborting
+ * that timer, cancelling mid-poll would still keep the call alive for up to
+ * 5s before the next loop top notices `signal.aborted` — which is long
+ * enough to feel broken in the manual-claim dialog Cancel flow.
+ */
+const abortableSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+
 const finalityThresholdFor = (t: TransferType): number => (t === "standard" ? 2000 : 1000);
 
 type CircleBurnFeeEntry = { finalityThreshold: number; minimumFee: number };
@@ -161,16 +201,19 @@ const retrieveAttestation = async (
   transactionHash: string,
   sourceChainId: number,
   timeoutMs: number = ATTESTATION_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<Attestation[]> => {
+  if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
   const url = `${CIRCLE_API_BASE}/v2/messages/${chainIdToDomain[sourceChainId]}?transactionHash=${transactionHash}`;
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal });
 
       if (response.status === 404) {
-        await new Promise((resolve) => setTimeout(resolve, ATTESTATION_POLL_INTERVAL_MS));
+        await abortableSleep(ATTESTATION_POLL_INTERVAL_MS, signal);
         continue;
       }
 
@@ -185,8 +228,12 @@ const retrieveAttestation = async (
       }
 
       console.log("Waiting for attestation...");
-      await new Promise((resolve) => setTimeout(resolve, ATTESTATION_POLL_INTERVAL_MS));
+      await abortableSleep(ATTESTATION_POLL_INTERVAL_MS, signal);
     } catch (error) {
+      // Surface user-cancellation as-is so the manual-claim dialog (and any
+      // other caller wiring an AbortController to a Cancel UI) can suppress
+      // the error instead of showing a generic "Attestation retrieval failed".
+      if (isAbortError(error)) throw error;
       console.log(`Attestation error: ${error instanceof Error ? error.message : "Unknown error"}`);
       throw new Error("Attestation retrieval failed");
     }
@@ -270,12 +317,16 @@ export const executeCCTPBurn = async (
 /**
  * Retrieves the attestations for the given transaction hashes and source chain IDs.
  * @param transactionHashesAndChainIds - List of transaction hashes and source chain IDs from `executeCCTPBurn()`.
+ * @param signal - Optional AbortSignal; aborting interrupts both in-flight
+ *   fetches and the inter-poll waits, so callers (e.g. the manual claim
+ *   dialog's Cancel button) can stop the poll immediately.
  * @returns The attestations.
  */
-export const retrieveAttestations = async (transactionHashesAndChainIds: [string, number][]) => {
+export const retrieveAttestations = async (transactionHashesAndChainIds: [string, number][], signal?: AbortSignal) => {
   const attestations: Attestation[] = [];
   for (let i = 0; i < transactionHashesAndChainIds.length; i++) {
-    const attestation = await retrieveAttestation(...transactionHashesAndChainIds[i]);
+    const [tx, chain] = transactionHashesAndChainIds[i];
+    const attestation = await retrieveAttestation(tx, chain, undefined, signal);
     attestations.push(...attestation);
   }
   return attestations;

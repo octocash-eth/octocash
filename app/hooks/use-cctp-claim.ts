@@ -18,12 +18,15 @@ const getDestinationChainId = (attestation: Attestation): number => {
 export function useCCTPClaim() {
   const { data: walletClient } = useWalletClient();
 
-  const claim = async (transactionHash: string, sourceChainId: number) => {
+  const claim = async (transactionHash: string, sourceChainId: number, signal?: AbortSignal) => {
     if (!walletClient) {
       throw new Error("Wallet client is not available.");
     }
 
-    const attestations = await retrieveAttestations([[transactionHash, sourceChainId]]);
+    // `signal` is wired through to `retrieveAttestations` so the manual-claim
+    // dialog's Cancel button can stop the (potentially many-minute) Circle
+    // attestation poll instead of letting it run to completion in the background.
+    const attestations = await retrieveAttestations([[transactionHash, sourceChainId]], signal);
     if (attestations.length === 0) {
       throw new Error("No attestations found.");
     }
