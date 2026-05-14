@@ -55,11 +55,12 @@ const createMockWalletClient = () => {
 const createMockReceipt = (
   status: "success" | "reverted",
   logs: unknown[] = [],
+  transactionHash: Hex = "0xmocktxhash" as Hex,
 ): WaitForTransactionReceiptReturnType => {
   return {
     status,
     logs,
-    transactionHash: "0xmocktxhash",
+    transactionHash,
     blockHash: "0x1111111111111111111111111111111111111111111111111111111111111111" as Hex,
     blockNumber: 12345n,
     from: "0x1111111111111111111111111111111111111111" as Address,
@@ -297,14 +298,18 @@ describe("sendCalls", () => {
 
           mockWaitForReceipt
             .mockResolvedValueOnce(
-              createMockReceipt("success", [
-                { address: "0x1111111111111111111111111111111111111111", data: "0x", topics: ["0xa"] },
-              ]),
+              createMockReceipt(
+                "success",
+                [{ address: "0x1111111111111111111111111111111111111111", data: "0x", topics: ["0xa"] }],
+                "0xfirst" as Hex,
+              ),
             )
             .mockResolvedValueOnce(
-              createMockReceipt("success", [
-                { address: "0x2222222222222222222222222222222222222222", data: "0x", topics: ["0xb"] },
-              ]),
+              createMockReceipt(
+                "success",
+                [{ address: "0x2222222222222222222222222222222222222222", data: "0x", topics: ["0xb"] }],
+                "0xsecond" as Hex,
+              ),
             );
 
           const [tx, logs] = await prepareSendCalls(mockClient, mockWaitForReceipt)(
@@ -518,7 +523,7 @@ describe("sendCalls", () => {
           vi.mocked(mockClient.sendTransaction)
             .mockRejectedValueOnce(new Error("nonce too low"))
             .mockResolvedValueOnce("0xretried");
-          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", [], "0xretried" as Hex));
 
           const [tx] = await prepareSendCalls(mockClient, mockWaitForReceipt)(
             "test",
@@ -596,7 +601,7 @@ describe("sendCalls", () => {
 
         test("throws SendCallsError with hash when receipt status is reverted", async () => {
           vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xreverted");
-          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("reverted"));
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("reverted", [], "0xreverted" as Hex));
 
           let caught: unknown;
           try {
@@ -614,6 +619,26 @@ describe("sendCalls", () => {
           expect(caught).toBeInstanceOf(SendCallsError);
           expect((caught as SendCallsError).transactionHash).toBe("0xreverted");
           expect((caught as SendCallsError).message).toContain("reverted");
+        });
+
+        test("returns the replacement hash when viem follows a wallet speed-up", async () => {
+          // User sped up the tx from MetaMask. viem's waitForTransactionReceipt
+          // follows the replacement (same nonce, higher fees, different signed
+          // payload → different hash) and returns the replacement's receipt.
+          // sendCalls must surface the replacement's hash so explorer links
+          // resolve and the executor's reconcile path probes the right tx.
+          vi.mocked(mockClient.sendTransaction).mockResolvedValueOnce("0xoriginal");
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", [], "0xspedup" as Hex));
+
+          const [tx] = await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            "0x0000000000000000000000000000000000000000",
+            [{ to: "0x1111111111111111111111111111111111111111", data: "0x" }],
+            "atomic-steps",
+          );
+
+          expect(tx).toBe("0xspedup");
         });
 
         test("SendCallsError carries the nonce + fees used for the failed broadcast", async () => {
@@ -958,7 +983,7 @@ describe("sendCalls", () => {
             .mockResolvedValueOnce(null)
             .mockResolvedValueOnce(null)
             .mockResolvedValue({ hash: "0xvisible" });
-          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", [], "0xvisible" as Hex));
 
           const sendPromise = prepareSendCalls(mockClient, mockWaitForReceipt)(
             "test",
@@ -983,7 +1008,7 @@ describe("sendCalls", () => {
           // Even if mempool never reports the tx, a fast receipt wins the race.
           mockPublicClient.getTransaction.mockReset();
           mockPublicClient.getTransaction.mockResolvedValue(null);
-          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", [], "0xfast" as Hex));
 
           const sendPromise = prepareSendCalls(mockClient, mockWaitForReceipt)(
             "test",

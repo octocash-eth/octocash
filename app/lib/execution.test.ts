@@ -36,7 +36,7 @@ vi.mock("./public-client", () => ({
   getPublicClient: vi.fn(() => ({
     readContract: vi.fn().mockResolvedValue(2n ** 128n),
   })),
-  retryOnRateLimit: <T>(fn: () => Promise<T>) => fn(),
+  retryOnRateLimit: vi.fn(<T>(fn: () => Promise<T>) => fn()),
 }));
 vi.mock("./gas", () => ({
   getNativeBalance: vi.fn().mockResolvedValue(2n ** 128n),
@@ -232,9 +232,11 @@ describe("executeConsolidationPlan", () => {
     });
   });
 
-  test("does not set retryHints for unrelated SendCallsError codes (e.g. revert)", async () => {
-    // Reverts and other non-TX_NOT_BROADCAST/TIMEOUT failures should not
-    // produce retryHints — re-broadcasting at the same nonce wouldn't help.
+  test("captures retryHints for any SendCallsError carrying nonce + fees", async () => {
+    // Whenever the wallet captured nonce + fees on broadcast, retryHints are
+    // preserved so the next attempt can probe the chain and decide same-nonce
+    // replay vs fresh nonce. The decision is deferred to `tryReconcileFromChain`
+    // (chain truth), not gated on the failure's error code.
     const { SendCallsError } = await import("./send-calls");
 
     const swapStep: TransactionStep = {
@@ -259,7 +261,11 @@ describe("executeConsolidationPlan", () => {
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
 
     expect(finalState.plan[0].status).toBe("failed");
-    expect(finalState.plan[0].retryHints).toBeUndefined();
+    expect(finalState.plan[0].retryHints).toEqual({
+      nonce: 7,
+      maxFeePerGas: 10000000000n,
+      maxPriorityFeePerGas: undefined,
+    });
   });
 
   test("clears retryHints on the success step after a successful retry", async () => {
@@ -406,6 +412,217 @@ describe("executeConsolidationPlan", () => {
     expect(executeOdosSwap).toHaveBeenCalled();
     expect(finalState.results["swap-1"].status).toBe("success");
     expect(finalState.results["swap-1"].transactionHash).toBe("0xswap123");
+  });
+
+  test("reverted reconcile clears retryHints so the next broadcast uses a fresh nonce", async () => {
+    // Chain-confirmed revert consumes the nonce. If a prior attempt left
+    // retryHints on the step, they MUST be cleared before fall-through so the
+    // re-broadcast goes out at a fresh nonce instead of "nonce too low".
+    const { prepareSendCalls: realPrepareSendCalls } =
+      await vi.importActual<typeof import("./send-calls")>("./send-calls");
+    void realPrepareSendCalls;
+
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      transactionHash: "0xreverted",
+      retryHints: { nonce: 7, maxFeePerGas: 10000000000n, maxPriorityFeePerGas: 500000000n },
+    };
+
+    mockState.plan = [swapStep];
+
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockResolvedValue({ status: "reverted", logs: [] }),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub for verify-before-retry
+    } as any);
+
+    // Capture whatever retryHints get passed to executeOdosSwap so we can assert
+    // they were cleared before the broadcast.
+    const swapRetryHintsSeen: unknown[] = [];
+    vi.mocked(executeOdosSwap).mockImplementationOnce(async (_inputs, _output, _sendCalls, retryHints) => {
+      swapRetryHintsSeen.push(retryHints);
+      return { amount: 1000000n, transactionHash: "0xfresh" };
+    });
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.results["swap-1"].status).toBe("success");
+    expect(finalState.results["swap-1"].transactionHash).toBe("0xfresh");
+    // executeOdosSwap saw `undefined` for retryHints — fresh nonce on next broadcast.
+    expect(swapRetryHintsSeen[0]).toBeUndefined();
+  });
+
+  test("receipt-not-found preserves retryHints for same-nonce replay on next broadcast", async () => {
+    // Tx hash not indexed yet (could be still pending or never broadcast).
+    // We can't tell, so the defensive choice is same-nonce replay: keep
+    // retryHints intact and pass them through to the next broadcast.
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      transactionHash: "0xpending",
+      retryHints: { nonce: 7, maxFeePerGas: 10000000000n, maxPriorityFeePerGas: 500000000n },
+    };
+
+    mockState.plan = [swapStep];
+
+    class TransactionReceiptNotFoundError extends Error {
+      override name = "TransactionReceiptNotFoundError";
+    }
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockRejectedValue(new TransactionReceiptNotFoundError("not found")),
+      getTransactionCount: vi.fn().mockResolvedValue(7), // nonce 7 still open (latest <= retryHints.nonce)
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any);
+
+    const swapRetryHintsSeen: unknown[] = [];
+    vi.mocked(executeOdosSwap).mockImplementationOnce(async (_inputs, _output, _sendCalls, retryHints) => {
+      swapRetryHintsSeen.push(retryHints);
+      return { amount: 1000000n, transactionHash: "0xreplaced" };
+    });
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.results["swap-1"].status).toBe("success");
+    expect(swapRetryHintsSeen[0]).toEqual({
+      nonce: 7,
+      maxFeePerGas: 10000000000n,
+      maxPriorityFeePerGas: 500000000n,
+    });
+  });
+
+  test("non-429 RPC error preserves retryHints (treated as rpc-error)", async () => {
+    // A non-429 RPC failure (e.g. network drop, malformed response) propagates
+    // through retryOnRateLimit and lands in the catch as a generic Error. We
+    // treat it as rpc-error: keep retryHints, same-nonce replay.
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      transactionHash: "0xunknown",
+      retryHints: { nonce: 11, maxFeePerGas: 20000000000n },
+    };
+
+    mockState.plan = [swapStep];
+
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockRejectedValue(new Error("connection refused")),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any);
+
+    const swapRetryHintsSeen: unknown[] = [];
+    vi.mocked(executeOdosSwap).mockImplementationOnce(async (_inputs, _output, _sendCalls, retryHints) => {
+      swapRetryHintsSeen.push(retryHints);
+      return { amount: 1000000n, transactionHash: "0xrebroadcast" };
+    });
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.results["swap-1"].status).toBe("success");
+    expect(swapRetryHintsSeen[0]).toEqual({
+      nonce: 11,
+      maxFeePerGas: 20000000000n,
+      maxPriorityFeePerGas: undefined,
+    });
+  });
+
+  test("429 receipt fetch is retried transparently by retryOnRateLimit", async () => {
+    // First call throws a 429, second resolves with a success receipt. The
+    // executor must reconcile as a success (not fall through to re-broadcast).
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      transactionHash: "0xrate-limited",
+    };
+
+    mockState.plan = [swapStep];
+
+    // The module-level retryOnRateLimit mock just calls fn() once. Swap in a
+    // minimal real-like retry just for this test (one extra attempt on 429).
+    const { retryOnRateLimit: mockedRetry } = await import("./public-client");
+    vi.mocked(mockedRetry).mockImplementationOnce(async (fn) => {
+      try {
+        return await fn();
+      } catch (e) {
+        if (e instanceof Error && /429/.test(e.message)) return await fn();
+        throw e;
+      }
+    });
+
+    const receiptFn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("429 Too Many Requests"))
+      .mockResolvedValueOnce({ status: "success", logs: [] });
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: receiptFn,
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any);
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(receiptFn).toHaveBeenCalledTimes(2);
+    expect(finalState.results["swap-1"].status).toBe("success");
+    expect(finalState.results["swap-1"].transactionHash).toBe("0xrate-limited");
+    // No re-broadcast.
+    expect(executeOdosSwap).not.toHaveBeenCalled();
+  });
+
+  test("nonce consumed by an unrelated tx pauses execution with a diagnostic", async () => {
+    // Receipt not found AND wallet nonce has advanced past retryHints.nonce —
+    // something else (wallet cancel, manual speedup) consumed our nonce. We
+    // can't safely retry without user review.
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1, { walletAddress: WALLET })],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      transactionHash: "0xreplaced",
+      retryHints: { nonce: 7, maxFeePerGas: 10000000000n },
+    };
+
+    mockState.plan = [swapStep];
+
+    class TransactionReceiptNotFoundError extends Error {
+      override name = "TransactionReceiptNotFoundError";
+    }
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockRejectedValue(new TransactionReceiptNotFoundError("not found")),
+      getTransactionCount: vi.fn().mockResolvedValue(8), // nonce 8 > retryHints.nonce 7 → consumed
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any);
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.status).toBe("paused");
+    expect(finalState.results["swap-1"].status).toBe("failed");
+    // The raw error is preserved on `details` (the canned `message` is the
+    // user-facing string from getErrorMessage).
+    const details = finalState.results["swap-1"].error?.details;
+    expect(details).toBeInstanceOf(Error);
+    expect((details as Error).message).toMatch(/nonce was consumed/i);
+    expect(finalState.plan[0].retryHints).toBeUndefined();
+    expect(executeOdosSwap).not.toHaveBeenCalled();
   });
 
   test("continue after failure with skip - should skip dependent steps", async () => {
@@ -2724,7 +2941,7 @@ describe("planning/execution op estimator equivalence", () => {
             id,
             type: "swap",
             status: "pending",
-            inputTokens: batch,
+            inputTokens: batch as [TokenAmount, ...TokenAmount[]],
             outputToken: makeToken(SRC_USDC, 0n, SRC_CHAIN, { provenance: id }),
           }),
         );

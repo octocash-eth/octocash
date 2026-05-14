@@ -11,7 +11,7 @@ import {
   type OperationType,
 } from "./gas-estimation";
 import { deriveSwapOutputAmount, executeOdosSwap, getSwapQuote } from "./odos";
-import { getPublicClient } from "./public-client";
+import { getPublicClient, retryOnRateLimit } from "./public-client";
 import { prepareSendCalls, SendCallsError } from "./send-calls";
 import { getTokenBalance } from "./tokens";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
@@ -185,27 +185,70 @@ export async function* executeConsolidationPlan(
     // Verify-before-retry: if a prior attempt left a tx hash on this step
     // (e.g. log parsing threw after a successful on-chain swap, or
     // waitForReceipt failed after broadcast), check the chain before
-    // re-broadcasting. If the tx actually succeeded, reconcile in place
-    // instead of double-spending the input.
+    // re-broadcasting. The outcome decides whether to short-circuit with a
+    // reconciled success, fall through with same-nonce replay (retryHints
+    // intact), fall through with fresh nonce (chain-confirmed revert), or
+    // pause for user intervention (nonce consumed by an unrelated tx).
     if (executingStep.transactionHash) {
-      const reconciled = await tryReconcileFromChain(executingStep, workingState);
-      if (reconciled) {
-        workingState.results = { ...workingState.results, [executingStep.id]: reconciled };
+      const outcome = await tryReconcileFromChain(executingStep, workingState);
+      if (outcome?.kind === "success") {
+        workingState.results = { ...workingState.results, [executingStep.id]: outcome.result };
         workingState.plan = [...workingState.plan];
         workingState.plan[i] = {
           ...executingStep,
           status: "success",
-          transactionHash: reconciled.transactionHash,
+          transactionHash: outcome.result.transactionHash,
           executedAt: Date.now(),
         };
-        if (reconciled.actualOutput) {
-          const { plan } = await recalculatePlan(workingState, i, reconciled.actualOutput);
+        if (outcome.result.actualOutput) {
+          const { plan } = await recalculatePlan(workingState, i, outcome.result.actualOutput);
           workingState.plan = plan;
         }
         workingState.updatedAt = Date.now();
         yield structuredClone(workingState);
         continue;
       }
+      if (outcome?.kind === "reverted") {
+        // On-chain revert consumed the nonce. Clear retryHints so the next
+        // broadcast goes out at a fresh nonce.
+        executingStep.retryHints = undefined;
+        workingState.plan = [...workingState.plan];
+        workingState.plan[i] = executingStep;
+      } else if (outcome?.kind === "nonce-consumed-other") {
+        // The wallet's nonce advanced past our retryHints.nonce but our hash
+        // isn't on chain — a different tx (wallet cancel, manual speedup)
+        // consumed our nonce. We can't safely auto-retry; surface to the user.
+        const txError = createTransactionError(
+          new Error(
+            "Original transaction's nonce was consumed by a different transaction (e.g. wallet speed-up, cancellation, or manual replacement). Review on-chain and skip this step if the replacement succeeded.",
+          ),
+        );
+        const failedStep = {
+          ...executingStep,
+          status: "failed" as const,
+          error: txError,
+          retryHints: undefined,
+        };
+        workingState.results = {
+          ...workingState.results,
+          [failedStep.id]: {
+            stepId: failedStep.id,
+            status: "failed",
+            chainId: failedStep.chainId,
+            error: txError,
+            transactionHash: executingStep.transactionHash,
+          },
+        };
+        workingState.plan = [...workingState.plan];
+        workingState.plan[i] = failedStep;
+        pausedDueToFailure = true;
+        workingState.status = "paused";
+        workingState.currentStepIndex = i;
+        workingState.updatedAt = Date.now();
+        yield structuredClone(workingState);
+        return;
+      }
+      // "not-found" / "rpc-error" / null: fall through with retryHints intact.
     }
 
     try {
@@ -252,14 +295,14 @@ export async function* executeConsolidationPlan(
       // tx actually succeeded but our parsing / receipt wait failed).
       const txError = createTransactionError(error);
       const recoveredHash = error instanceof SendCallsError ? error.transactionHash : undefined;
-      // For TX_NOT_BROADCAST / TIMEOUT, capture the nonce + fees of the
-      // failed submission so the next retry replaces the pending tx at the
-      // same nonce with a doubled bid (see `RetryHints` in send-calls.ts).
+      // Whenever the wallet captured nonce + fees for this broadcast, preserve
+      // them so the next attempt can replay at the same nonce. The retry path
+      // probes the chain (`tryReconcileFromChain`) to decide whether to honor
+      // the hints (replay) or drop them (chain-confirmed revert → fresh nonce).
+      // USER_REJECTED self-excludes because the wallet throws before nonce is
+      // captured, so `error.nonce` remains undefined.
       const retryHints =
-        error instanceof SendCallsError &&
-        (txError.code === "TX_NOT_BROADCAST" || txError.code === "TIMEOUT") &&
-        error.nonce !== undefined &&
-        error.maxFeePerGas !== undefined
+        error instanceof SendCallsError && error.nonce !== undefined && error.maxFeePerGas !== undefined
           ? {
               nonce: error.nonce,
               maxFeePerGas: error.maxFeePerGas,
@@ -319,78 +362,152 @@ export async function* executeConsolidationPlan(
 }
 
 /**
- * Best-effort reconciliation for a step that already has an on-chain tx hash
- * from a prior attempt. Returns a success `StepResult` if the chain confirms
- * the tx succeeded; returns `null` to fall through to normal execution if the
- * tx reverted, isn't found, or the RPC fails (we'd rather re-broadcast than
- * block the user behind a flaky RPC).
+ * Outcome of probing the chain for a step's prior broadcast.
+ *
+ * - `success`: receipt found with status=success; we have a derived `StepResult`.
+ * - `reverted`: receipt found with status=reverted; the nonce was consumed on-chain.
+ *   Caller should clear `retryHints` so the next attempt uses a fresh nonce.
+ * - `not-found`: receipt not yet indexed; tx may still be pending or never broadcast.
+ *   Caller should keep `retryHints` for same-nonce replay.
+ * - `nonce-consumed-other`: our hash isn't on chain but the wallet's next-nonce has
+ *   advanced past `retryHints.nonce` — something else (cancellation, manual speedup)
+ *   consumed the nonce. We can't safely retry without user intervention.
+ * - `rpc-error`: probe failed even after rate-limit retries; treat as `not-found` for
+ *   safety (keep `retryHints`, replay same-nonce — replay will either land or come
+ *   back with another probe opportunity).
  */
-async function tryReconcileFromChain(step: TransactionStep, state: ConsolidationState): Promise<StepResult | null> {
+export type ReconcileOutcome =
+  | { kind: "success"; result: StepResult }
+  | { kind: "reverted" }
+  | { kind: "not-found" }
+  | { kind: "nonce-consumed-other" }
+  | { kind: "rpc-error" };
+
+/**
+ * Probes the chain for a step that already has an on-chain tx hash from a prior
+ * attempt. Decides whether to short-circuit with a success result, fall through
+ * to a fresh-nonce broadcast, fall through to a same-nonce replay, or pause for
+ * user intervention.
+ *
+ * Returns `null` when the step has no prior hash (fresh attempt).
+ */
+async function tryReconcileFromChain(
+  step: TransactionStep,
+  state: ConsolidationState,
+): Promise<ReconcileOutcome | null> {
   const hash = step.transactionHash;
   if (!hash) return null;
 
+  const client = getPublicClient(step.chainId);
+  let receipt: Awaited<ReturnType<typeof client.getTransactionReceipt>>;
   try {
-    const client = getPublicClient(step.chainId);
-    const receipt = await client.getTransactionReceipt({ hash: hash as `0x${string}` });
-    if (receipt.status !== "success") return null;
+    receipt = await retryOnRateLimit(() => client.getTransactionReceipt({ hash: hash as `0x${string}` }));
+  } catch (error) {
+    const name = (error as { name?: string } | null | undefined)?.name;
+    if (name === "TransactionReceiptNotFoundError") {
+      // Tx hash unknown to chain. Could be: still pending in mempool, never
+      // broadcast, or replaced at the same nonce by another tx (wallet
+      // cancellation / manual speedup). Probe the wallet's next-nonce to
+      // distinguish "still ours to retry" from "consumed by something else".
+      if (step.retryHints?.nonce !== undefined) {
+        const broadcaster = step.inputTokens[0]?.walletAddress ?? step.outputToken.walletAddress;
+        try {
+          const latest = await retryOnRateLimit(() =>
+            client.getTransactionCount({ address: broadcaster, blockTag: "latest" }),
+          );
+          if (latest > step.retryHints.nonce) {
+            return { kind: "nonce-consumed-other" };
+          }
+        } catch {
+          // Nonce probe failed; fall back to "not-found" (safer — caller will
+          // keep retryHints and same-nonce replay).
+        }
+      }
+      return { kind: "not-found" };
+    }
+    console.warn("[execution] reconcile-from-chain RPC failed; preserving retryHints for same-nonce replay", error);
+    return { kind: "rpc-error" };
+  }
 
-    switch (step.type) {
-      case "swap": {
-        // `receipt.logs ?? []` defends against flaky RPCs that return a
-        // success receipt without the logs array. `deriveSwapOutputAmount`
-        // itself already falls back to the quoted amount when logs are empty.
-        const amount = deriveSwapOutputAmount(receipt.logs ?? [], step.outputToken);
-        return {
+  if (receipt.status !== "success") return { kind: "reverted" };
+
+  // Receipt success — derive per-step result.
+  switch (step.type) {
+    case "swap": {
+      // `receipt.logs ?? []` defends against flaky RPCs that return a
+      // success receipt without the logs array. `deriveSwapOutputAmount`
+      // itself already falls back to the quoted amount when logs are empty.
+      const amount = deriveSwapOutputAmount(receipt.logs ?? [], step.outputToken);
+      return {
+        kind: "success",
+        result: {
           stepId: step.id,
           status: "success",
           chainId: step.chainId,
           transactionHash: hash,
           actualOutput: { ...step.outputToken, amount, provenance: step.id },
-        };
-      }
-      case "bridge": {
-        return {
+        },
+      };
+    }
+    case "bridge": {
+      return {
+        kind: "success",
+        result: {
           stepId: step.id,
           status: "success",
           chainId: step.chainId,
           transactionHash: hash,
           actualOutput: { ...step.outputToken, provenance: step.id },
-        };
-      }
-      case "claim": {
-        const attestations = state.metadata?.attestations;
-        if (!attestations || attestations.length === 0) return null;
-        const amount = attestations.reduce(
-          (sum, a) =>
-            sum +
-            BigInt(a.decodedMessage.decodedMessageBody.amount) -
-            BigInt(a.decodedMessage.decodedMessageBody.feeExecuted),
-          0n,
-        );
-        return {
-          stepId: step.id,
-          status: "success",
-          chainId: step.chainId,
-          transactionHash: hash,
-          actualOutput: { ...step.outputToken, amount, provenance: step.id },
-        };
-      }
-      case "transfer": {
-        const amount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
-        return {
-          stepId: step.id,
-          status: "success",
-          chainId: step.chainId,
-          transactionHash: hash,
-          actualOutput: { ...step.outputToken, amount, provenance: step.id },
-        };
-      }
-      default:
-        return null;
+        },
+      };
     }
-  } catch (error) {
-    console.warn("[execution] reconcile-from-chain failed; falling through to normal execution", error);
-    return null;
+    case "claim": {
+      const attestations = state.metadata?.attestations;
+      const amount =
+        attestations && attestations.length > 0
+          ? attestations.reduce(
+              (sum, a) =>
+                sum +
+                BigInt(a.decodedMessage.decodedMessageBody.amount) -
+                BigInt(a.decodedMessage.decodedMessageBody.feeExecuted),
+              0n,
+            )
+          : step.outputToken.amount;
+      return {
+        kind: "success",
+        result: {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          transactionHash: hash,
+          actualOutput: { ...step.outputToken, amount, provenance: step.id },
+        },
+      };
+    }
+    case "transfer": {
+      const amount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+      return {
+        kind: "success",
+        result: {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          transactionHash: hash,
+          actualOutput: { ...step.outputToken, amount, provenance: step.id },
+        },
+      };
+    }
+    default:
+      return {
+        kind: "success",
+        result: {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          transactionHash: hash,
+          actualOutput: { ...step.outputToken, provenance: step.id },
+        },
+      };
   }
 }
 

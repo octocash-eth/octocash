@@ -435,6 +435,12 @@ export const prepareSendCalls = (
             lastContext,
           );
 
+          // viem's `waitForTransactionReceipt` follows replacements (wallet
+          // speed-up / cancellation send a new tx at the same nonce, dropping
+          // the original). Record the actually-mined hash so explorer links
+          // resolve and the executor's reconcile path probes the right tx.
+          if (receipt.transactionHash) lastTx = receipt.transactionHash;
+
           if (receipt.status === "success") {
             allLogs.push((receipt.logs ?? []) as { address: Address; data: Hex; topics: Hex[] }[]);
           } else {
@@ -508,6 +514,10 @@ export const prepareSendCalls = (
           chainId,
           multicallContext,
         );
+
+        // viem follows replacements (wallet speed-up / cancellation); record
+        // the actually-mined hash so explorer links and reconcile probes resolve.
+        if (receipt.transactionHash) multicallHash = receipt.transactionHash;
 
         if (receipt.status !== "success") {
           throw new SendCallsError(`${txId} transaction reverted`, {
