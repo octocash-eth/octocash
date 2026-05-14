@@ -219,6 +219,14 @@ export function SupportWidget() {
     el.scrollTop = max * screenshotScrollRatio;
   }, [screenshotScrollRatio]);
 
+  // Re-run the sync whenever the captured ratio changes so recaptures from a
+  // different page scroll position update the thumbnail without waiting for
+  // the (possibly cached) image's onLoad to refire.
+  useEffect(() => {
+    if (!screenshot) return;
+    syncThumbnailScroll();
+  }, [screenshot, syncThumbnailScroll]);
+
   const canSubmit = Boolean(category) && text.trim().length > 0 && !sending;
 
   const onSubmit = async (event: React.FormEvent) => {
@@ -367,7 +375,7 @@ export function SupportWidget() {
                 )}
               />
               {screenshot && (
-                <div className="relative rounded-lg border border-border bg-muted/40 p-1.5">
+                <div className="relative rounded-lg border border-input bg-muted/40 p-1.5">
                   <div ref={thumbnailScrollRef} className="max-h-40 overflow-y-auto rounded-md">
                     <img
                       src={screenshot}
