@@ -949,7 +949,9 @@ export default function MockPage() {
                               ? "bg-orange-100 text-orange-800"
                               : step.type === "claim"
                                 ? "bg-green-100 text-green-800"
-                                : "bg-gray-100 text-gray-800"
+                                : step.type === "gas-topup" || step.type === "gas-topup-wait"
+                                  ? "bg-yellow-100 text-yellow-800"
+                                  : "bg-gray-100 text-gray-800"
                       }`}
                     >
                       {step.type}

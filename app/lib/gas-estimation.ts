@@ -30,7 +30,8 @@ export type OperationType =
   | "cctp-burn"
   | "cctp-claim"
   | "transfer-native"
-  | "transfer-erc20";
+  | "transfer-erc20"
+  | "gas-topup-leg";
 
 /**
  * Per-operation gas unit budgets used as a fallback whenever live simulation is
@@ -48,6 +49,10 @@ const GAS_BUDGETS: Record<OperationType, bigint> = {
   "cctp-claim": 300_000n,
   "transfer-native": 21_000n,
   "transfer-erc20": 65_000n,
+  // Single LI.FI cross-chain top-up leg (or same-chain native transfer accounted
+  // generously). Same-chain legs only consume ~21k but using a single conservative
+  // budget keeps step gas estimation simple.
+  "gas-topup-leg": 300_000n,
 };
 
 /** Multiplier applied to raw gas cost. 130 = +30%. */
@@ -395,8 +400,10 @@ async function simulateOperationGas(
       case "swap":
       case "swap-multi":
       case "cctp-claim":
+      case "gas-topup-leg":
         // Calldata not available at planning time — Odos `/sor/assemble` runs
-        // at execution, and CCTP claim needs the attestation message.
+        // at execution, CCTP claim needs the attestation message, and the
+        // gas-topup leg's LI.FI `transactionRequest` is quoted at execution.
         return null;
 
       case "transfer-native": {
@@ -648,6 +655,13 @@ function getStepOperations(step: TransactionStep): OperationType[] {
       if (!firstToken) return [];
       return [isAddressEqual(firstToken.token, zeroAddress) ? "transfer-native" : "transfer-erc20"];
     }
+    case "gas-topup": {
+      const destinations = step.gasTopUpDestinations ?? [];
+      // One leg per destination (same-chain transfer or LI.FI bridge).
+      return destinations.map(() => "gas-topup-leg" as OperationType);
+    }
+    case "gas-topup-wait":
+      return [];
     default:
       return [];
   }
