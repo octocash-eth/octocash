@@ -1,8 +1,8 @@
-import { type Address, isAddressEqual, zeroAddress } from "viem";
+import { type Address, formatUnits, getAddress, isAddressEqual, zeroAddress } from "viem";
 import { chains, transports } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
 import { getBridgeFee } from "./cctp";
-import { getNativeBalance } from "./gas";
+import { findRichestSource, getNativeBalance } from "./gas";
 import {
   attachGasEstimates,
   buildGasContext,
@@ -13,49 +13,88 @@ import {
   type GasContext,
   type OperationType,
 } from "./gas-estimation";
+import { getLiFiQuoteForTargetOutput } from "./lifi";
 import { getSwapQuote } from "./odos";
 import { getPublicClient } from "./public-client";
 import { groupTokensByChainAndWallet } from "./tokens";
 import type { DestinationToken, TokenAmount, TransactionStep } from "./types";
 
-/** Throws an InsufficientGasError-style message in the format users already know. */
-function throwInsufficientGas(chainId: number, walletAddress: Address, gasCost: bigint): never {
-  const chain = chains[chainId as keyof typeof chains];
-  const chainName = chain?.name ?? `chain ${chainId}`;
-  const symbol = chain?.nativeCurrency?.symbol ?? "ETH";
-  throw new Error(
-    `Insufficient gas on ${chainName} for ${walletAddress}. Please top up at https://gas.zip. Need ~${formatGasCostNative(gasCost)} ${symbol}.`,
-  );
+const SUPPORTED_CHAINS = Object.keys(chains).map(Number);
+
+/**
+ * Per-(chain, wallet) deficit of native gas. Collected during planning instead of
+ * throwing, so a `gas-topup` step can be prepended to refuel the wallet from
+ * another source (LI.FI bridge or same-chain native transfer).
+ */
+type GasGap = { chainId: number; walletAddress: Address; deficitWei: bigint };
+type GasGaps = Map<string, GasGap>;
+
+function gapKey(chainId: number, walletAddress: Address): string {
+  return `${chainId}:${getAddress(walletAddress)}`;
 }
 
 /**
- * Variant of {@link throwInsufficientGas} for the specific case where the user
- * picked the chain's native token as a source and the predicted gas cost
- * exceeds their wallet's entire native balance. In that situation "top up at
- * gas.zip" is misleading — the wallet does hold native, but every wei of it
- * would have to be reserved for gas, leaving nothing to bridge/swap and
- * producing an empty plan. The error tells the user what actually went wrong
- * and what they can do: reduce/deselect the native amount, or fund the wallet
- * with more native.
+ * Records a gas deficit. If the same (chain, wallet) already has a recorded gap,
+ * the larger of the two is kept so the eventual top-up covers all paths.
  */
-function throwNativeConsumedByGas(
-  chainId: number,
-  walletAddress: Address,
-  nativeBalance: bigint,
-  gasCost: bigint,
-): never {
+function recordGasGap(gaps: GasGaps, chainId: number, walletAddress: Address, deficitWei: bigint): void {
+  if (deficitWei <= 0n) return;
+  const key = gapKey(chainId, walletAddress);
+  const existing = gaps.get(key);
+  const normalized = getAddress(walletAddress) as Address;
+  if (existing) {
+    if (deficitWei > existing.deficitWei) existing.deficitWei = deficitWei;
+    return;
+  }
+  gaps.set(key, { chainId, walletAddress: normalized, deficitWei });
+}
+
+/**
+ * Assumed worst-case LI.FI cross-chain top-up overhead (bridge fee + relayer +
+ * slippage), as a fraction of the delivered amount, in basis points. Native
+ * bridges (Across-style) typically run ~0.1–1%; 1.5% is a conservative
+ * catch-all. Used ONLY to gate dust top-ups — not to size the recorded deficit
+ * — so we don't request a cross-chain refuel to move an amount the fees would
+ * eat. Same-chain refuels have ~no overhead, so this slightly over-rejects gaps
+ * that end up funded same-chain, an acceptable bias for a dust guard.
+ */
+const ASSUMED_TOPUP_OVERHEAD_BPS = 150n;
+
+/**
+ * Minimum native amount worth topping up for: the operation gas plus the assumed
+ * LI.FI overhead on the whole deficit it would take to deliver it. At or below
+ * this, a cross-chain top-up costs more than the amount it would rescue, so the
+ * caller refuses (sole dust) or drops the dust native (other value present).
+ */
+function dustTopUpThreshold(amount: bigint, gasCost: bigint, balance: bigint): bigint {
+  const deficit = amount + gasCost - balance;
+  const assumedOverhead = deficit > 0n ? (deficit * ASSUMED_TOPUP_OVERHEAD_BPS) / 10_000n : 0n;
+  return gasCost + assumedOverhead;
+}
+
+/**
+ * Refuses to plan when the user selected a native amount on a wallet that can't
+ * cover its own gas AND that amount is no larger than the gas needed to move it.
+ *
+ * Recording a gas gap here would prepend a `gas-topup` step that bridges native
+ * in from another wallet — costing extra gas plus a LI.FI bridge fee — just to
+ * consolidate an amount worth less than those fees. That's a guaranteed net
+ * loss, so we surface an actionable error instead (mirrors the pre-top-up
+ * behavior the user already knew). Only used when the dust native is the sole
+ * asset on that wallet; if other value is present the caller drops the dust
+ * native and tops up for the rest.
+ */
+function throwNativeAmountTooSmall(chainId: number, walletAddress: Address, amount: bigint, gasCost: bigint): never {
   const chain = chains[chainId as keyof typeof chains];
   const chainName = chain?.name ?? `chain ${chainId}`;
   const symbol = chain?.nativeCurrency?.symbol ?? "ETH";
   throw new Error(
-    `Not enough ${symbol} on ${chainName} to consolidate from ${walletAddress}. ` +
-      `Gas (~${formatGasCostNative(gasCost)} ${symbol}) exceeds the wallet balance ` +
-      `(${formatGasCostNative(nativeBalance)} ${symbol}), so the selected ${symbol} would be entirely spent on fees. ` +
-      `Deselect ${symbol}, lower its amount, or add more ${symbol} to the wallet.`,
+    `The ${symbol} amount selected on ${chainName} from ${walletAddress} ` +
+      `(~${formatGasCostNative(amount)} ${symbol}) is smaller than the gas needed to move it ` +
+      `(~${formatGasCostNative(gasCost)} ${symbol}). Topping up gas to consolidate it would cost ` +
+      `more than it's worth. Deselect ${symbol}, increase its amount, or add more ${symbol} to the wallet.`,
   );
 }
-
-const SUPPORTED_CHAINS = Object.keys(chains).map(Number);
 
 /**
  * EIP-7702 designation prefix. An EOA that has authorized a delegate has
@@ -168,8 +207,9 @@ function predictIntermediateDestinationOps(
 async function resolveIntermediateWallet(
   sourceTokens: TokenAmount[],
   destinationToken: DestinationToken,
-  connectedWallets: readonly Address[] = [],
+  connectedWallets: readonly Address[],
   gasCtx: GasContext,
+  gaps: GasGaps,
 ): Promise<Address> {
   const destinationWallet = destinationToken.walletAddress;
   const isDestinationConnected = connectedWallets.some((wallet) => isAddressEqual(wallet, destinationWallet));
@@ -185,7 +225,8 @@ async function resolveIntermediateWallet(
       transports?.[destChainId as keyof typeof transports],
     );
     if (balance < destGas.totalGasCost) {
-      throwInsufficientGas(destChainId, destinationWallet, destGas.totalGasCost);
+      // Record the deficit so a gas-topup step can refuel the destination wallet.
+      recordGasGap(gaps, destChainId, destinationWallet, destGas.totalGasCost - balance);
     }
     return destinationWallet;
   }
@@ -204,9 +245,19 @@ async function resolveIntermediateWallet(
     }
   }
 
+  // No connected wallet has enough — pick the first connected one and record a gap.
+  if (searchOrder.length > 0) {
+    const wallet = searchOrder[0];
+    const destOps = predictIntermediateDestinationOps(sourceTokens, destinationToken, wallet, false);
+    const destGas = await estimateChainGasCosts(destChainId, destOps, gasCtx.maxFeePerGas[destChainId]);
+    const balance = await getNativeBalance(chain, wallet, transports?.[destChainId as keyof typeof transports]);
+    recordGasGap(gaps, destChainId, wallet, destGas.totalGasCost - balance);
+    return wallet;
+  }
+
   const chainName = chain?.name ?? `chain ${destChainId}`;
   throw new Error(
-    `PlanningError: Destination wallet ${destinationWallet} is not connected and no connected wallet has sufficient gas on ${chainName}`,
+    `PlanningError: Destination wallet ${destinationWallet} is not connected and no connected wallet found for ${chainName}`,
   );
 }
 
@@ -450,6 +501,7 @@ async function processChainWalletSwaps(
   sourceTokens: TokenAmount[],
   destinationToken: DestinationToken,
   gasCtx: GasContext,
+  gaps: GasGaps,
   log: (...args: unknown[]) => void,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
   const steps: TransactionStep[] = [];
@@ -538,26 +590,64 @@ async function processChainWalletSwaps(
         const nativeToken = tokensToSwapToUSDC[nativeIdx];
         const maxAffordable = nativeBalance > gasCost.totalGasCost ? nativeBalance - gasCost.totalGasCost : 0n;
 
-        if (nativeToken.amount > maxAffordable) {
+        if (maxAffordable <= 0n) {
+          // Wallet can't even cover gas.
+          if (nativeToken.amount <= dustTopUpThreshold(nativeToken.amount, gasCost.totalGasCost, nativeBalance)) {
+            // Worth no more than the gas + assumed LI.FI overhead to move it.
+            const otherValue = tokensToSwapToUSDC.length > 1 || usdcAlreadyHere.length > 0;
+            if (!otherValue) {
+              // Dust native is the only thing on this wallet — refuse instead of
+              // topping up gas to consolidate something worth less than the fees.
+              throwNativeAmountTooSmall(chainId, walletAddress, nativeToken.amount, gasCost.totalGasCost);
+            }
+            // Other value is present (USDC/ERC20). Drop the dust native from the
+            // swap and re-estimate gas for what remains, topping up only for that.
+            log(
+              `🔍 [DEBUG] Dropping dust native on chain ${chainId} for ${walletAddress}: amount=${nativeToken.amount.toString()} <= gasCost=${gasCost.totalGasCost.toString()}`,
+            );
+            tokensToSwapToUSDC.splice(nativeIdx, 1);
+            const remainingInputs = [...tokensToSwapToUSDC, ...usdcAlreadyHere];
+            const remainingOps = estimateOperationsForChainWallet(
+              remainingInputs.map((t) => ({
+                token: t.token,
+                symbol: t.symbol,
+                decimals: t.decimals,
+                amount: t.amount,
+              })),
+              chainId,
+              destinationToken.chainId,
+              chainUSDC,
+            );
+            const remainingGas = await estimateChainGasCosts(chainId, remainingOps, gasCtx.maxFeePerGas[chainId]);
+            if (nativeBalance < remainingGas.totalGasCost) {
+              recordGasGap(gaps, chainId, walletAddress, remainingGas.totalGasCost - nativeBalance);
+              log(
+                `🔍 [DEBUG] Recording gas gap on chain ${chainId} for ${walletAddress}: balance=${nativeBalance.toString()}, gasCost=${remainingGas.totalGasCost.toString()}, deficit=${(remainingGas.totalGasCost - nativeBalance).toString()}`,
+              );
+            }
+          } else {
+            // Native amount exceeds the gas to move it — a top-up is worthwhile.
+            // Record a gap so the user's selected native swap amount is preserved
+            // AND there's enough native left for the swap+bridge gas.
+            const required = nativeToken.amount + gasCost.totalGasCost;
+            recordGasGap(gaps, chainId, walletAddress, required - nativeBalance);
+            log(
+              `🔍 [DEBUG] Recording gas gap on chain ${chainId} for ${walletAddress}: balance=${nativeBalance.toString()}, required=${required.toString()}, deficit=${(required - nativeBalance).toString()}`,
+            );
+          }
+        } else if (nativeToken.amount > maxAffordable) {
           log(
             `🔍 [DEBUG] Adjusting native token on chain ${chainId}: selected=${nativeToken.amount.toString()}, maxAffordable=${maxAffordable.toString()}, gasCost=${gasCost.totalGasCost.toString()}`,
           );
-          if (maxAffordable <= 0n) {
-            // Gas eats the entire native balance — there is nothing left to swap
-            // and silently dropping the user's selection would yield an empty
-            // (or partially-empty) plan with no explanation. Surface a
-            // dedicated error that explains the native was fully consumed by
-            // gas (the generic "top up gas" copy is misleading here since the
-            // wallet does hold native; it just got reserved for fees).
-            throwNativeConsumedByGas(chainId, walletAddress, nativeBalance, gasCost.totalGasCost);
-          } else {
-            tokensToSwapToUSDC[nativeIdx] = { ...nativeToken, amount: maxAffordable };
-          }
+          tokensToSwapToUSDC[nativeIdx] = { ...nativeToken, amount: maxAffordable };
         }
       } else if (nativeBalance < gasCost.totalGasCost) {
         // No native token being swapped (e.g. USDC-only or ERC20-only wallet)
-        // — ensure wallet has enough native for the swap/bridge gas.
-        throwInsufficientGas(chainId, walletAddress, gasCost.totalGasCost);
+        // — record gas deficit so a top-up step can refuel this wallet.
+        recordGasGap(gaps, chainId, walletAddress, gasCost.totalGasCost - nativeBalance);
+        log(
+          `🔍 [DEBUG] Recording gas gap on chain ${chainId} for ${walletAddress}: balance=${nativeBalance.toString()}, gasCost=${gasCost.totalGasCost.toString()}, deficit=${(gasCost.totalGasCost - nativeBalance).toString()}`,
+        );
       }
     }
 
@@ -778,6 +868,7 @@ async function createFinalSwaps(
   gasCtx: GasContext,
   hasBridges: boolean,
   needsFinalTransfer: boolean,
+  gaps: GasGaps,
   log: (...args: unknown[]) => void,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
   log(
@@ -847,20 +938,59 @@ async function createFinalSwaps(
       );
       const maxAffordable = nativeBalance > gasCost.totalGasCost ? nativeBalance - gasCost.totalGasCost : 0n;
 
-      if (nativeToken.amount > maxAffordable) {
+      if (maxAffordable <= 0n) {
+        // Wallet can't even cover gas.
+        if (nativeToken.amount <= dustTopUpThreshold(nativeToken.amount, gasCost.totalGasCost, nativeBalance)) {
+          // Worth no more than the gas + assumed LI.FI overhead to move it.
+          const otherValue = tokensToProcess.length > 1;
+          if (!otherValue) {
+            // Dust native is the only thing on this wallet — refuse instead of
+            // topping up gas to consolidate something worth less than the fees.
+            throwNativeAmountTooSmall(destChainId, walletAddress, nativeToken.amount, gasCost.totalGasCost);
+          }
+          // Other value is present. Drop the dust native and re-estimate gas for
+          // the remaining final operations, topping up only for those.
+          log(
+            `🔍 [DEBUG] Dropping dust native on dest chain ${destChainId} for ${walletAddress}: amount=${nativeToken.amount.toString()} <= gasCost=${gasCost.totalGasCost.toString()}`,
+          );
+          tokensToProcess.splice(nativeIdx, 1);
+          const remainingNeedingSwap = tokensToProcess.filter((t) => !isAddressEqual(t.token, destinationToken.token));
+          const remainingNonNativeSwapCount = remainingNeedingSwap.filter(
+            (t) => !isAddressEqual(t.token, zeroAddress),
+          ).length;
+          const remainingDestOps = estimateDestinationChainOperations(
+            hasBridges,
+            remainingNonNativeSwapCount,
+            false,
+            needsFinalTransfer,
+            destIsNative,
+          );
+          const remainingGas = await estimateChainGasCosts(
+            destChainId,
+            remainingDestOps,
+            gasCtx.maxFeePerGas[destChainId],
+          );
+          if (nativeBalance < remainingGas.totalGasCost) {
+            recordGasGap(gaps, destChainId, walletAddress, remainingGas.totalGasCost - nativeBalance);
+            log(
+              `🔍 [DEBUG] Recording gas gap on dest chain ${destChainId} for ${walletAddress}: balance=${nativeBalance.toString()}, gasCost=${remainingGas.totalGasCost.toString()}, deficit=${(remainingGas.totalGasCost - nativeBalance).toString()}`,
+            );
+          }
+        } else {
+          // Native amount exceeds the gas to move it — a top-up is worthwhile.
+          // Record a gap so the user keeps their native swap input AND has gas
+          // for the final operations.
+          const required = nativeToken.amount + gasCost.totalGasCost;
+          recordGasGap(gaps, destChainId, walletAddress, required - nativeBalance);
+          log(
+            `🔍 [DEBUG] Recording gas gap on dest chain ${destChainId} for ${walletAddress}: balance=${nativeBalance.toString()}, required=${required.toString()}, deficit=${(required - nativeBalance).toString()}`,
+          );
+        }
+      } else if (nativeToken.amount > maxAffordable) {
         log(
           `🔍 [DEBUG] Adjusting native token on dest chain ${destChainId}: selected=${nativeToken.amount.toString()}, maxAffordable=${maxAffordable.toString()}, gasCost=${gasCost.totalGasCost.toString()}`,
         );
-        if (maxAffordable <= 0n) {
-          // Mirrors the source-chain check in `processChainWalletSwaps`:
-          // silently dropping the selected native would erase the final swap
-          // and the user's chosen amount with no message. Use the dedicated
-          // "native consumed by gas" error so the user is told exactly which
-          // action to take (deselect/reduce the native or fund the wallet).
-          throwNativeConsumedByGas(destChainId, walletAddress, nativeBalance, gasCost.totalGasCost);
-        } else {
-          tokensToProcess[nativeIdx] = { ...nativeToken, amount: maxAffordable };
-        }
+        tokensToProcess[nativeIdx] = { ...nativeToken, amount: maxAffordable };
       }
     }
 
@@ -941,6 +1071,231 @@ async function createFinalTransfer(
 }
 
 /**
+ * Builds gas-topup (and optional gas-topup-wait) steps that refuel wallets which
+ * couldn't cover their own gas during pipeline construction.
+ *
+ * Funding source preference:
+ *   1. Destination wallet on the destination chain (if it has enough native).
+ *   2. Otherwise the richest source across ALL supported chains × executor wallets.
+ *
+ * Per gap, we get a LI.FI quote sized to deliver exactly the deficit (cross-chain),
+ * or schedule a same-chain native transfer (when source and gap share a chain).
+ *
+ * @returns Empty array when there are no gaps; one or two steps otherwise.
+ */
+async function createGasTopUpSteps(
+  gaps: GasGaps,
+  intermediateWallet: Address,
+  destinationToken: DestinationToken,
+  executorAddresses: Set<Address>,
+  log: (...args: unknown[]) => void,
+): Promise<TransactionStep[]> {
+  if (gaps.size === 0) return [];
+
+  const gapEntries = [...gaps.values()];
+
+  // Try a sequence of source candidates in priority order. For each candidate we
+  // get the actual LI.FI quotes (they include bridge fees and cross-token rates)
+  // and accept the candidate only if its usable balance covers the total deposit.
+  const destChainId = destinationToken.chainId;
+  const destChain = chains[destChainId as keyof typeof chains];
+  const candidates: { chainId: number; address: Address; balance: bigint; label: string }[] = [];
+
+  if (destChain) {
+    const destBalance = await getNativeBalance(
+      destChain,
+      intermediateWallet,
+      transports?.[destChainId as keyof typeof transports],
+    );
+    candidates.push({
+      chainId: destChainId,
+      address: getAddress(intermediateWallet) as Address,
+      balance: destBalance,
+      label: `destination wallet ${intermediateWallet} on ${destChain.name}`,
+    });
+  }
+
+  const fallback = await findRichestSource(
+    [...executorAddresses].flatMap((addr) => SUPPORTED_CHAINS.map((c) => [c, addr] as [number, Address])),
+    transports,
+  );
+  if (fallback) {
+    const isDup = candidates.some((c) => c.chainId === fallback.chainId && isAddressEqual(c.address, fallback.address));
+    if (!isDup) {
+      const fallbackChain = chains[fallback.chainId as keyof typeof chains];
+      candidates.push({
+        chainId: fallback.chainId,
+        address: fallback.address,
+        balance: fallback.balance,
+        label: `richest source ${fallback.address} on ${fallbackChain?.name ?? `chain ${fallback.chainId}`}`,
+      });
+    }
+  }
+
+  if (candidates.length === 0) {
+    throw new Error("PlanningError: No wallet with native balance found to fund gas top-up");
+  }
+
+  let resolved: {
+    source: { chainId: number; address: Address; balance: bigint };
+    sourceChain: (typeof chains)[keyof typeof chains];
+    destinations: { chainId: number; address: Address; amountWei: string; depositRequired: bigint }[];
+    totalDeposit: bigint;
+  } | null = null;
+  let lastError: Error | null = null;
+
+  for (const candidate of candidates) {
+    const sourceChain = chains[candidate.chainId as keyof typeof chains];
+    if (!sourceChain) continue;
+
+    const sourceOwnGap = gaps.get(gapKey(candidate.chainId, candidate.address))?.deficitWei ?? 0n;
+    const sourceUsableBalance = candidate.balance > sourceOwnGap ? candidate.balance - sourceOwnGap : 0n;
+
+    const destinations: { chainId: number; address: Address; amountWei: string; depositRequired: bigint }[] = [];
+
+    let candidateError: Error | null = null;
+    for (const gap of gapEntries) {
+      if (gap.chainId === candidate.chainId && isAddressEqual(gap.walletAddress, candidate.address)) {
+        continue;
+      }
+
+      if (gap.chainId === candidate.chainId) {
+        destinations.push({
+          chainId: gap.chainId,
+          address: gap.walletAddress,
+          amountWei: gap.deficitWei.toString(),
+          depositRequired: gap.deficitWei,
+        });
+        continue;
+      }
+
+      try {
+        const quote = await getLiFiQuoteForTargetOutput(
+          candidate.chainId,
+          gap.chainId,
+          gap.deficitWei,
+          candidate.address,
+          gap.walletAddress,
+        );
+        destinations.push({
+          chainId: gap.chainId,
+          address: gap.walletAddress,
+          amountWei: gap.deficitWei.toString(),
+          depositRequired: BigInt(quote.estimate.fromAmount),
+        });
+      } catch (error) {
+        const gapChain = chains[gap.chainId as keyof typeof chains];
+        const chainName = gapChain ? (gapChain as { name: string }).name : String(gap.chainId);
+        candidateError = new Error(
+          `PlanningError: You don't have enough gas on ${chainName} and LI.FI can't find a route right now. Please try again later or manually top up gas on that network. (${error instanceof Error ? error.message : String(error)})`,
+        );
+        break;
+      }
+    }
+
+    if (candidateError) {
+      lastError = candidateError;
+      continue;
+    }
+
+    if (destinations.length === 0) {
+      // All gaps were for the candidate itself. The candidate can't fund its own
+      // deficit (the gap exists precisely because it lacks the funds), so try the
+      // next candidate.
+      log(`🔍 [DEBUG] Gas top-up: ${candidate.label} can only fund itself, trying next candidate`);
+      continue;
+    }
+
+    const totalDeposit = destinations.reduce((sum, d) => sum + d.depositRequired, 0n);
+
+    if (sourceUsableBalance < totalDeposit) {
+      const symbol = sourceChain.nativeCurrency.symbol;
+      const decimals = sourceChain.nativeCurrency.decimals;
+      const balanceFormatted = formatUnits(sourceUsableBalance, decimals);
+      const neededFormatted = formatUnits(totalDeposit, decimals);
+      lastError = new Error(
+        `PlanningError: Insufficient funds for gas top-up. Wallet ${candidate.address} on ${sourceChain.name} has ${balanceFormatted} ${symbol} available but needs ${neededFormatted} ${symbol}.`,
+      );
+      log(`🔍 [DEBUG] Gas top-up: ${candidate.label} can't cover total deposit, trying next candidate`);
+      continue;
+    }
+
+    log(`🔍 [DEBUG] Gas top-up: funding from ${candidate.label}`);
+    resolved = {
+      source: { chainId: candidate.chainId, address: candidate.address, balance: candidate.balance },
+      sourceChain,
+      destinations,
+      totalDeposit,
+    };
+    break;
+  }
+
+  if (!resolved) {
+    throw lastError ?? new Error("PlanningError: No funding source available for gas top-up");
+  }
+
+  const { source, sourceChain, destinations, totalDeposit } = resolved;
+
+  const gasTopUpStepId = "step-gas-topup";
+  const gasTopUpWaitStepId = "step-gas-topup-wait";
+
+  const inputToken: TokenAmount = {
+    token: zeroAddress,
+    amount: totalDeposit,
+    chainId: source.chainId,
+    walletAddress: source.address,
+    symbol: sourceChain.nativeCurrency.symbol,
+    decimals: sourceChain.nativeCurrency.decimals,
+  };
+
+  const outputToken: TokenAmount = {
+    ...inputToken,
+    provenance: gasTopUpStepId,
+  };
+
+  const gasTopUpDestinations = destinations.map((d) => ({
+    chainId: d.chainId,
+    address: d.address,
+    amountWei: d.amountWei,
+  }));
+
+  const gasTopUpStep: TransactionStep = {
+    id: gasTopUpStepId,
+    type: "gas-topup",
+    status: "pending",
+    chainId: source.chainId,
+    inputTokens: [inputToken],
+    outputToken,
+    gasTopUpDestinations,
+  };
+
+  const hasCrossChain = destinations.some((d) => d.chainId !== source.chainId);
+
+  if (!hasCrossChain) {
+    log(
+      `🔍 [DEBUG] Gas top-up: created 1 step (same-chain only) for ${destinations.length} destinations, total deposit: ${totalDeposit.toString()} wei`,
+    );
+    return [gasTopUpStep];
+  }
+
+  const gasTopUpWaitStep: TransactionStep = {
+    id: gasTopUpWaitStepId,
+    type: "gas-topup-wait",
+    status: "pending",
+    chainId: source.chainId,
+    inputTokens: [outputToken],
+    outputToken: { ...outputToken, provenance: gasTopUpWaitStepId },
+    gasTopUpDestinations,
+  };
+
+  log(
+    `🔍 [DEBUG] Gas top-up: created steps for ${destinations.length} destinations, total deposit: ${totalDeposit.toString()} wei`,
+  );
+
+  return [gasTopUpStep, gasTopUpWaitStep];
+}
+
+/**
  * Plans a complete multi-chain token consolidation by generating transaction steps
  *
  * This is the main planning function that orchestrates the entire consolidation process:
@@ -1000,12 +1355,22 @@ export async function planConsolidation(
   const allChainIds = [...new Set([...sourceTokens.map((t) => t.chainId), destinationToken.chainId])];
   const gasCtx = await buildGasContext(allChainIds);
 
+  // Track per-(chain, wallet) gas deficits while building the pipeline so we can
+  // prepend a single gas-topup step at the end instead of failing planning.
+  const gaps: GasGaps = new Map();
+
   // Find a suitable intermediate wallet using gas estimation
-  const intermediateWallet = await resolveIntermediateWallet(sourceTokens, destinationToken, connectedWallets, gasCtx);
+  const intermediateWallet = await resolveIntermediateWallet(
+    sourceTokens,
+    destinationToken,
+    connectedWallets,
+    gasCtx,
+    gaps,
+  );
   const intermediateToken = { ...destinationToken, walletAddress: intermediateWallet };
 
-  // Build consolidation pipeline (gas-adjusted)
-  let { steps, tokens } = await processChainWalletSwaps(sourceTokens, intermediateToken, gasCtx, log);
+  // Build consolidation pipeline (gas-adjusted; missing gas is recorded into `gaps`)
+  let { steps, tokens } = await processChainWalletSwaps(sourceTokens, intermediateToken, gasCtx, gaps, log);
   ({ steps, tokens } = await createBridgeSteps(steps, tokens, intermediateToken, log));
   ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, intermediateToken));
 
@@ -1018,12 +1383,26 @@ export async function planConsolidation(
     gasCtx,
     hasBridges,
     needsFinalTransfer,
+    gaps,
     log,
   ));
 
   if (needsFinalTransfer) {
     ({ steps, tokens } = await createFinalTransfer(steps, tokens, destinationToken, log));
   }
+
+  // If any (chain, wallet) couldn't cover its own gas, prepend a gas-topup step
+  // funded preferentially from the destination wallet, falling back to the
+  // richest executor balance across all supported chains.
+  const executorAddresses = new Set<Address>();
+  executorAddresses.add(getAddress(intermediateWallet) as Address);
+  for (const step of steps) {
+    if (step.inputTokens[0]?.walletAddress) {
+      executorAddresses.add(getAddress(step.inputTokens[0].walletAddress) as Address);
+    }
+  }
+  const gasTopUpSteps = await createGasTopUpSteps(gaps, intermediateWallet, destinationToken, executorAddresses, log);
+  steps = [...gasTopUpSteps, ...steps];
 
   // Attach per-step gas estimates for UI display
   await attachGasEstimates(steps, gasCtx);

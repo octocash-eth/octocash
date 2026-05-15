@@ -221,6 +221,67 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
         </>
       );
     }
+    case "gas-topup": {
+      const inputToken = step.inputTokens[0];
+      const destinations = step.gasTopUpDestinations ?? [];
+      const destChainIds = [...new Set(destinations.map((d) => d.chainId))];
+      const destAddresses = [...new Set(destinations.map((d) => d.address))];
+      return (
+        <>
+          <span className="text-foreground">
+            {isPast ? "Topped up gas with" : isExecuting ? "Topping up gas with" : "Top up gas with"}
+          </span>{" "}
+          <TokenAmountInlineFor token={inputToken} /> <span className="text-muted-foreground">from</span>{" "}
+          <ChainBadge chainId={step.chainId} name={chainName} /> <span className="text-muted-foreground">→</span>{" "}
+          {destChainIds.map((cId, i) => {
+            const cName = chains[cId as keyof typeof chains]?.name || `Chain ${cId}`;
+            return (
+              <span key={cId}>
+                {i > 0 && <span className="text-muted-foreground"> + </span>}
+                <ChainBadge chainId={cId} name={cName} />
+              </span>
+            );
+          })}{" "}
+          <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
+            (
+            {destAddresses.length === 1 && destAddresses[0].toLowerCase() === inputToken.walletAddress.toLowerCase() ? (
+              <AddressInline address={inputToken.walletAddress} />
+            ) : (
+              <>
+                <AddressInline address={inputToken.walletAddress} /> →{" "}
+                {destAddresses.map((addr, i) => (
+                  <span key={addr}>
+                    {i > 0 && " + "}
+                    <AddressInline address={addr} />
+                  </span>
+                ))}
+              </>
+            )}
+            )
+          </span>
+        </>
+      );
+    }
+    case "gas-topup-wait": {
+      const destinations = step.gasTopUpDestinations ?? [];
+      const destChainIds = [...new Set(destinations.map((d) => d.chainId))];
+      return (
+        <>
+          <span className="text-foreground">
+            {isPast ? "Gas delivered on" : isExecuting ? "Waiting for gas on" : "Wait for gas on"}
+          </span>{" "}
+          {destChainIds.map((cId, i) => {
+            const cName = chains[cId as keyof typeof chains]?.name || `Chain ${cId}`;
+            return (
+              <span key={cId}>
+                {i > 0 && <span className="text-muted-foreground"> + </span>}
+                <ChainBadge chainId={cId} name={cName} />
+              </span>
+            );
+          })}
+        </>
+      );
+    }
     default:
       return (
         <>

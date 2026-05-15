@@ -25,6 +25,10 @@ export const ERROR_MESSAGES: Record<ErrorCode, [string, string]> = {
     "Bridge attestation not received within 20 minutes",
     "The money may be stuck in CCTPv2, use the history page to resume the transaction.",
   ],
+  [ERROR_CODES.GAS_TOPUP_TIMEOUT]: [
+    "Gas delivery timed out",
+    "LI.FI transfer may still be processing. Retry to check again.",
+  ],
   [ERROR_CODES.PLANNING_ERROR]: ["Failed to plan transaction", "Please try again."],
   [ERROR_CODES.UNSUPPORTED_ROUTE]: ["This route is not supported", "Please try with different tokens."],
   [ERROR_CODES.EXTERNAL_API_ERROR]: ["External service error", "Please retry."],
@@ -79,6 +83,8 @@ export function createTransactionError(
     code = ERROR_CODES.RPC_ERROR;
   } else if (messageIncludes("ATTESTATION_TIMEOUT")) {
     code = ERROR_CODES.ATTESTATION_TIMEOUT;
+  } else if (messageIncludes("GAS_TOPUP_TIMEOUT")) {
+    code = ERROR_CODES.GAS_TOPUP_TIMEOUT;
   } else if (messageIncludes("TIMEOUT") || messageIncludes("timed out")) {
     code = ERROR_CODES.TIMEOUT;
   } else if (messageIncludes("PlanningError")) {

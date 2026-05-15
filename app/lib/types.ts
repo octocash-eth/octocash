@@ -13,7 +13,9 @@ export type TransactionType =
   | "bridge" // USDC bridge using CCTP
   | "attestation" // Wait for bridge attestation(s)
   | "claim" // Claim bridged tokens
-  | "transfer"; // Simple transfer (same token, same chain)
+  | "transfer" // Simple transfer (same token, same chain)
+  | "gas-topup" // Send native token via LI.FI to refuel destination chains
+  | "gas-topup-wait"; // Wait for LI.FI transfer delivery on destination chains
 
 /**
  * Execution status of a transaction step
@@ -91,6 +93,9 @@ export interface TransactionStep {
     maxFeePerGas: bigint;
     maxPriorityFeePerGas?: bigint;
   };
+
+  // Gas top-up specific (only for gas-topup and gas-topup-wait steps)
+  gasTopUpDestinations?: { chainId: number; address: Address; amountWei: string }[];
 }
 
 // ============================================================================
@@ -150,6 +155,7 @@ export interface ConsolidationState {
   // Execution metadata (intermediate data between steps)
   metadata?: {
     attestations?: Attestation[];
+    lifiTransfers?: { txHash: string; bridge: string; fromChainId: number; toChainId: number }[];
   };
 
   createdAt: number; // Timestamp
@@ -187,6 +193,7 @@ export const ERROR_CODES = {
   TIMEOUT: "TIMEOUT",
   TX_NOT_BROADCAST: "TX_NOT_BROADCAST",
   ATTESTATION_TIMEOUT: "ATTESTATION_TIMEOUT",
+  GAS_TOPUP_TIMEOUT: "GAS_TOPUP_TIMEOUT",
   PLANNING_ERROR: "PLANNING_ERROR",
   UNSUPPORTED_ROUTE: "UNSUPPORTED_ROUTE",
   EXTERNAL_API_ERROR: "EXTERNAL_API_ERROR",

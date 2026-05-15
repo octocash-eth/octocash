@@ -98,7 +98,13 @@ function getSourceTokensWithStatus(state: ConsolidationState): Array<{ token: To
  */
 function getFinalTokens(state: ConsolidationState): Array<{ token: TokenAmount; label?: string }> {
   const { destinationToken } = state;
-  const successfulSteps = state.plan.filter((step) => step.status === "success" && step.type !== "attestation");
+  const successfulSteps = state.plan.filter(
+    (step) =>
+      step.status === "success" &&
+      step.type !== "attestation" &&
+      step.type !== "gas-topup" &&
+      step.type !== "gas-topup-wait",
+  );
   const finalSteps = findFinalSteps(successfulSteps);
 
   if (state.status === "completed") {

@@ -1,5 +1,6 @@
-import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
+import type { Account, Address, Chain, Hex, HttpTransport, WalletClient } from "viem";
 import { type Call, encodeFunctionData, getAddress, isAddressEqual, parseAbi, zeroAddress } from "viem";
+import { estimateGas, waitForTransactionReceipt } from "viem/actions";
 import { tokenMessenger } from "~/data/cctp-contracts";
 import { chains, transports } from "~/data/supported-chains";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
@@ -11,6 +12,7 @@ import {
   InsufficientNativeForGasError,
   type OperationType,
 } from "./gas-estimation";
+import { getLiFiQuoteForTargetOutput, pollLiFiTransferStatus } from "./lifi";
 import { deriveSwapOutputAmount, executeOdosSwap, getSwapQuote } from "./odos";
 import { getPublicClient, retryOnRateLimit } from "./public-client";
 import { prepareSendCalls, SendCallsError } from "./send-calls";
@@ -933,6 +935,135 @@ async function executeStep(
       };
     }
 
+    case "gas-topup": {
+      const destinations = step.gasTopUpDestinations;
+      if (!destinations || destinations.length === 0) {
+        throw new Error("Gas top-up step has no destinations");
+      }
+
+      const sourceAddress = step.inputTokens[0].walletAddress;
+      const sourceChainId = step.chainId;
+      const sourceChain = chains[sourceChainId as keyof typeof chains] as Chain;
+
+      const sameChainDests = destinations.filter((d) => d.chainId === sourceChainId);
+      const crossChainDests = destinations.filter((d) => d.chainId !== sourceChainId);
+
+      // Get fresh LI.FI quotes only for cross-chain destinations (use target-output
+      // quoting so cross-token pairs like ETH→POL are priced correctly)
+      const quotes = await Promise.all(
+        crossChainDests.map((dest) =>
+          getLiFiQuoteForTargetOutput(sourceChainId, dest.chainId, BigInt(dest.amountWei), sourceAddress, dest.address),
+        ),
+      );
+
+      const txClient = walletClient;
+      try {
+        await txClient.switchChain({ id: sourceChainId });
+      } catch {
+        await txClient.addChain({ chain: sourceChain });
+      }
+
+      const lifiTransfers: { txHash: string; bridge: string; fromChainId: number; toChainId: number }[] = [];
+      let totalValue = 0n;
+      let firstTxHash: Hex | undefined;
+
+      // Same-chain destinations: simple native value transfers
+      for (const dest of sameChainDests) {
+        const value = BigInt(dest.amountWei);
+        totalValue += value;
+
+        const hash = await txClient.sendTransaction({
+          account: sourceAddress,
+          to: dest.address,
+          data: "0x" as Hex,
+          value,
+          chain: sourceChain,
+        });
+
+        const receipt = await waitForTransactionReceipt(txClient, { hash });
+        if (receipt.status !== "success") {
+          throw new Error("Gas top-up transaction reverted");
+        }
+
+        firstTxHash ??= hash;
+      }
+
+      // Cross-chain destinations: send via LI.FI individually so status tracking works
+      for (let i = 0; i < quotes.length; i++) {
+        const quote = quotes[i];
+        const txReq = quote.transactionRequest;
+        const value = BigInt(txReq.value);
+        totalValue += value;
+
+        let gas: bigint | undefined;
+        try {
+          const estimated = await estimateGas(txClient, {
+            account: sourceAddress,
+            to: txReq.to,
+            data: txReq.data,
+            value,
+          });
+          gas = (estimated * 120n) / 100n;
+        } catch {
+          gas = undefined;
+        }
+
+        const hash = await txClient.sendTransaction({
+          account: sourceAddress,
+          to: txReq.to,
+          data: txReq.data,
+          value,
+          gas,
+          chain: sourceChain,
+        });
+
+        const receipt = await waitForTransactionReceipt(txClient, { hash });
+        if (receipt.status !== "success") {
+          throw new Error("Gas top-up transaction reverted");
+        }
+
+        firstTxHash ??= hash;
+        lifiTransfers.push({
+          txHash: hash,
+          bridge: quote.tool,
+          fromChainId: sourceChainId,
+          toChainId: crossChainDests[i].chainId,
+        });
+      }
+
+      return {
+        stepId: step.id,
+        status: "success",
+        chainId: step.chainId,
+        actualOutput: {
+          ...step.outputToken,
+          amount: totalValue,
+          provenance: step.id,
+        },
+        transactionHash: firstTxHash as Hex,
+        metadataPatch: { lifiTransfers },
+      };
+    }
+
+    case "gas-topup-wait": {
+      const transfers = state.metadata?.lifiTransfers;
+
+      // If all destinations were same-chain, there are no LiFi transfers to poll
+      if (transfers && transfers.length > 0) {
+        await Promise.all(transfers.map((t) => pollLiFiTransferStatus(t.txHash, t.bridge, t.fromChainId, t.toChainId)));
+      }
+
+      return {
+        stepId: step.id,
+        status: "success",
+        chainId: step.chainId,
+        actualOutput: {
+          ...step.outputToken,
+          provenance: step.id,
+        },
+      };
+    }
+
     default:
       throw new Error(`Unknown step type: ${step.type}`);
   }
@@ -1041,8 +1172,17 @@ async function calculateStepOutput(
         amount: totalAmount,
       };
     }
+    case "gas-topup": {
+      // Gas top-up output mirrors the source-chain native deposit it consumed.
+      const totalAmount = updatedInputs.reduce((sum, t) => sum + t.amount, 0n);
+      return {
+        ...step.outputToken,
+        amount: totalAmount,
+      };
+    }
     case "attestation":
-      // Attestations don't change amounts
+    case "gas-topup-wait":
+      // No amount change; these are wait/synchronization steps.
       return step.outputToken;
 
     default:

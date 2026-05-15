@@ -13,6 +13,10 @@ vi.mock("./public-client", () => ({
 }));
 vi.mock("./gas", () => ({
   getNativeBalance: vi.fn().mockResolvedValue(1000000000000000000n), // 1 ETH
+  findRichestSource: vi.fn().mockResolvedValue(null),
+}));
+vi.mock("./lifi", () => ({
+  getLiFiQuoteForTargetOutput: vi.fn(),
 }));
 vi.mock("./gas-estimation", () => ({
   buildGasContext: vi.fn().mockResolvedValue({
@@ -1827,14 +1831,14 @@ describe("planConsolidation", () => {
   });
 
   describe("source-chain gas checks", () => {
-    test("USDC-only source wallet still gets a gas check (regression)", async () => {
-      // Regression: previously, a USDC-only wallet skipped the entire gas check
-      // because it had no swaps to do — but the CCTP burn still requires native gas.
-      const { getNativeBalance } = await import("./gas");
+    test("USDC-only source wallet without native gas triggers a gas-topup step (was: throw insufficient gas)", async () => {
+      // Regression: previously, a USDC-only wallet would throw "Insufficient gas".
+      // Now the planner records the gap and prepends a gas-topup step instead.
+      const { getNativeBalance, findRichestSource } = await import("./gas");
+      const { getLiFiQuoteForTargetOutput } = await import("./lifi");
       const { estimateChainGasCosts, estimateOperationsForChainWallet } = await import("./gas-estimation");
 
-      // Wallet has 0.0000001 ETH for gas; required is 0.001 ETH.
-      vi.mocked(getNativeBalance).mockResolvedValue(100_000_000_000n);
+      vi.mocked(getNativeBalance).mockResolvedValue(100_000_000_000n); // 0.0000001 ETH
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 1_000_000_000_000_000n, // 0.001 ETH
         maxFeePerGas: 20_000_000_000n,
@@ -1842,6 +1846,32 @@ describe("planConsolidation", () => {
       });
       vi.mocked(estimateOperationsForChainWallet).mockReturnValue(["cctp-approval", "cctp-burn"]);
       vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      vi.mocked(findRichestSource).mockResolvedValue({
+        chainId: 137, // polygon — distinct from dest chain (1) so it's a real fallback
+        address: WALLET,
+        balance: 10_000_000_000_000_000_000n, // 10 POL (ample)
+      });
+      vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue({
+        tool: "across",
+        action: {
+          fromChainId: 137,
+          toChainId: 10,
+          fromToken: { symbol: "POL", decimals: 18, priceUSD: "0.5" },
+          toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
+        },
+        estimate: {
+          fromAmount: "5500000000000000", // POL fromAmount
+          toAmount: "1000000000000000", // ETH toAmount
+          toAmountMin: "1000000000000000",
+        },
+        transactionRequest: {
+          value: "5500000000000000",
+          to: "0x1111111111111111111111111111111111111111" as Address,
+          data: "0x" as `0x${string}`,
+          from: WALLET,
+          chainId: 137,
+        },
+      });
 
       const sourceTokens: TokenAmount[] = [
         {
@@ -1862,22 +1892,27 @@ describe("planConsolidation", () => {
         decimals: 6,
       };
 
-      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(/Insufficient gas/);
+      const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+      expect(plan[0].type).toBe("gas-topup");
+      expect(plan[0].gasTopUpDestinations).toBeDefined();
+      const dest = plan[0].gasTopUpDestinations?.find((d) => d.chainId === 10 && d.address === WALLET);
+      expect(dest).toBeDefined();
+      // Deficit = required (1e15) − balance (1e11) = 999_900_000_000_000n
+      expect(BigInt(dest?.amountWei ?? "0")).toBe(999_900_000_000_000n);
 
-      // Restore defaults so subsequent tests aren't polluted
       vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 100_000_000_000_000n,
         maxFeePerGas: 20_000_000_000n,
         perOperation: [],
       });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
     });
 
-    test("ERC20-only source wallet (no native, no USDC) still gets a gas check", async () => {
-      const { getNativeBalance } = await import("./gas");
+    test("ERC20-only source wallet (no native, no USDC) → PlanningError when no funding source", async () => {
+      const { getNativeBalance, findRichestSource } = await import("./gas");
       const { estimateChainGasCosts } = await import("./gas-estimation");
 
-      // 0 native available → cannot pay any gas
       vi.mocked(getNativeBalance).mockResolvedValue(0n);
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 500_000_000_000_000n,
@@ -1885,6 +1920,7 @@ describe("planConsolidation", () => {
         perOperation: [],
       });
       vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      vi.mocked(findRichestSource).mockResolvedValue(null);
 
       const sourceTokens: TokenAmount[] = [
         {
@@ -1905,7 +1941,7 @@ describe("planConsolidation", () => {
         decimals: 6,
       };
 
-      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(/Insufficient gas/);
+      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(/PlanningError/);
 
       vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
@@ -1915,14 +1951,15 @@ describe("planConsolidation", () => {
       });
     });
 
-    test("destination wallet runs out of gas after planning succeeds for sources", async () => {
-      // The connected destination wallet has source-chain balance but no dest gas.
-      const { getNativeBalance } = await import("./gas");
+    test("destination wallet without dest-chain gas → plan succeeds with a gas-topup step", async () => {
+      const { getNativeBalance, findRichestSource } = await import("./gas");
+      const { getLiFiQuoteForTargetOutput } = await import("./lifi");
       const { estimateChainGasCosts } = await import("./gas-estimation");
 
       // First call (resolveIntermediateWallet, dest chain) → 0
-      // Subsequent calls (source chain checks) → plenty
-      vi.mocked(getNativeBalance).mockResolvedValueOnce(0n).mockResolvedValue(1_000_000_000_000_000_000n);
+      // Subsequent calls (source chain checks, top-up funding) → plenty
+      vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
+      vi.mocked(getNativeBalance).mockResolvedValueOnce(0n);
 
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 500_000_000_000_000n,
@@ -1930,6 +1967,32 @@ describe("planConsolidation", () => {
         perOperation: [],
       });
       vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      vi.mocked(findRichestSource).mockResolvedValue({
+        chainId: 10,
+        address: WALLET,
+        balance: 10_000_000_000_000_000_000n,
+      });
+      vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue({
+        tool: "across",
+        action: {
+          fromChainId: 10,
+          toChainId: 1,
+          fromToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
+          toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
+        },
+        estimate: {
+          fromAmount: "550000000000000",
+          toAmount: "500000000000000",
+          toAmountMin: "500000000000000",
+        },
+        transactionRequest: {
+          value: "550000000000000",
+          to: "0x1111111111111111111111111111111111111111" as Address,
+          data: "0x" as `0x${string}`,
+          from: WALLET,
+          chainId: 10,
+        },
+      });
 
       const sourceTokens: TokenAmount[] = [
         {
@@ -1950,7 +2013,11 @@ describe("planConsolidation", () => {
         decimals: 8,
       };
 
-      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(/Insufficient gas/);
+      const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+      expect(plan[0].type).toBe("gas-topup");
+      const destEntry = plan[0].gasTopUpDestinations?.find((d) => d.chainId === 1);
+      expect(destEntry).toBeDefined();
+      expect(BigInt(destEntry?.amountWei ?? "0")).toBe(500_000_000_000_000n);
 
       vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
@@ -1958,6 +2025,7 @@ describe("planConsolidation", () => {
         maxFeePerGas: 20_000_000_000n,
         perOperation: [],
       });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
     });
 
     test("native source token amount is trimmed when gas exceeds free balance", async () => {
@@ -2015,19 +2083,17 @@ describe("planConsolidation", () => {
       });
     });
 
-    test("native-only source throws a dedicated 'consumed by gas' error when gas equals or exceeds full balance", async () => {
-      const { getNativeBalance } = await import("./gas");
+    test("dust native source (amount <= gas, sole token) throws instead of topping up", async () => {
+      // The selected native (0.1 ETH) is worth no more than the gas to move it
+      // (0.1 ETH). Topping up gas — extra gas + a LI.FI bridge fee — to move an
+      // amount worth less than the fees is a guaranteed loss, so planning refuses
+      // with an actionable error rather than prepending a gas-topup step.
+      const { getNativeBalance, findRichestSource } = await import("./gas");
       const { estimateChainGasCosts } = await import("./gas-estimation");
 
-      // Balance equals required gas — nothing left for swap. Silently dropping
-      // the user's only selected token would yield an empty plan with no
-      // explanation in the UI. The planner must surface a dedicated message
-      // — not the generic "top up gas" copy — explaining that the selected
-      // native would be fully spent on fees and pointing at the actionable
-      // remedies (deselect / lower amount / fund the wallet).
       vi.mocked(getNativeBalance).mockResolvedValue(100_000_000_000_000_000n); // 0.1 ETH
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
-        totalGasCost: 100_000_000_000_000_000n, // 0.1 ETH (eats everything)
+        totalGasCost: 100_000_000_000_000_000n, // 0.1 ETH (== selected amount)
         maxFeePerGas: 20_000_000_000n,
         perOperation: [],
       });
@@ -2053,12 +2119,473 @@ describe("planConsolidation", () => {
       };
 
       await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(
-        /Not enough ETH .* entirely spent on fees/,
-      );
-      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(
-        /Deselect ETH, lower its amount, or add more ETH/,
+        /smaller than the gas needed to move it/,
       );
 
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
+    });
+
+    test("native source just above gas cost but within the LI.FI overhead band still throws", async () => {
+      // amount = 1.005 ETH, gas = 1 ETH, balance = 0.
+      // Old gate (amount <= gasCost) would have topped up (1.005 > 1.0).
+      // New gate adds ~1.5% of the deficit (~0.03 ETH) on top of gas, so the
+      // threshold is ~1.03 ETH and 1.005 ETH still doesn't clear it — a
+      // cross-chain refuel would cost more than the amount it rescues.
+      const { getNativeBalance, findRichestSource } = await import("./gas");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+
+      vi.mocked(getNativeBalance).mockResolvedValue(0n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 1_000_000_000_000_000_000n, // 1 ETH gas
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: ETH_ADDRESS,
+          amount: 1_005_000_000_000_000_000n, // 1.005 ETH — just above gas, within cushion
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "ETH",
+          decimals: 18,
+        },
+      ];
+
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(
+        /smaller than the gas needed to move it/,
+      );
+
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
+    });
+
+    test("native source token (amount > gas) is preserved and a gas-topup step is prepended", async () => {
+      // When the selected native exceeds the gas to move it, a top-up is
+      // worthwhile: keep the swap input and prepend a gas-topup step that funds
+      // the shortfall — preserving the user's original swap intent.
+      const { getNativeBalance, findRichestSource } = await import("./gas");
+      const { getLiFiQuoteForTargetOutput } = await import("./lifi");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+
+      vi.mocked(getNativeBalance).mockResolvedValue(100_000_000_000_000_000n); // 0.1 ETH
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000_000n, // 0.1 ETH gas
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      vi.mocked(findRichestSource).mockResolvedValue({
+        chainId: 137, // polygon, distinct from dest chain
+        address: WALLET,
+        balance: 10_000_000_000_000_000_000n,
+      });
+      vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue({
+        tool: "across",
+        action: {
+          fromChainId: 137,
+          toChainId: 10,
+          fromToken: { symbol: "POL", decimals: 18, priceUSD: "0.5" },
+          toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
+        },
+        estimate: {
+          fromAmount: "220000000000000000",
+          toAmount: "100000000000000000",
+          toAmountMin: "100000000000000000",
+        },
+        transactionRequest: {
+          value: "220000000000000000",
+          to: "0x1111111111111111111111111111111111111111" as Address,
+          data: "0x" as `0x${string}`,
+          from: WALLET,
+          chainId: 137,
+        },
+      });
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: ETH_ADDRESS,
+          amount: 500_000_000_000_000_000n, // 0.5 ETH selected (> 0.1 ETH gas)
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "ETH",
+          decimals: 18,
+        },
+      ];
+
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+      expect(result[0].type).toBe("gas-topup");
+      const swapStep = result.find((s) => s.type === "swap" && s.chainId === 10);
+      expect(swapStep).toBeDefined();
+      // Native input is preserved at original 0.5 ETH (not zeroed out).
+      expect(swapStep?.inputTokens[0].amount).toBe(500_000_000_000_000_000n);
+
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
+    });
+
+    test("dust native alongside other value: dust is dropped, top-up funds the rest", async () => {
+      // The wallet holds a dust native amount (< gas) AND USDC worth bridging.
+      // The dust native is silently dropped from the swap (it's not worth moving)
+      // but the USDC consolidation still proceeds, with a gas-topup covering the
+      // bridge gas only.
+      const { getNativeBalance, findRichestSource } = await import("./gas");
+      const { getLiFiQuoteForTargetOutput } = await import("./lifi");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+
+      vi.mocked(getNativeBalance).mockResolvedValue(0n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 10_000_000_000_000_000n, // 0.01 ETH
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      vi.mocked(findRichestSource).mockResolvedValue({
+        chainId: 137,
+        address: WALLET,
+        balance: 10_000_000_000_000_000_000n,
+      });
+      vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue({
+        tool: "across",
+        action: {
+          fromChainId: 137,
+          toChainId: 10,
+          fromToken: { symbol: "POL", decimals: 18, priceUSD: "0.5" },
+          toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
+        },
+        estimate: {
+          fromAmount: "55000000000000000",
+          toAmount: "10000000000000000",
+          toAmountMin: "10000000000000000",
+        },
+        transactionRequest: {
+          value: "55000000000000000",
+          to: "0x1111111111111111111111111111111111111111" as Address,
+          data: "0x" as `0x${string}`,
+          from: WALLET,
+          chainId: 137,
+        },
+      });
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: ETH_ADDRESS,
+          amount: 1_000_000_000_000n, // 0.000001 ETH dust (<< 0.01 ETH gas)
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "ETH",
+          decimals: 18,
+        },
+        {
+          token: USDC_OPTIMISM,
+          amount: 1_000_000n,
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ];
+
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+      expect(plan[0].type).toBe("gas-topup");
+      // Dust native was dropped — no swap step for it on chain 10.
+      expect(plan.find((s) => s.type === "swap" && s.chainId === 10)).toBeUndefined();
+      // USDC still gets bridged.
+      expect(plan.some((s) => s.type === "bridge")).toBe(true);
+      // Top-up covers only the recomputed bridge gas (0.01 ETH, balance 0).
+      const dest = plan[0].gasTopUpDestinations?.find((d) => d.chainId === 10 && d.address === WALLET);
+      expect(BigInt(dest?.amountWei ?? "0")).toBe(10_000_000_000_000_000n);
+
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
+    });
+  });
+
+  describe("gas top-up funding source selection", () => {
+    test("uses destination wallet as funding source when it has sufficient native balance", async () => {
+      const { getNativeBalance, findRichestSource } = await import("./gas");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+
+      // Source chain (10) WALLET has 0 → records gap there.
+      // Destination chain (1) WALLET has 10 ETH → can fund the gap on chain 10.
+      vi.mocked(getNativeBalance).mockImplementation(async (chain) =>
+        chain.id === 1 ? 10_000_000_000_000_000_000n : 0n,
+      );
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 1_000_000_000_000_000n, // 0.001 ETH per chain
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      // findRichestSource should NOT be called when dest funding succeeds.
+      vi.mocked(findRichestSource).mockResolvedValue({
+        chainId: 137,
+        address: WALLET,
+        balance: 100_000_000_000_000_000_000n,
+      });
+      const { getLiFiQuoteForTargetOutput } = await import("./lifi");
+      vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue({
+        tool: "across",
+        action: {
+          fromChainId: 1,
+          toChainId: 10,
+          fromToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
+          toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
+        },
+        estimate: {
+          fromAmount: "1100000000000000",
+          toAmount: "1000000000000000",
+          toAmountMin: "1000000000000000",
+        },
+        transactionRequest: {
+          value: "1100000000000000",
+          to: "0x1111111111111111111111111111111111111111" as Address,
+          data: "0x" as `0x${string}`,
+          from: WALLET,
+          chainId: 1,
+        },
+      });
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: USDC_OPTIMISM,
+          amount: 1_000_000n,
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ];
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+      const topup = plan.find((s) => s.type === "gas-topup");
+      expect(topup).toBeDefined();
+      // Funding from destination chain (chain 1)
+      expect(topup?.chainId).toBe(1);
+      expect(topup?.inputTokens[0].walletAddress).toBe(WALLET);
+
+      vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
+    });
+
+    test("falls back to findRichestSource when destination wallet is also short", async () => {
+      const { getNativeBalance, findRichestSource } = await import("./gas");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+      const { getLiFiQuoteForTargetOutput } = await import("./lifi");
+
+      // Both source chain (10) and destination chain (1) WALLET have 0 → both gaps recorded.
+      vi.mocked(getNativeBalance).mockResolvedValue(0n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 1_000_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      vi.mocked(findRichestSource).mockResolvedValue({
+        chainId: 137,
+        address: WALLET,
+        balance: 100_000_000_000_000_000_000n,
+      });
+      vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue({
+        tool: "across",
+        action: {
+          fromChainId: 137,
+          toChainId: 1,
+          fromToken: { symbol: "POL", decimals: 18, priceUSD: "0.5" },
+          toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
+        },
+        estimate: {
+          fromAmount: "5500000000000000",
+          toAmount: "1000000000000000",
+          toAmountMin: "1000000000000000",
+        },
+        transactionRequest: {
+          value: "5500000000000000",
+          to: "0x1111111111111111111111111111111111111111" as Address,
+          data: "0x" as `0x${string}`,
+          from: WALLET,
+          chainId: 137,
+        },
+      });
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: USDC_OPTIMISM,
+          amount: 1_000_000n,
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ];
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+      const topup = plan.find((s) => s.type === "gas-topup");
+      expect(topup).toBeDefined();
+      // Funding from polygon (chain 137) — the richest source fallback
+      expect(topup?.chainId).toBe(137);
+
+      vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
+    });
+
+    test("no gas-topup-wait when all destinations are same-chain as source", async () => {
+      const { getNativeBalance, findRichestSource } = await import("./gas");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+
+      // Wallet 2 has lots of native on chain 10. Wallet 1 has nothing on chain 10
+      // and is doing the work there — gap on chain 10 funded same-chain by wallet 2.
+      const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+      vi.mocked(getNativeBalance).mockImplementation(async (chain, address) => {
+        if (chain.id === 10 && address === WALLET) return 0n;
+        if (chain.id === 10 && address === WALLET_2) return 10_000_000_000_000_000_000n;
+        return 1_000_000_000_000_000_000n;
+      });
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 1_000_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      vi.mocked(findRichestSource).mockResolvedValue({
+        chainId: 10,
+        address: WALLET_2,
+        balance: 10_000_000_000_000_000_000n,
+      });
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: USDC_OPTIMISM,
+          amount: 1_000_000n,
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ];
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 10, // same as source — no bridge needed at all
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2]);
+      const topup = plan.find((s) => s.type === "gas-topup");
+      const wait = plan.find((s) => s.type === "gas-topup-wait");
+      expect(topup).toBeDefined();
+      expect(wait).toBeUndefined();
+
+      vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
+    });
+
+    test("throws PlanningError when no wallet can fund the deficit", async () => {
+      const { getNativeBalance, findRichestSource } = await import("./gas");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+
+      vi.mocked(getNativeBalance).mockResolvedValue(0n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 1_000_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      vi.mocked(findRichestSource).mockResolvedValue(null); // no fallback either
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: USDC_OPTIMISM,
+          amount: 1_000_000n,
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ];
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(/PlanningError/);
+
+      vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 100_000_000_000_000n,
         maxFeePerGas: 20_000_000_000n,
