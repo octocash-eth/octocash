@@ -98,6 +98,31 @@ export function SupportWidget() {
     return () => el.removeEventListener("pointerdown", stop);
   }, [mounted]);
 
+  // When a modal Radix Dialog is open underneath the widget, its FocusScope
+  // adds document-level focusin/focusout listeners that trap focus: focusing
+  // one of our fields makes it immediately yank focus back into the dialog, so
+  // the inputs look clickable but can't be typed into. The wrapper-level
+  // stopPropagation above can't help because the damaging focusout originates
+  // from inside the dialog and never bubbles through our subtree. Intercept
+  // focus events in the capture phase (which runs before the dialog's
+  // bubble-phase document listener) and stop them whenever the widget is the
+  // element gaining or losing focus, leaving the native focus change intact.
+  useEffect(() => {
+    if (!mounted) return;
+    const isInWidget = (node: EventTarget | null) => node instanceof Node && wrapperRef.current?.contains(node);
+    const guard = (event: FocusEvent) => {
+      if (isInWidget(event.target) || isInWidget(event.relatedTarget)) {
+        event.stopImmediatePropagation();
+      }
+    };
+    document.addEventListener("focusin", guard, true);
+    document.addEventListener("focusout", guard, true);
+    return () => {
+      document.removeEventListener("focusin", guard, true);
+      document.removeEventListener("focusout", guard, true);
+    };
+  }, [mounted]);
+
   const resetState = useCallback(() => {
     setView("picker");
     setCategory(null);
