@@ -624,7 +624,7 @@ export async function buildGasContext(chainIds: number[]): Promise<GasContext> {
 export async function attachGasEstimates(steps: TransactionStep[], gasCtx: GasContext): Promise<void> {
   await Promise.all(
     steps.map(async (step) => {
-      if (step.type === "attestation") return;
+      if (step.type === "attestation" || step.type === "gas-topup-wait") return;
 
       const fee = gasCtx.maxFeePerGas[step.chainId] ?? 0n;
       const symbol = gasCtx.nativeSymbol[step.chainId] ?? "ETH";
