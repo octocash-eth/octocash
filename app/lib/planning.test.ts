@@ -2015,11 +2015,16 @@ describe("planConsolidation", () => {
       });
     });
 
-    test("native source token is dropped from swap when gas equals or exceeds full balance", async () => {
+    test("native-only source throws a dedicated 'consumed by gas' error when gas equals or exceeds full balance", async () => {
       const { getNativeBalance } = await import("./gas");
       const { estimateChainGasCosts } = await import("./gas-estimation");
 
-      // Balance equals required gas — nothing left for swap.
+      // Balance equals required gas — nothing left for swap. Silently dropping
+      // the user's only selected token would yield an empty plan with no
+      // explanation in the UI. The planner must surface a dedicated message
+      // — not the generic "top up gas" copy — explaining that the selected
+      // native would be fully spent on fees and pointing at the actionable
+      // remedies (deselect / lower amount / fund the wallet).
       vi.mocked(getNativeBalance).mockResolvedValue(100_000_000_000_000_000n); // 0.1 ETH
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 100_000_000_000_000_000n, // 0.1 ETH (eats everything)
@@ -2047,14 +2052,12 @@ describe("planConsolidation", () => {
         decimals: 6,
       };
 
-      // With native dropped and no other tokens to swap, processChainWalletSwaps
-      // produces zero source-chain steps. The plan can still succeed if there's
-      // nothing else to do, or fail downstream — assert no swap step on chain 10.
-      const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]).catch(() => null);
-      if (result) {
-        const swapStep = result.find((s) => s.type === "swap" && s.chainId === 10);
-        expect(swapStep).toBeUndefined();
-      }
+      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(
+        /Not enough ETH .* entirely spent on fees/,
+      );
+      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(
+        /Deselect ETH, lower its amount, or add more ETH/,
+      );
 
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 100_000_000_000_000n,

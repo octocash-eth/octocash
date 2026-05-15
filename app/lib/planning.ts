@@ -28,6 +28,33 @@ function throwInsufficientGas(chainId: number, walletAddress: Address, gasCost: 
   );
 }
 
+/**
+ * Variant of {@link throwInsufficientGas} for the specific case where the user
+ * picked the chain's native token as a source and the predicted gas cost
+ * exceeds their wallet's entire native balance. In that situation "top up at
+ * gas.zip" is misleading — the wallet does hold native, but every wei of it
+ * would have to be reserved for gas, leaving nothing to bridge/swap and
+ * producing an empty plan. The error tells the user what actually went wrong
+ * and what they can do: reduce/deselect the native amount, or fund the wallet
+ * with more native.
+ */
+function throwNativeConsumedByGas(
+  chainId: number,
+  walletAddress: Address,
+  nativeBalance: bigint,
+  gasCost: bigint,
+): never {
+  const chain = chains[chainId as keyof typeof chains];
+  const chainName = chain?.name ?? `chain ${chainId}`;
+  const symbol = chain?.nativeCurrency?.symbol ?? "ETH";
+  throw new Error(
+    `Not enough ${symbol} on ${chainName} to consolidate from ${walletAddress}. ` +
+      `Gas (~${formatGasCostNative(gasCost)} ${symbol}) exceeds the wallet balance ` +
+      `(${formatGasCostNative(nativeBalance)} ${symbol}), so the selected ${symbol} would be entirely spent on fees. ` +
+      `Deselect ${symbol}, lower its amount, or add more ${symbol} to the wallet.`,
+  );
+}
+
 const SUPPORTED_CHAINS = Object.keys(chains).map(Number);
 
 /**
@@ -516,7 +543,13 @@ async function processChainWalletSwaps(
             `🔍 [DEBUG] Adjusting native token on chain ${chainId}: selected=${nativeToken.amount.toString()}, maxAffordable=${maxAffordable.toString()}, gasCost=${gasCost.totalGasCost.toString()}`,
           );
           if (maxAffordable <= 0n) {
-            tokensToSwapToUSDC.splice(nativeIdx, 1);
+            // Gas eats the entire native balance — there is nothing left to swap
+            // and silently dropping the user's selection would yield an empty
+            // (or partially-empty) plan with no explanation. Surface a
+            // dedicated error that explains the native was fully consumed by
+            // gas (the generic "top up gas" copy is misleading here since the
+            // wallet does hold native; it just got reserved for fees).
+            throwNativeConsumedByGas(chainId, walletAddress, nativeBalance, gasCost.totalGasCost);
           } else {
             tokensToSwapToUSDC[nativeIdx] = { ...nativeToken, amount: maxAffordable };
           }
@@ -819,7 +852,12 @@ async function createFinalSwaps(
           `🔍 [DEBUG] Adjusting native token on dest chain ${destChainId}: selected=${nativeToken.amount.toString()}, maxAffordable=${maxAffordable.toString()}, gasCost=${gasCost.totalGasCost.toString()}`,
         );
         if (maxAffordable <= 0n) {
-          tokensToProcess.splice(nativeIdx, 1);
+          // Mirrors the source-chain check in `processChainWalletSwaps`:
+          // silently dropping the selected native would erase the final swap
+          // and the user's chosen amount with no message. Use the dedicated
+          // "native consumed by gas" error so the user is told exactly which
+          // action to take (deselect/reduce the native or fund the wallet).
+          throwNativeConsumedByGas(destChainId, walletAddress, nativeBalance, gasCost.totalGasCost);
         } else {
           tokensToProcess[nativeIdx] = { ...nativeToken, amount: maxAffordable };
         }
