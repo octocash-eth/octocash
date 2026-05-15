@@ -151,6 +151,11 @@ export function DataTable<TData extends TokenAmount, TValue>({
     onColumnVisibilityChange: setColumnVisibility,
     onRowSelectionChange,
     enableRowSelection: true,
+    // Keep the user on the current page. The `tokens` pipeline re-derives a
+    // fresh `data` array on every render (it flows through `useQueries`
+    // results), so the default `autoResetPageIndex` would snap back to page 1
+    // on any selection change or streamed price update.
+    autoResetPageIndex: false,
     getRowId: (row) => getTokenId(row),
     meta,
     state: {
@@ -160,6 +165,32 @@ export function DataTable<TData extends TokenAmount, TValue>({
       rowSelection,
     },
   });
+
+  // Navigate back to page 1 whenever the wallet/token/chain filters change.
+  // We compare the *content* of `columnFilters`, not its array identity: the
+  // filters pipeline re-creates that array on unrelated re-renders, so an
+  // identity check would reset the page on every render (the bug
+  // `autoResetPageIndex: false` exists to avoid). Only a real filter change
+  // should move the user off their current page.
+  const filterSignature = JSON.stringify(columnFilters);
+  const lastFilterSignature = React.useRef(filterSignature);
+  React.useEffect(() => {
+    if (lastFilterSignature.current !== filterSignature) {
+      lastFilterSignature.current = filterSignature;
+      table.setPageIndex(0);
+    }
+  }, [filterSignature, table]);
+
+  // Backstop for non-filter cases (a refresh returning fewer tokens, a page
+  // size change): with `autoResetPageIndex` off the user could be stranded on
+  // a now-empty page past the end, so fall back to page 1 there too.
+  const pageIndex = table.getState().pagination.pageIndex;
+  const pageCount = table.getPageCount();
+  React.useEffect(() => {
+    if (pageIndex > 0 && pageIndex > pageCount - 1) {
+      table.setPageIndex(0);
+    }
+  }, [pageIndex, pageCount, table]);
 
   // Function to clear all filters
   return (
