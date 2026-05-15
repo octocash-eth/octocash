@@ -1,4 +1,5 @@
 import { type Address, formatUnits, getAddress, isAddressEqual, zeroAddress } from "viem";
+import { mainnet } from "viem/chains";
 import { chains, transports } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
 import { getBridgeFee } from "./cctp";
@@ -907,35 +908,38 @@ async function createFinalSwaps(
       })),
     );
 
-    // Adjust native token on destination chain for gas. Only relevant when the
-    // user holds native (zeroAddress) on the dest chain AND the destination token
-    // is not native — in the latter case the user wants to KEEP their native.
+    // Adjust native token on destination chain for gas. When the wallet holds
+    // native (zeroAddress) being swapped on the dest chain we cap/drop it so gas
+    // is left over (skipped when the destination token IS native — the user
+    // wants to KEEP it). Otherwise (USDC-only / ERC20-only wallet) we just check
+    // the wallet can afford its dest-chain gas and record a gap if not.
     const tokensToProcess = [...consolidatedTokens];
     const destIsNative = isAddressEqual(destinationToken.token, zeroAddress);
     const nativeIdx = destIsNative ? -1 : tokensToProcess.findIndex((t) => isAddressEqual(t.token, zeroAddress));
 
+    const destChainId = destinationToken.chainId;
+    const tokensNeedingSwap = tokensToProcess.filter((t) => !isAddressEqual(t.token, destinationToken.token));
+    const nonNativeSwapCount = tokensNeedingSwap.filter((t) => !isAddressEqual(t.token, zeroAddress)).length;
+    const hasNativeInSwap = tokensNeedingSwap.some((t) => isAddressEqual(t.token, zeroAddress));
+
+    const destOps = estimateDestinationChainOperations(
+      hasBridges,
+      nonNativeSwapCount,
+      hasNativeInSwap,
+      needsFinalTransfer,
+      destIsNative,
+    );
+
+    const gasCost = await estimateChainGasCosts(destChainId, destOps, gasCtx.maxFeePerGas[destChainId]);
+    const chain = chains[destChainId as keyof typeof chains];
+    const nativeBalance = await getNativeBalance(
+      chain,
+      walletAddress,
+      transports?.[destChainId as keyof typeof transports],
+    );
+
     if (nativeIdx >= 0) {
       const nativeToken = tokensToProcess[nativeIdx];
-      const destChainId = destinationToken.chainId;
-      const tokensNeedingSwap = tokensToProcess.filter((t) => !isAddressEqual(t.token, destinationToken.token));
-      const nonNativeSwapCount = tokensNeedingSwap.filter((t) => !isAddressEqual(t.token, zeroAddress)).length;
-      const hasNativeInSwap = tokensNeedingSwap.some((t) => isAddressEqual(t.token, zeroAddress));
-
-      const destOps = estimateDestinationChainOperations(
-        hasBridges,
-        nonNativeSwapCount,
-        hasNativeInSwap,
-        needsFinalTransfer,
-        destIsNative,
-      );
-
-      const gasCost = await estimateChainGasCosts(destChainId, destOps, gasCtx.maxFeePerGas[destChainId]);
-      const chain = chains[destChainId as keyof typeof chains];
-      const nativeBalance = await getNativeBalance(
-        chain,
-        walletAddress,
-        transports?.[destChainId as keyof typeof transports],
-      );
       const maxAffordable = nativeBalance > gasCost.totalGasCost ? nativeBalance - gasCost.totalGasCost : 0n;
 
       if (maxAffordable <= 0n) {
@@ -992,6 +996,15 @@ async function createFinalSwaps(
         );
         tokensToProcess[nativeIdx] = { ...nativeToken, amount: maxAffordable };
       }
+    } else if (nativeBalance < gasCost.totalGasCost) {
+      // No native token being swapped on the destination chain (e.g. USDC-only
+      // or ERC20-only wallet, or bridged USDC to claim) — record the gas deficit
+      // so a top-up step can refuel this wallet for its final claim/swap/transfer.
+      // Mirrors the source-chain path in processChainWalletSwaps.
+      recordGasGap(gaps, destChainId, walletAddress, gasCost.totalGasCost - nativeBalance);
+      log(
+        `🔍 [DEBUG] Recording gas gap on dest chain ${destChainId} for ${walletAddress}: balance=${nativeBalance.toString()}, gasCost=${gasCost.totalGasCost.toString()}, deficit=${(gasCost.totalGasCost - nativeBalance).toString()}`,
+      );
     }
 
     // Use shared logic to create swaps and transfers
@@ -1115,21 +1128,32 @@ async function createGasTopUpSteps(
     });
   }
 
-  const fallback = await findRichestSource(
-    [...executorAddresses].flatMap((addr) => SUPPORTED_CHAINS.map((c) => [c, addr] as [number, Address])),
+  // Prefer the richest non-L1 source; only fall back to Ethereum mainnet if no
+  // non-L1 source can cover the deposit. Bridging gas *out of* L1 is expensive,
+  // so mainnet sits at the bottom of the candidate list and the trial loop below
+  // reaches it only when necessary.
+  const executorPairs = [...executorAddresses].flatMap((addr) =>
+    SUPPORTED_CHAINS.map((c) => [c, addr] as [number, Address]),
+  );
+  const nonL1Fallback = await findRichestSource(
+    executorPairs.filter(([c]) => c !== mainnet.id),
     transports,
   );
-  if (fallback) {
+  const l1Fallback = await findRichestSource(
+    executorPairs.filter(([c]) => c === mainnet.id),
+    transports,
+  );
+  for (const fallback of [nonL1Fallback, l1Fallback]) {
+    if (!fallback) continue;
     const isDup = candidates.some((c) => c.chainId === fallback.chainId && isAddressEqual(c.address, fallback.address));
-    if (!isDup) {
-      const fallbackChain = chains[fallback.chainId as keyof typeof chains];
-      candidates.push({
-        chainId: fallback.chainId,
-        address: fallback.address,
-        balance: fallback.balance,
-        label: `richest source ${fallback.address} on ${fallbackChain?.name ?? `chain ${fallback.chainId}`}`,
-      });
-    }
+    if (isDup) continue;
+    const fallbackChain = chains[fallback.chainId as keyof typeof chains];
+    candidates.push({
+      chainId: fallback.chainId,
+      address: fallback.address,
+      balance: fallback.balance,
+      label: `richest source ${fallback.address} on ${fallbackChain?.name ?? `chain ${fallback.chainId}`}`,
+    });
   }
 
   if (candidates.length === 0) {
