@@ -239,25 +239,31 @@ function GasCostDisplay({ gas, chainId }: { gas: StepGasEstimate; chainId: numbe
   const gasCostUsd = nativePrice !== undefined ? nativeAmount * nativePrice : undefined;
   const hasUsd = gasCostUsd !== undefined && gasCostUsd > 0;
 
+  const networkFee = `~${nativeAmount.toFixed(6)} ${gas.nativeSymbol}`;
+
   return (
-    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span
-            className="inline-flex items-center cursor-help"
-            aria-label={`Gas price ${gweiPrice.toFixed(2)} gwei`}
-            role="img"
-          >
-            <Fuel className="w-3.5 h-3.5" />
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="top">{gweiPrice.toFixed(2)} gwei</TooltipContent>
-      </Tooltip>
-      <span>
-        ~{nativeAmount.toFixed(6)} {gas.nativeSymbol}
-        {hasUsd && <span className="text-muted-foreground/80"> ({formatFiat(gasCostUsd)})</span>}
-      </span>
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground tabular-nums cursor-help">
+          <Fuel className="w-3.5 h-3.5" />
+          <span>{hasUsd ? formatFiat(gasCostUsd) : networkFee}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        <dl className="grid grid-cols-[auto_auto] gap-x-4 gap-y-1 tabular-nums">
+          <dt className="text-muted-foreground">Gas price</dt>
+          <dd className="text-right">{gweiPrice.toFixed(2)} gwei</dd>
+          <dt className="text-muted-foreground">Network fee</dt>
+          <dd className="text-right">{networkFee}</dd>
+          {hasUsd && (
+            <>
+              <dt className="text-muted-foreground">Fiat estimate</dt>
+              <dd className="text-right">{formatFiat(gasCostUsd)}</dd>
+            </>
+          )}
+        </dl>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
