@@ -73,6 +73,19 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
     defaultValue: DEFAULT_CURRENCY_CODE,
   });
 
+  // The prerendered HTML (see react-router.config.ts) is produced without
+  // access to localStorage and therefore always renders the default currency.
+  // `useLocalStorageState` returns the stored value synchronously on the
+  // client, which would mismatch the prerendered markup during hydration.
+  // Defer adopting the persisted code until after the first commit so the
+  // initial render matches the server output and consumers like
+  // CurrencySelector / useFormatFiat don't trip a hydration warning.
+  const [isHydrated, setIsHydrated] = React.useState(false);
+  React.useEffect(() => {
+    setIsHydrated(true);
+  }, []);
+  const effectiveCode = isHydrated ? storedCode : DEFAULT_CURRENCY_CODE;
+
   const ratesQuery = useQuery({
     queryKey: ["coingecko-exchange-rates"],
     queryFn: ({ signal }) => fetchCoinGeckoExchangeRates(signal),
@@ -83,7 +96,7 @@ export function CurrencyProvider({ children }: { children: React.ReactNode }) {
   });
 
   const rates = ratesQuery.data ?? STATIC_FALLBACK_RATES;
-  const selectedCurrency = React.useMemo(() => getCurrency(storedCode), [storedCode]);
+  const selectedCurrency = React.useMemo(() => getCurrency(effectiveCode), [effectiveCode]);
 
   const setSelectedCurrency = React.useCallback(
     (code: string) => {
