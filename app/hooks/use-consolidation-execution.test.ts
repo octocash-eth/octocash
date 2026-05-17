@@ -238,7 +238,7 @@ describe("useConsolidationExecution", () => {
       expect(mockExecuteConsolidationPlan).toHaveBeenCalledWith(
         mockState,
         mockWalletClient,
-        expect.objectContaining({ onLiFiProgress: expect.any(Function) }),
+        expect.objectContaining({ onStepProgress: expect.any(Function) }),
       );
     });
 

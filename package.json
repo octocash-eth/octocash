@@ -84,6 +84,5 @@
   "engines": {
     "node": ">=22"
   },
-  "packageManager": "bun@1.2.19",
-  "license": "AGPL-3.0-only"
+  "packageManager": "bun@1.2.19"
 }

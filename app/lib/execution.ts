@@ -62,20 +62,17 @@ export class InsufficientInputBalanceError extends Error {
  * wallet balance.
  */
 /**
- * A single LI.FI status update for an in-flight gas-top-up transfer. Delivered
- * out-of-band via {@link ExecuteOptions.onLiFiProgress} because the wait happens
- * inside an awaited `executeStep` — the generator cannot `yield` mid-step. This
- * is display-only; it never mutates persisted {@link ConsolidationState}.
+ * A progress update for an in-flight waiting step (LI.FI gas-top-up bridge, or
+ * CCTP attestation). Delivered out-of-band via {@link ExecuteOptions.onStepProgress}
+ * because the wait happens inside an awaited `executeStep` — the generator cannot
+ * `yield` mid-step. Display-only; never mutates persisted {@link ConsolidationState}.
  */
-export interface LiFiProgressEvent {
-  stepId: string;
-  txHash: string;
-  toChainId: number;
-  status: LiFiStatusResponse;
-}
+export type StepProgressEvent =
+  | { kind: "lifi"; stepId: string; txHash: string; fromChainId: number; toChainId: number; status: LiFiStatusResponse }
+  | { kind: "attestation"; stepId: string; received: number; total: number };
 
 export interface ExecuteOptions {
-  onLiFiProgress?: (event: LiFiProgressEvent) => void;
+  onStepProgress?: (event: StepProgressEvent) => void;
 }
 
 export async function validateInputBalances(step: TransactionStep, _state: ConsolidationState): Promise<void> {
@@ -108,7 +105,7 @@ export async function validateInputBalances(step: TransactionStep, _state: Conso
  * Yields state after each significant change for progress tracking and persistence.
  * @param state - Consolidation state
  * @param walletClient - Wallet client for transaction execution
- * @param opts - Optional out-of-band hooks (e.g. {@link ExecuteOptions.onLiFiProgress})
+ * @param opts - Optional out-of-band hooks (e.g. {@link ExecuteOptions.onStepProgress})
  * @yields Updated consolidation state after each step change
  */
 export async function* executeConsolidationPlan(
@@ -821,8 +818,10 @@ async function executeStep(
         throw new Error("No bridge transactions found for attestation");
       }
 
-      // Retrieve attestations
-      const attestations = await retrieveAttestations(bridgeTxs);
+      // Retrieve attestations, surfacing "X of N received" progress
+      const attestations = await retrieveAttestations(bridgeTxs, undefined, (received, total) =>
+        opts?.onStepProgress?.({ kind: "attestation", stepId: step.id, received, total }),
+      );
 
       // Calculate actual bridged amount from attestations
       const actualAmount = attestations.reduce(
@@ -1073,9 +1072,11 @@ async function executeStep(
         await Promise.all(
           transfers.map((t) =>
             pollLiFiTransferStatus(t.txHash, t.bridge, t.fromChainId, t.toChainId, undefined, undefined, (status) =>
-              opts?.onLiFiProgress?.({
+              opts?.onStepProgress?.({
+                kind: "lifi",
                 stepId: step.id,
                 txHash: t.txHash,
+                fromChainId: t.fromChainId,
                 toChainId: t.toChainId,
                 status,
               }),

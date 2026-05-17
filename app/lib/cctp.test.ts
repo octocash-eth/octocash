@@ -356,6 +356,40 @@ describe("cctp", () => {
       expect(global.fetch).toHaveBeenCalledTimes(2);
     });
 
+    test("reports (received, total) progress as each attestation resolves", async () => {
+      const mk = (n: string): Attestation => ({
+        message: `0xmessage${n}`,
+        attestation: `0xattestation${n}`,
+        status: "complete",
+        decodedMessage: {
+          nonce: `0xnonce${n}`,
+          destinationDomain: "7",
+          decodedMessageBody: { amount: "1000000", feeExecuted: "0" },
+        },
+      });
+
+      global.fetch = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ messages: [mk("1")] }) } as Response)
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ messages: [mk("2")] }) } as Response);
+
+      const onProgress = vi.fn();
+      await retrieveAttestations(
+        [
+          ["0xtxhash1", 1],
+          ["0xtxhash2", 137],
+        ],
+        undefined,
+        onProgress,
+      );
+
+      expect(onProgress.mock.calls).toEqual([
+        [0, 2],
+        [1, 2],
+        [2, 2],
+      ]);
+    });
+
     test("retries on 404 and succeeds on second attempt", async () => {
       vi.useFakeTimers();
 

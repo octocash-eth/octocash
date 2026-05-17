@@ -320,14 +320,25 @@ export const executeCCTPBurn = async (
  * @param signal - Optional AbortSignal; aborting interrupts both in-flight
  *   fetches and the inter-poll waits, so callers (e.g. the manual claim
  *   dialog's Cancel button) can stop the poll immediately.
+ * @param onProgress - Optional `(received, total)` callback fired with
+ *   `(0, total)` before polling and `(i + 1, total)` as each source-chain
+ *   attestation resolves. Display-only; the count is monotonic because
+ *   attestations are awaited in order.
  * @returns The attestations.
  */
-export const retrieveAttestations = async (transactionHashesAndChainIds: [string, number][], signal?: AbortSignal) => {
+export const retrieveAttestations = async (
+  transactionHashesAndChainIds: [string, number][],
+  signal?: AbortSignal,
+  onProgress?: (received: number, total: number) => void,
+) => {
+  const total = transactionHashesAndChainIds.length;
+  onProgress?.(0, total);
   const attestations: Attestation[] = [];
   for (let i = 0; i < transactionHashesAndChainIds.length; i++) {
     const [tx, chain] = transactionHashesAndChainIds[i];
     const attestation = await retrieveAttestation(tx, chain, undefined, signal);
     attestations.push(...attestation);
+    onProgress?.(i + 1, total);
   }
   return attestations;
 };

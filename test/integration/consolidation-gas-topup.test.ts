@@ -409,7 +409,7 @@ describe("Gas Top-Up Integration: plan then execute", () => {
     );
   });
 
-  test("forwards LI.FI poll progress via opts.onLiFiProgress without persisting it", async () => {
+  test("forwards LI.FI poll progress via opts.onStepProgress without persisting it", async () => {
     const DEFICIT_OPTIMISM = 5_000_000_000_000n;
     vi.mocked(getNativeBalance).mockResolvedValue(0n);
     vi.mocked(estimateChainGasCosts).mockImplementation(async (chainId) =>
@@ -461,12 +461,13 @@ describe("Gas Top-Up Integration: plan then execute", () => {
 
     const events: unknown[] = [];
     const { finalValue: executedState } = await consumeGenerator(
-      executeConsolidationPlan(state, mockWalletClient, { onLiFiProgress: (e) => events.push(e) }),
+      executeConsolidationPlan(state, mockWalletClient, { onStepProgress: (e) => events.push(e) }),
     );
 
     expect(executedState.status).toBe("completed");
     expect(events).toContainEqual(
       expect.objectContaining({
+        kind: "lifi",
         stepId: waitStepId,
         status: { status: "PENDING", substatus: "WAIT_DESTINATION_TRANSACTION" },
       }),

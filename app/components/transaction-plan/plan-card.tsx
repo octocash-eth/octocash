@@ -17,14 +17,8 @@ interface PlanCardProps {
   step: TransactionStep;
   stepNumber: number;
   result?: StepResult;
-  /** Transient LI.FI bridge feedback for this step (display-only). */
+  /** Transient, step-type-agnostic wait feedback for this step (display-only). */
   progress?: StepLiveProgress;
-  /** Destination chains where native gas has been observed to land. */
-  gasArrivedChainIds?: Set<number>;
-}
-
-function chainNameOf(chainId: number): string {
-  return chains[chainId as keyof typeof chains]?.name || `Chain ${chainId}`;
 }
 
 /** mm:ss elapsed since `startedAt`, ticking once a second. */
@@ -45,63 +39,20 @@ function ElapsedTimer({ startedAt }: { startedAt: number }) {
 }
 
 /**
- * Muted sub-line under an executing gas-topup-wait step: the slowest leg's
- * bridge stage (so the message reflects the worst case across destinations),
- * any destination where gas has already landed on-chain, and a live timer.
+ * Generic muted status, rendered inline next to the action text of any
+ * executing wait step (gas-top-up bridge, CCTP attestation, …): the
+ * hook-computed stage + live timer + optional note. Intentionally
+ * step-type-agnostic — all stage/note copy is decided upstream (see
+ * app/lib/step-progress.ts), so this stays a dumb renderer.
  */
-function GasTopUpWaitStatus({
-  step,
-  progress,
-  gasArrivedChainIds,
-}: {
-  step: TransactionStep;
-  progress?: StepLiveProgress;
-  gasArrivedChainIds?: Set<number>;
-}) {
-  const destChainIds = [...new Set((step.gasTopUpDestinations ?? []).map((d) => d.chainId))];
-  const arrived = destChainIds.filter((id) => gasArrivedChainIds?.has(id));
-
-  // Advancement rank — lowest wins so the displayed stage is the laggard's.
-  const rank = (s?: string): number => {
-    if (s === "WAIT_SOURCE_CONFIRMATIONS") return 0;
-    if (s === "WAIT_DESTINATION_TRANSACTION") return 2;
-    return 1; // PENDING with no/unknown substatus, BRIDGE/CHAIN_NOT_AVAILABLE, etc.
-  };
-  const transfers = Object.values(progress?.transfers ?? {});
-  const slowest = transfers.reduce<(typeof transfers)[number] | undefined>(
-    (acc, t) => (acc === undefined || rank(t.status.substatus) < rank(acc.status.substatus) ? t : acc),
-    undefined,
-  );
-
-  let message: string;
-  const sub = slowest?.status.substatus;
-  if (sub === "WAIT_SOURCE_CONFIRMATIONS") {
-    message = `Confirming on ${chainNameOf(step.chainId)}…`;
-  } else if (sub === "WAIT_DESTINATION_TRANSACTION" && slowest) {
-    message = `Bridging to ${chainNameOf(slowest.toChainId)}…`;
-  } else if (sub === "REFUND_IN_PROGRESS") {
-    message = "Refund in progress…";
-  } else if (sub === "BRIDGE_NOT_AVAILABLE" || sub === "CHAIN_NOT_AVAILABLE") {
-    message = "Waiting for bridge…";
-  } else {
-    message = "Bridging…";
-  }
-
+function StepProgressLine({ progress }: { progress: StepLiveProgress }) {
   return (
-    <div className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
-      <span>{message}</span>
-      {progress && (
-        <>
-          <span className="text-muted-foreground/50">·</span>
-          <ElapsedTimer startedAt={progress.startedAt} />
-        </>
-      )}
-      {arrived.length > 0 && (
-        <span className="text-green-600 dark:text-green-500">
-          · Gas received on {arrived.map(chainNameOf).join(" + ")} ✓
-        </span>
-      )}
-    </div>
+    <span className="text-xs text-muted-foreground inline-flex items-center gap-1.5">
+      <span>{progress.stage}</span>
+      <span className="text-muted-foreground/50">·</span>
+      <ElapsedTimer startedAt={progress.startedAt} />
+      {progress.note && <span className="text-green-600 dark:text-green-500">· {progress.note}</span>}
+    </span>
   );
 }
 
@@ -416,7 +367,7 @@ function GasCostDisplay({ gas, chainId }: { gas: StepGasEstimate; chainId: numbe
   );
 }
 
-export function PlanCard({ step, result, stepNumber, progress, gasArrivedChainIds }: PlanCardProps) {
+export function PlanCard({ step, result, stepNumber, progress }: PlanCardProps) {
   const isPending = step.status === "pending";
   const isExecuting = step.status === "executing";
   const isSuccess = step.status === "success";
@@ -441,14 +392,10 @@ export function PlanCard({ step, result, stepNumber, progress, gasArrivedChainId
           <X className="w-5 h-5 text-red-500 shrink-0" />
         ) : null}
 
-        {/* Action description (+ transient bridge sub-line) */}
-        <div className="flex flex-col gap-0.5 min-w-0">
-          <div className="text-sm text-foreground flex items-center gap-1.5 flex-wrap min-w-0">
-            <ActionContent step={step} result={result} />
-          </div>
-          {isExecuting && step.type === "gas-topup-wait" && (
-            <GasTopUpWaitStatus step={step} progress={progress} gasArrivedChainIds={gasArrivedChainIds} />
-          )}
+        {/* Action description + inline transient wait status */}
+        <div className="text-sm text-foreground flex items-center gap-1.5 flex-wrap min-w-0">
+          <ActionContent step={step} result={result} />
+          {isExecuting && progress && <StepProgressLine progress={progress} />}
         </div>
       </div>
 

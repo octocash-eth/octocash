@@ -1057,6 +1057,66 @@ describe("executeConsolidationPlan", () => {
     expect(finalState.results["attestation-1"].status).toBe("success"); // Not skipped - at least one input token has successful provenance
   });
 
+  test("attestation step forwards (received,total) progress via opts.onStepProgress", async () => {
+    const bridge1: TransactionStep = {
+      id: "bridge-1",
+      type: "bridge",
+      status: "pending",
+      chainId: 137,
+      inputTokens: [makeToken(USDC_ADDRESS, 500000n, 137)],
+      outputToken: makeToken(USDC_ADDRESS, 500000n, 1, { provenance: "bridge-1" }),
+    };
+    const bridge2: TransactionStep = {
+      id: "bridge-2",
+      type: "bridge",
+      status: "pending",
+      chainId: 10,
+      inputTokens: [makeToken(USDC_ADDRESS, 500000n, 10)],
+      outputToken: makeToken(USDC_ADDRESS, 500000n, 1, { provenance: "bridge-2" }),
+    };
+    const attestation: TransactionStep = {
+      id: "attestation-1",
+      type: "attestation",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [bridge1.outputToken, bridge2.outputToken],
+      outputToken: makeToken(USDC_ADDRESS, 0n, 1),
+    };
+
+    mockState.plan = [bridge1, bridge2, attestation];
+    mockState.hasSubsequentExecution = true;
+
+    vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xb1", 137]).mockResolvedValueOnce(["0xb2", 10]);
+
+    // Two source chains → 2 attestations; emit the monotonic count.
+    vi.mocked(retrieveAttestations).mockImplementation(async (_pairs, _signal, onProgress) => {
+      onProgress?.(0, 2);
+      onProgress?.(1, 2);
+      onProgress?.(2, 2);
+      return [
+        {
+          message: `0x${"00".repeat(32)}`,
+          attestation: `0x${"00".repeat(65)}`,
+          status: "complete",
+          decodedMessage: {
+            nonce: `0x${"00".repeat(32)}`,
+            destinationDomain: "0",
+            decodedMessageBody: { amount: "1000000", feeExecuted: "0" },
+          },
+        },
+      ];
+    });
+
+    const events: unknown[] = [];
+    const { finalValue: finalState } = await consumeGenerator(
+      executeConsolidationPlan(mockState, mockWalletClient, { onStepProgress: (e) => events.push(e) }),
+    );
+
+    expect(finalState.results["attestation-1"].status).toBe("success");
+    expect(events).toContainEqual({ kind: "attestation", stepId: "attestation-1", received: 0, total: 2 });
+    expect(events).toContainEqual({ kind: "attestation", stepId: "attestation-1", received: 2, total: 2 });
+  });
+
   test("transfer step - should transfer tokens from one wallet to another", async () => {
     const WALLET_2 = "0x2234567890123456789012345678901234567890" as Address;
 

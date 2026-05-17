@@ -5,13 +5,11 @@ import { PlanCard } from "./plan-card";
 interface PlanListProps {
   state: ConsolidationState;
   maxHeight?: string;
-  /** Transient LI.FI bridge feedback keyed by step id (display-only). */
+  /** Transient, step-type-agnostic wait feedback keyed by step id (display-only). */
   liveProgress?: LiveProgress;
-  /** Destination chains where native gas has been observed to land. */
-  gasArrivedChainIds?: Set<number>;
 }
 
-export function PlanList({ state, maxHeight = "400px", liveProgress, gasArrivedChainIds }: PlanListProps) {
+export function PlanList({ state, maxHeight = "400px", liveProgress }: PlanListProps) {
   return (
     <div className="overflow-y-auto space-y-3 pr-2" style={{ maxHeight }}>
       {state.plan.map((step, index) => {
@@ -23,7 +21,6 @@ export function PlanList({ state, maxHeight = "400px", liveProgress, gasArrivedC
             result={result}
             stepNumber={index + 1}
             progress={liveProgress?.[step.id]}
-            gasArrivedChainIds={gasArrivedChainIds}
           />
         );
       })}

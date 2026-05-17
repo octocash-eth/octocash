@@ -38,7 +38,7 @@ export function TransactionPlanExecutor({
   });
 
   // Step 2: Execute the plan
-  const { state, isExecuting, executeOrResume, retryFailedStep, skipFailedStep, liveProgress, gasArrivedChainIds } =
+  const { state, isExecuting, executeOrResume, retryFailedStep, skipFailedStep, liveProgress } =
     useConsolidationExecution({
       state: plannedState,
       onComplete,
@@ -75,7 +75,7 @@ export function TransactionPlanExecutor({
   return (
     <div className="space-y-4">
       {/* Transaction Cards Preview */}
-      <PlanList state={state} liveProgress={liveProgress} gasArrivedChainIds={gasArrivedChainIds} />
+      <PlanList state={state} liveProgress={liveProgress} />
 
       {/* Execution Status Alerts */}
       {showStatusAlert && (
