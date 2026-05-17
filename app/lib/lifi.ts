@@ -3,6 +3,20 @@ import type { Address, Hex } from "viem";
 const LIFI_API_BASE = "https://li.quest/v1";
 const NATIVE_TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000";
 
+/**
+ * Bridges whitelisted for gas top-ups. Restricted to fast, relay-style bridges
+ * so the cross-chain wait stays well under `pollLiFiTransferStatus`'s timeout
+ * (slow liquidity bridges like Stargate would routinely blow past it):
+ * - `across`           — fast optimistic relay, typically sub-minute
+ * - `relaydepository`  — Relay, ~seconds for small native transfers
+ * - `gasZipBridge`     — Gas.zip, purpose-built for native gas refuel
+ * Keys verified against `GET https://li.quest/v1/tools`. This is a hard
+ * allow-list: a chain pair served by none of these yields a quote failure
+ * (surfaced as the existing `LiFiError: Quote failed`), which is the intended
+ * trade-off for guaranteeing fast delivery.
+ */
+const FAST_BRIDGES = ["across", "relaydepository", "gasZipBridge"] as const;
+
 // ============================================================================
 // API Response Types
 // ============================================================================
@@ -85,6 +99,8 @@ export async function getLiFiQuote(
     fromAmount: fromAmount.toString(),
     fromAddress,
     toAddress,
+    order: "FASTEST",
+    allowBridges: FAST_BRIDGES.join(","),
   });
   const url = `${LIFI_API_BASE}/quote?${params}`;
   const res = await fetch(url);
@@ -143,7 +159,10 @@ export async function getLiFiQuoteForTargetOutput(
  * @param fromChainId - Source chain ID
  * @param toChainId - Destination chain ID
  * @param timeoutMs - Maximum time to wait (default: 180s)
- * @param pollIntervalMs - Polling interval (default: 10s)
+ * @param pollIntervalMs - Polling interval (default: 5s)
+ * @param onProgress - Invoked with the parsed status on every successful poll
+ *   (before the terminal DONE/FAILED decision), so callers can surface the
+ *   live bridge substatus while the transfer is still in flight.
  * @returns The final status response
  */
 export async function pollLiFiTransferStatus(
@@ -152,7 +171,8 @@ export async function pollLiFiTransferStatus(
   fromChainId: number,
   toChainId: number,
   timeoutMs = 180_000,
-  pollIntervalMs = 10_000,
+  pollIntervalMs = 5_000,
+  onProgress?: (status: LiFiStatusResponse) => void,
 ): Promise<LiFiStatusResponse> {
   const params = new URLSearchParams({
     txHash,
@@ -172,6 +192,8 @@ export async function pollLiFiTransferStatus(
     }
 
     const data = (await res.json()) as LiFiStatusResponse;
+
+    onProgress?.(data);
 
     if (data.status === "DONE") {
       if (data.substatus === "REFUNDED") {

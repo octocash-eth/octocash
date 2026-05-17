@@ -3087,7 +3087,15 @@ describe("Additional edge cases for complete coverage", () => {
 
       expect(finalState.status).toBe("completed");
       expect(finalState.results["gas-wait-1"].status).toBe("success");
-      expect(pollLiFiTransferStatus).toHaveBeenCalledWith("0xgastopup", "across", 8453, 10);
+      expect(pollLiFiTransferStatus).toHaveBeenCalledWith(
+        "0xgastopup",
+        "across",
+        8453,
+        10,
+        undefined,
+        undefined,
+        expect.any(Function),
+      );
     });
 
     test("gas-topup-wait succeeds immediately when there are no LiFi transfers (all same-chain)", async () => {
@@ -3163,7 +3171,15 @@ describe("Additional edge cases for complete coverage", () => {
       expect(finalState.status).toBe("completed");
       expect(finalState.results["gas-topup-flow"].status).toBe("success");
       expect(finalState.results["gas-wait-flow"].status).toBe("success");
-      expect(pollLiFiTransferStatus).toHaveBeenCalledWith("0xgastopup", "across", 8453, 10);
+      expect(pollLiFiTransferStatus).toHaveBeenCalledWith(
+        "0xgastopup",
+        "across",
+        8453,
+        10,
+        undefined,
+        undefined,
+        expect.any(Function),
+      );
     });
   });
 });

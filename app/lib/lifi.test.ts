@@ -56,6 +56,25 @@ describe("lifi", () => {
       expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringContaining("/quote?fromChain=1&toChain=8453"));
     });
 
+    test("should restrict routing to fast bridges", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ tool: "across", action: {}, estimate: {}, transactionRequest: {} }),
+      });
+
+      await getLiFiQuote(
+        1,
+        8453,
+        1000000000000000n,
+        "0x1234567890123456789012345678901234567890",
+        "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      );
+
+      const url = vi.mocked(globalThis.fetch).mock.calls[0][0] as string;
+      expect(url).toContain("order=FASTEST");
+      expect(url).toContain("allowBridges=across%2Crelaydepository%2CgasZipBridge");
+    });
+
     test("should throw on API error", async () => {
       globalThis.fetch = vi.fn().mockResolvedValue({
         ok: false,
@@ -209,6 +228,29 @@ describe("lifi", () => {
       const result = await pollLiFiTransferStatus("0xabc", "across", 1, 8453, 60_000, 100);
       expect(result.status).toBe("DONE");
       expect(callCount).toBeGreaterThanOrEqual(3);
+    });
+
+    test("should invoke onProgress on every successful poll", async () => {
+      let callCount = 0;
+      globalThis.fetch = vi.fn().mockImplementation(() => {
+        callCount++;
+        const pending = callCount < 3;
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              status: pending ? "PENDING" : "DONE",
+              substatus: pending ? "WAIT_DESTINATION_TRANSACTION" : "COMPLETED",
+            }),
+        });
+      });
+
+      const onProgress = vi.fn();
+      await pollLiFiTransferStatus("0xabc", "across", 1, 8453, 60_000, 100, onProgress);
+
+      expect(onProgress).toHaveBeenCalledTimes(3);
+      expect(onProgress).toHaveBeenNthCalledWith(1, { status: "PENDING", substatus: "WAIT_DESTINATION_TRANSACTION" });
+      expect(onProgress).toHaveBeenLastCalledWith({ status: "DONE", substatus: "COMPLETED" });
     });
 
     test("should throw on FAILED status", async () => {

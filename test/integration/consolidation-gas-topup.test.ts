@@ -260,7 +260,15 @@ describe("Gas Top-Up Integration: plan then execute", () => {
     expect(transfers![0].fromChainId).toBe(8453);
     expect(transfers![0].toChainId).toBe(10);
 
-    expect(pollLiFiTransferStatus).toHaveBeenCalledWith("0xgastopuptx", "across", 8453, 10);
+    expect(pollLiFiTransferStatus).toHaveBeenCalledWith(
+      "0xgastopuptx",
+      "across",
+      8453,
+      10,
+      undefined,
+      undefined,
+      expect.any(Function),
+    );
 
     // State survives superjson round-trip
     const loaded: ConsolidationState = parse(stringify(executedState));
@@ -381,7 +389,89 @@ describe("Gas Top-Up Integration: plan then execute", () => {
     expect(transferTo(1)).toMatchObject({ txHash: "0xtx-eth", bridge: "across", fromChainId: 8453 });
     expect(transferTo(137)).toMatchObject({ txHash: "0xtx-pol", bridge: "hop", fromChainId: 8453 });
 
-    expect(pollLiFiTransferStatus).toHaveBeenCalledWith("0xtx-eth", "across", 8453, 1);
-    expect(pollLiFiTransferStatus).toHaveBeenCalledWith("0xtx-pol", "hop", 8453, 137);
+    expect(pollLiFiTransferStatus).toHaveBeenCalledWith(
+      "0xtx-eth",
+      "across",
+      8453,
+      1,
+      undefined,
+      undefined,
+      expect.any(Function),
+    );
+    expect(pollLiFiTransferStatus).toHaveBeenCalledWith(
+      "0xtx-pol",
+      "hop",
+      8453,
+      137,
+      undefined,
+      undefined,
+      expect.any(Function),
+    );
+  });
+
+  test("forwards LI.FI poll progress via opts.onLiFiProgress without persisting it", async () => {
+    const DEFICIT_OPTIMISM = 5_000_000_000_000n;
+    vi.mocked(getNativeBalance).mockResolvedValue(0n);
+    vi.mocked(estimateChainGasCosts).mockImplementation(async (chainId) =>
+      chainId === 10
+        ? { totalGasCost: DEFICIT_OPTIMISM, maxFeePerGas: 20_000_000_000n, perOperation: [] }
+        : { totalGasCost: 0n, maxFeePerGas: 20_000_000_000n, perOperation: [] },
+    );
+    vi.mocked(findRichestSource).mockResolvedValue({
+      chainId: 8453,
+      address: WALLET,
+      balance: 10_000_000_000_000_000_000n,
+    });
+    vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue(
+      makeLiFiQuote({
+        fromChainId: 8453,
+        toChainId: 10,
+        fromAmount: DEFICIT_OPTIMISM.toString(),
+        toAmount: DEFICIT_OPTIMISM.toString(),
+      }),
+    );
+
+    // Drive one PENDING progress event, then resolve DONE.
+    vi.mocked(pollLiFiTransferStatus).mockImplementation(
+      async (_txHash, _bridge, _from, _to, _timeout, _interval, onProgress) => {
+        onProgress?.({ status: "PENDING", substatus: "WAIT_DESTINATION_TRANSACTION" });
+        return { status: "DONE", substatus: "COMPLETED" };
+      },
+    );
+
+    const sourceTokens: TokenAmount[] = [makeToken(USDC_OPTIMISM, 1000000n, 10, { walletAddress: WALLET })];
+    const destinationToken = { token: USDC_ETHEREUM, chainId: 1, walletAddress: WALLET, symbol: "USDC", decimals: 6 };
+
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+    const waitStepId = plan.find((s) => s.type === "gas-topup-wait")?.id;
+    expect(waitStepId).toBeDefined();
+
+    const state: ConsolidationState = {
+      id: "test-gas-topup-progress",
+      plan,
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens,
+      destinationToken,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      hasSubsequentExecution: false,
+    };
+
+    const events: unknown[] = [];
+    const { finalValue: executedState } = await consumeGenerator(
+      executeConsolidationPlan(state, mockWalletClient, { onLiFiProgress: (e) => events.push(e) }),
+    );
+
+    expect(executedState.status).toBe("completed");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        stepId: waitStepId,
+        status: { status: "PENDING", substatus: "WAIT_DESTINATION_TRANSACTION" },
+      }),
+    );
+    // Progress is display-only — it must never leak into persisted state.
+    expect(stringify(executedState)).not.toContain("WAIT_DESTINATION_TRANSACTION");
   });
 });

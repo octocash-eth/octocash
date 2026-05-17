@@ -10,10 +10,11 @@ import type { ViewerProps } from "./types";
  * Use this when you already have a ConsolidationState (e.g., from history/recovery)
  */
 export function TransactionPlanViewer({ state: initialState, onComplete, onBack, showActions = false }: ViewerProps) {
-  const { state, isExecuting, executeOrResume, retryFailedStep, skipFailedStep } = useConsolidationExecution({
-    state: initialState,
-    onComplete,
-  });
+  const { state, isExecuting, executeOrResume, retryFailedStep, skipFailedStep, liveProgress, gasArrivedChainIds } =
+    useConsolidationExecution({
+      state: initialState,
+      onComplete,
+    });
 
   // Use the state from the hook, fallback to initial state
   const currentState = state || initialState;
@@ -25,7 +26,7 @@ export function TransactionPlanViewer({ state: initialState, onComplete, onBack,
   return (
     <div className="space-y-4">
       {/* Transaction Cards Preview */}
-      <PlanList state={currentState} />
+      <PlanList state={currentState} liveProgress={liveProgress} gasArrivedChainIds={gasArrivedChainIds} />
 
       {/* Execution Status Alerts */}
       {showStatusAlert && (

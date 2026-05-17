@@ -235,7 +235,11 @@ describe("useConsolidationExecution", () => {
         expect(result.current.isExecuting).toBe(false);
       });
 
-      expect(mockExecuteConsolidationPlan).toHaveBeenCalledWith(mockState, mockWalletClient);
+      expect(mockExecuteConsolidationPlan).toHaveBeenCalledWith(
+        mockState,
+        mockWalletClient,
+        expect.objectContaining({ onLiFiProgress: expect.any(Function) }),
+      );
     });
 
     test("updates state during execution", async () => {

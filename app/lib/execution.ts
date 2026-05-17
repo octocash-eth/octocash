@@ -12,7 +12,7 @@ import {
   InsufficientNativeForGasError,
   type OperationType,
 } from "./gas-estimation";
-import { getLiFiQuoteForTargetOutput, pollLiFiTransferStatus } from "./lifi";
+import { getLiFiQuoteForTargetOutput, type LiFiStatusResponse, pollLiFiTransferStatus } from "./lifi";
 import { deriveSwapOutputAmount, executeOdosSwap, getSwapQuote } from "./odos";
 import { getPublicClient, retryOnRateLimit } from "./public-client";
 import { prepareSendCalls, SendCallsError } from "./send-calls";
@@ -61,6 +61,23 @@ export class InsufficientInputBalanceError extends Error {
  * first; this validator checks the post-adjustment amount directly against the
  * wallet balance.
  */
+/**
+ * A single LI.FI status update for an in-flight gas-top-up transfer. Delivered
+ * out-of-band via {@link ExecuteOptions.onLiFiProgress} because the wait happens
+ * inside an awaited `executeStep` — the generator cannot `yield` mid-step. This
+ * is display-only; it never mutates persisted {@link ConsolidationState}.
+ */
+export interface LiFiProgressEvent {
+  stepId: string;
+  txHash: string;
+  toChainId: number;
+  status: LiFiStatusResponse;
+}
+
+export interface ExecuteOptions {
+  onLiFiProgress?: (event: LiFiProgressEvent) => void;
+}
+
 export async function validateInputBalances(step: TransactionStep, _state: ConsolidationState): Promise<void> {
   if (step.type === "claim" || step.type === "attestation") return;
 
@@ -91,11 +108,13 @@ export async function validateInputBalances(step: TransactionStep, _state: Conso
  * Yields state after each significant change for progress tracking and persistence.
  * @param state - Consolidation state
  * @param walletClient - Wallet client for transaction execution
+ * @param opts - Optional out-of-band hooks (e.g. {@link ExecuteOptions.onLiFiProgress})
  * @yields Updated consolidation state after each step change
  */
 export async function* executeConsolidationPlan(
   state: ConsolidationState,
   walletClient: WalletClient<HttpTransport, Chain, Account>,
+  opts?: ExecuteOptions,
 ): AsyncGenerator<ConsolidationState, void, void> {
   // Validate initial state - allow ready, paused, or executing (for recovery scenarios)
   if (state.status !== "ready" && state.status !== "paused" && state.status !== "executing") {
@@ -255,7 +274,7 @@ export async function* executeConsolidationPlan(
     }
 
     try {
-      const result = await executeStep(executingStep, workingState, walletClient);
+      const result = await executeStep(executingStep, workingState, walletClient, opts);
 
       // Success - create new step reference with success status. Clear any
       // retryHints carried from a prior failed attempt so a fresh failure
@@ -698,6 +717,7 @@ async function executeStep(
   step: TransactionStep,
   state: ConsolidationState,
   walletClient: WalletClient<HttpTransport, Chain, Account>,
+  opts?: ExecuteOptions,
 ): Promise<StepResult> {
   const sendCalls = prepareSendCalls(walletClient);
 
@@ -1050,7 +1070,18 @@ async function executeStep(
 
       // If all destinations were same-chain, there are no LiFi transfers to poll
       if (transfers && transfers.length > 0) {
-        await Promise.all(transfers.map((t) => pollLiFiTransferStatus(t.txHash, t.bridge, t.fromChainId, t.toChainId)));
+        await Promise.all(
+          transfers.map((t) =>
+            pollLiFiTransferStatus(t.txHash, t.bridge, t.fromChainId, t.toChainId, undefined, undefined, (status) =>
+              opts?.onLiFiProgress?.({
+                stepId: step.id,
+                txHash: t.txHash,
+                toChainId: t.toChainId,
+                status,
+              }),
+            ),
+          ),
+        );
       }
 
       return {

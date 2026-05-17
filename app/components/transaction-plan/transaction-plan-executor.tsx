@@ -38,10 +38,11 @@ export function TransactionPlanExecutor({
   });
 
   // Step 2: Execute the plan
-  const { state, isExecuting, executeOrResume, retryFailedStep, skipFailedStep } = useConsolidationExecution({
-    state: plannedState,
-    onComplete,
-  });
+  const { state, isExecuting, executeOrResume, retryFailedStep, skipFailedStep, liveProgress, gasArrivedChainIds } =
+    useConsolidationExecution({
+      state: plannedState,
+      onComplete,
+    });
 
   // Notify parent when execution state changes
   React.useEffect(() => {
@@ -74,7 +75,7 @@ export function TransactionPlanExecutor({
   return (
     <div className="space-y-4">
       {/* Transaction Cards Preview */}
-      <PlanList state={state} />
+      <PlanList state={state} liveProgress={liveProgress} gasArrivedChainIds={gasArrivedChainIds} />
 
       {/* Execution Status Alerts */}
       {showStatusAlert && (

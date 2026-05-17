@@ -1,4 +1,5 @@
 import { Check, Circle, ExternalLink, Fuel, Loader2, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { Address } from "viem";
 import { formatUnits, zeroAddress } from "viem";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
@@ -7,6 +8,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip
 import { useFormatFiat } from "~/context/currency-provider";
 import { usePrice } from "~/context/token-price-provider";
 import { chains } from "~/data/supported-chains";
+import type { StepLiveProgress } from "~/hooks/use-consolidation-execution";
 import { consolidateTokenAmounts } from "~/lib/tokens";
 import type { StepGasEstimate, StepResult, TokenAmount, TransactionStep } from "~/lib/types";
 import { ChainIcon } from "../chain/chain-icon";
@@ -15,6 +17,92 @@ interface PlanCardProps {
   step: TransactionStep;
   stepNumber: number;
   result?: StepResult;
+  /** Transient LI.FI bridge feedback for this step (display-only). */
+  progress?: StepLiveProgress;
+  /** Destination chains where native gas has been observed to land. */
+  gasArrivedChainIds?: Set<number>;
+}
+
+function chainNameOf(chainId: number): string {
+  return chains[chainId as keyof typeof chains]?.name || `Chain ${chainId}`;
+}
+
+/** mm:ss elapsed since `startedAt`, ticking once a second. */
+function ElapsedTimer({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+  const total = Math.max(0, Math.floor((now - startedAt) / 1000));
+  const mm = Math.floor(total / 60);
+  const ss = String(total % 60).padStart(2, "0");
+  return (
+    <span className="tabular-nums">
+      {mm}:{ss}
+    </span>
+  );
+}
+
+/**
+ * Muted sub-line under an executing gas-topup-wait step: the slowest leg's
+ * bridge stage (so the message reflects the worst case across destinations),
+ * any destination where gas has already landed on-chain, and a live timer.
+ */
+function GasTopUpWaitStatus({
+  step,
+  progress,
+  gasArrivedChainIds,
+}: {
+  step: TransactionStep;
+  progress?: StepLiveProgress;
+  gasArrivedChainIds?: Set<number>;
+}) {
+  const destChainIds = [...new Set((step.gasTopUpDestinations ?? []).map((d) => d.chainId))];
+  const arrived = destChainIds.filter((id) => gasArrivedChainIds?.has(id));
+
+  // Advancement rank — lowest wins so the displayed stage is the laggard's.
+  const rank = (s?: string): number => {
+    if (s === "WAIT_SOURCE_CONFIRMATIONS") return 0;
+    if (s === "WAIT_DESTINATION_TRANSACTION") return 2;
+    return 1; // PENDING with no/unknown substatus, BRIDGE/CHAIN_NOT_AVAILABLE, etc.
+  };
+  const transfers = Object.values(progress?.transfers ?? {});
+  const slowest = transfers.reduce<(typeof transfers)[number] | undefined>(
+    (acc, t) => (acc === undefined || rank(t.status.substatus) < rank(acc.status.substatus) ? t : acc),
+    undefined,
+  );
+
+  let message: string;
+  const sub = slowest?.status.substatus;
+  if (sub === "WAIT_SOURCE_CONFIRMATIONS") {
+    message = `Confirming on ${chainNameOf(step.chainId)}…`;
+  } else if (sub === "WAIT_DESTINATION_TRANSACTION" && slowest) {
+    message = `Bridging to ${chainNameOf(slowest.toChainId)}…`;
+  } else if (sub === "REFUND_IN_PROGRESS") {
+    message = "Refund in progress…";
+  } else if (sub === "BRIDGE_NOT_AVAILABLE" || sub === "CHAIN_NOT_AVAILABLE") {
+    message = "Waiting for bridge…";
+  } else {
+    message = "Bridging…";
+  }
+
+  return (
+    <div className="text-xs text-muted-foreground flex items-center gap-1.5 flex-wrap">
+      <span>{message}</span>
+      {progress && (
+        <>
+          <span className="text-muted-foreground/50">·</span>
+          <ElapsedTimer startedAt={progress.startedAt} />
+        </>
+      )}
+      {arrived.length > 0 && (
+        <span className="text-green-600 dark:text-green-500">
+          · Gas received on {arrived.map(chainNameOf).join(" + ")} ✓
+        </span>
+      )}
+    </div>
+  );
 }
 
 function getExplorerUrl(chainId: number, txHash: string): string {
@@ -328,7 +416,7 @@ function GasCostDisplay({ gas, chainId }: { gas: StepGasEstimate; chainId: numbe
   );
 }
 
-export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
+export function PlanCard({ step, result, stepNumber, progress, gasArrivedChainIds }: PlanCardProps) {
   const isPending = step.status === "pending";
   const isExecuting = step.status === "executing";
   const isSuccess = step.status === "success";
@@ -353,9 +441,14 @@ export function PlanCard({ step, result, stepNumber }: PlanCardProps) {
           <X className="w-5 h-5 text-red-500 shrink-0" />
         ) : null}
 
-        {/* Action description */}
-        <div className="text-sm text-foreground flex items-center gap-1.5 flex-wrap min-w-0">
-          <ActionContent step={step} result={result} />
+        {/* Action description (+ transient bridge sub-line) */}
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <div className="text-sm text-foreground flex items-center gap-1.5 flex-wrap min-w-0">
+            <ActionContent step={step} result={result} />
+          </div>
+          {isExecuting && step.type === "gas-topup-wait" && (
+            <GasTopUpWaitStatus step={step} progress={progress} gasArrivedChainIds={gasArrivedChainIds} />
+          )}
         </div>
       </div>
 
