@@ -22,12 +22,19 @@ import {
 import { useFormatFiat } from "~/context/currency-provider";
 import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
 import { USDC } from "~/data/token-contracts";
+import { useConnectedAddresses } from "~/hooks/use-connected-addresses";
 import { formatTokenAmount, getTokenId } from "~/lib/tokens";
 import type { ConsolidationState, DestinationToken, SourceToken, TokenAmount } from "~/lib/types";
 import { CompletionStage } from "./consolidation-stages/completion-stage";
 import { ConfirmPlanStage } from "./consolidation-stages/confirm-plan-stage";
 import { SelectAmountStage } from "./consolidation-stages/select-amount-stage";
 import { type DestinationSelection, SelectDestinationStage } from "./consolidation-stages/select-destination-stage";
+
+const EMPTY_DESTINATION: DestinationSelection = {
+  walletAddress: undefined,
+  chainId: undefined,
+  tokenInfo: undefined,
+};
 
 /**
  * TokenAmount extended with the amount to consolidate (as a formatted string)
@@ -49,11 +56,7 @@ export function ConsolidateTokensModal({
   selectedRows = 0,
   onComplete,
 }: ConsolidateTokensModalProps) {
-  const [destination, setDestination] = React.useState({
-    walletAddress: undefined,
-    chainId: undefined,
-    tokenInfo: undefined,
-  } as DestinationSelection);
+  const [destination, setDestination] = React.useState<DestinationSelection>(EMPTY_DESTINATION);
   const [open, setOpen] = React.useState(false);
   const [currentStage, setCurrentStage] = React.useState(1);
   const [planId, setPlanId] = React.useState("");
@@ -61,6 +64,18 @@ export function ConsolidateTokensModal({
   const [completedState, setCompletedState] = React.useState<ConsolidationState | null>(null);
   const [isExecuting, setIsExecuting] = React.useState(false);
   const formatFiat = useFormatFiat();
+
+  // Watch the set of connected addresses so we can drop any stale destination
+  // the user selected before switching accounts in their wallet (e.g. Rabby).
+  const connectedAddresses = useConnectedAddresses();
+  const connectedAddressesKey = React.useMemo(
+    () =>
+      Array.from(connectedAddresses)
+        .map((a) => a.toLowerCase())
+        .sort()
+        .join(","),
+    [connectedAddresses],
+  );
 
   const consolidatedTokens = React.useMemo<TokenWithConsolidateAmount[]>(() => {
     return tokens
@@ -151,6 +166,26 @@ export function ConsolidateTokensModal({
       setPlanId("");
     }
   }, [open]);
+
+  // Reset the modal whenever the connected addresses change so a previously
+  // selected destination address can't linger after the user switches
+  // accounts (or disconnects one) in their wallet. We skip the first run so
+  // the initial mount doesn't immediately clear default state, and we skip
+  // resets while a consolidation is in flight to avoid tearing down an
+  // active execution.
+  const prevConnectedAddressesKeyRef = React.useRef(connectedAddressesKey);
+  React.useEffect(() => {
+    if (prevConnectedAddressesKeyRef.current === connectedAddressesKey) return;
+    prevConnectedAddressesKeyRef.current = connectedAddressesKey;
+    if (isExecuting) return;
+
+    setOpen(false);
+    setDestination(EMPTY_DESTINATION);
+    setCurrentStage(1);
+    setCompletedState(null);
+    setTokenAmounts({});
+    setPlanId("");
+  }, [connectedAddressesKey, isExecuting]);
 
   // Navigate to a stage, generating a fresh planId when entering stage 3.
   // This is synchronous (not in a useEffect) so the new planId is available
