@@ -21,9 +21,8 @@ export default function TermsOfService() {
       <SiteHeader />
       <main className="flex-1 px-4 sm:px-6 lg:px-8 py-12 md:py-20">
         <article className="prose prose-lg dark:prose-invert mx-auto max-w-3xl">
-          {/* IMPORTANT: This document is a draft and should be reviewed by a qualified attorney before publication. */}
           <h1>Terms of Service</h1>
-          <p className="text-muted-foreground">Last updated: February 17, 2026</p>
+          <p className="text-muted-foreground">Last updated: May 17, 2026</p>
 
           <p>
             These Terms of Service (&quot;Terms&quot;) govern your access to and use of the OctoCash website and
@@ -45,6 +44,11 @@ export default function TermsOfService() {
             token balances across multiple blockchain networks and consolidate them into a single wallet address on a
             chosen destination chain. The Service coordinates token swaps through Odos (a decentralized exchange
             aggregator) and cross-chain bridges through Circle&apos;s Cross-Chain Transfer Protocol v2 (CCTPv2).
+          </p>
+          <p>
+            When a destination wallet does not hold sufficient native gas to execute its share of the consolidation, the
+            Service may route a small native-token top-up to that wallet through LI.FI, a bridge aggregator. LI.FI in
+            turn routes the top-up through fast underlying bridges such as Across, Relay, and Gas.zip.
           </p>
           <p>
             The Service acts solely as a coordination interface. We do not hold, control, or take custody of your
@@ -109,6 +113,10 @@ export default function TermsOfService() {
               networks;
             </li>
             <li>
+              <strong>LI.FI</strong> — bridge aggregator used to route cross-chain native gas top-ups when a destination
+              wallet lacks gas; LI.FI in turn relies on third-party bridges including Across, Relay, and Gas.zip;
+            </li>
+            <li>
               <strong>Fermyon Cloud</strong> — hosts token icon assets served by the Service.
             </li>
           </ul>
@@ -130,7 +138,12 @@ export default function TermsOfService() {
               swap protocol;
             </li>
             <li>
-              <strong>Bridge fees</strong> — 0.01% for USDC bridges (0.14% on Linea), charged by the bridge protocol.
+              <strong>Bridge fees</strong> — 0.01% for USDC bridges (0.14% on Linea), charged by the bridge protocol;
+            </li>
+            <li>
+              <strong>Gas top-up bridge fees</strong> — when a destination wallet lacks native gas, an additional bridge
+              fee charged by LI.FI and the underlying bridge (Across, Relay, or Gas.zip) applies to the top-up amount.
+              This fee is only incurred when a top-up is required and is shown before you approve the transaction.
             </li>
           </ul>
           <p>
