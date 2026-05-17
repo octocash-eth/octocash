@@ -245,7 +245,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
               Object.keys(rowSelection).length >= MAX_SOURCE_TOKENS ? "text-amber-600" : "text-muted-foreground"
             }`}
           >
-            {Object.keys(rowSelection).length} of {MAX_SOURCE_TOKENS} token(s) selected.
+            {Object.keys(rowSelection).length} of {Math.min(MAX_SOURCE_TOKENS, data.length)} token(s) selected.
           </p>
           <DataGridPaginationNav className="justify-self-center" />
           <DataGridPaginationSize sizes={[10, 25, 50, 100]} className="justify-self-end" />
