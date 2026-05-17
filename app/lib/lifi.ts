@@ -1,4 +1,5 @@
 import type { Address, Hex } from "viem";
+import { chains } from "~/data/supported-chains";
 
 const LIFI_API_BASE = "https://li.quest/v1";
 const NATIVE_TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -16,6 +17,45 @@ const NATIVE_TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000";
  * trade-off for guaranteeing fast delivery.
  */
 const FAST_BRIDGES = ["across", "relaydepository", "gasZipBridge"] as const;
+
+/**
+ * Minimum cross-chain top-up target, keyed by the destination chain's native
+ * symbol. Bridges reject transfers worth under ~$1 ("Bridge from ETH with
+ * fromToken value less than 1 USD") and a sub-$1 native refuel gets eaten by
+ * fees ("FEES_HIGHER_THAN_AMOUNT"), so we never request a cross-chain quote
+ * below this. The user just receives a little extra — immediately usable —
+ * gas on the destination instead of a hard planning failure. Sized to clear
+ * ~$1 + fees across plausible price regimes; natives absent from this map
+ * (none in supported-chains today) get no floor.
+ */
+const MIN_CROSS_CHAIN_TARGET_WEI: Record<string, bigint> = {
+  ETH: 1_200_000_000_000_000n, // ~0.0012 ETH (≈ $1.8–5 across regimes)
+  POL: 8_000_000_000_000_000_000n, // ~8 POL (≈ $1.2–5 across regimes)
+};
+
+/**
+ * Lower top-up floor that applies only when we route via gas.zip, which
+ * accepts deposits as small as $0.25 (https://dev.gas.zip/gas/overview) —
+ * far below the ~$1 minimum that Across / Relay enforce. Sized to clear
+ * gas.zip's $0.25 minimum + price slippage + their flat fee, so the bridge
+ * itself doesn't reject the request; absent natives get no gas.zip floor
+ * (which means the gas.zip-first attempt is skipped — no harm, the standard
+ * tier still runs).
+ */
+const MIN_GASZIP_TARGET_WEI: Record<string, bigint> = {
+  ETH: 200_000_000_000_000n, // ~0.0002 ETH (≈ $0.30–0.80 across regimes)
+  POL: 2_000_000_000_000_000_000n, // ~2 POL    (≈ $0.30–1.00 across regimes)
+};
+
+function minCrossChainTargetWei(toChainId: number): bigint {
+  const symbol = chains[toChainId as keyof typeof chains]?.nativeCurrency.symbol;
+  return (symbol && MIN_CROSS_CHAIN_TARGET_WEI[symbol]) || 0n;
+}
+
+function minGasZipTargetWei(toChainId: number): bigint {
+  const symbol = chains[toChainId as keyof typeof chains]?.nativeCurrency.symbol;
+  return (symbol && MIN_GASZIP_TARGET_WEI[symbol]) || 0n;
+}
 
 // ============================================================================
 // API Response Types
@@ -90,8 +130,9 @@ export async function getLiFiQuote(
   fromAmount: bigint,
   fromAddress: Address,
   toAddress: Address,
+  opts?: { bridges?: string; fromAmountForGas?: bigint },
 ): Promise<LiFiQuoteResponse> {
-  const params = new URLSearchParams({
+  const base: Record<string, string> = {
     fromChain: String(fromChainId),
     toChain: String(toChainId),
     fromToken: NATIVE_TOKEN_ADDRESS,
@@ -100,17 +141,35 @@ export async function getLiFiQuote(
     fromAddress,
     toAddress,
     order: "FASTEST",
-    allowBridges: FAST_BRIDGES.join(","),
-  });
-  const url = `${LIFI_API_BASE}/quote?${params}`;
-  const res = await fetch(url);
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`LiFiError: Quote failed (${res.status}): ${text}`);
+  };
+  if (opts?.fromAmountForGas !== undefined) {
+    base.fromAmountForGas = opts.fromAmountForGas.toString();
   }
 
-  return (await res.json()) as LiFiQuoteResponse;
+  // When the caller pins a specific bridge (e.g. `gasZipBridge` for the
+  // low-floor first attempt) we honor it verbatim and skip the fast→full
+  // widening — a 404 here is a meaningful "this bridge can't quote it"
+  // signal that the caller wants to act on. Otherwise prefer the fast-
+  // bridge allow-list, and if LI.FI has no route within it (404 "no
+  // available quotes") retry once across the full bridge set, still
+  // FASTEST-ordered. Non-404 failures (bad params, rate limit, 5xx)
+  // never benefit from widening, so fail fast.
+  const attempts: Record<string, string>[] = opts?.bridges
+    ? [{ ...base, allowBridges: opts.bridges }]
+    : [{ ...base, allowBridges: FAST_BRIDGES.join(",") }, base];
+  let status = 0;
+  let body = "";
+  for (let i = 0; i < attempts.length; i++) {
+    const res = await fetch(`${LIFI_API_BASE}/quote?${new URLSearchParams(attempts[i])}`);
+    if (res.ok) {
+      return (await res.json()) as LiFiQuoteResponse;
+    }
+    status = res.status;
+    body = await res.text();
+    if (status !== 404) break;
+  }
+
+  throw new Error(`LiFiError: Quote failed (${status}): ${body}`);
 }
 
 /**
@@ -134,21 +193,52 @@ export async function getLiFiQuoteForTargetOutput(
   fromAddress: Address,
   toAddress: Address,
 ): Promise<LiFiQuoteResponse> {
-  const probe = await getLiFiQuote(fromChainId, toChainId, targetOutputWei, fromAddress, toAddress);
-  const probeToAmount = BigInt(probe.estimate.toAmount);
+  // Probe with `target`, inspect the rate, then re-quote with either a 20%
+  // buffer (same-token) or a proportionally-scaled fromAmount (cross-token).
+  // Extracted so we can run it once for the gas.zip-first low-floor attempt
+  // and again for the standard fast-bridge fallback without duplicating the
+  // probe / ratio / re-quote logic.
+  const probeWithBuffer = async (
+    target: bigint,
+    quoteOpts?: { bridges?: string; fromAmountForGas?: bigint },
+  ): Promise<LiFiQuoteResponse> => {
+    const probe = await getLiFiQuote(fromChainId, toChainId, target, fromAddress, toAddress, quoteOpts);
+    const probeToAmount = BigInt(probe.estimate.toAmount);
+    const ratio = (probeToAmount * 100n) / target;
 
-  // If the probe already delivers enough (same token, small fee), return with a 20% buffer re-quote
-  const ratio = (probeToAmount * 100n) / targetOutputWei;
+    if (ratio >= 90n && ratio <= 110n) {
+      const bufferedAmount = (target * 120n) / 100n;
+      return getLiFiQuote(fromChainId, toChainId, bufferedAmount, fromAddress, toAddress, quoteOpts);
+    }
 
-  if (ratio >= 90n && ratio <= 110n) {
-    // Same token pair (e.g. ETH->ETH), probe is close. Re-quote with 20% buffer.
-    const bufferedAmount = (targetOutputWei * 120n) / 100n;
-    return getLiFiQuote(fromChainId, toChainId, bufferedAmount, fromAddress, toAddress);
+    const adjustedFromAmount = (target * target * 120n) / (probeToAmount * 100n);
+    return getLiFiQuote(fromChainId, toChainId, adjustedFromAmount, fromAddress, toAddress, quoteOpts);
+  };
+
+  // Tier 1 — gas.zip-first, low floor. Gas.zip accepts deposits as small as
+  // $0.25, so when the deficit lands between gas.zip's min and the standard
+  // ~$1.50 floor we save the user from over-bridging. Best-effort: any
+  // failure (404 NO_QUOTE, 4xx/5xx, network) falls through to tier 2 so
+  // gas.zip availability never blocks a top-up.
+  const gasZipFloor = minGasZipTargetWei(toChainId);
+  if (gasZipFloor > 0n) {
+    const gasZipTarget = targetOutputWei > gasZipFloor ? targetOutputWei : gasZipFloor;
+    try {
+      return await probeWithBuffer(gasZipTarget, {
+        bridges: "gasZipBridge",
+        fromAmountForGas: gasZipTarget,
+      });
+    } catch {
+      // Fall through — surface the standard-tier error if that one also fails.
+    }
   }
 
-  // Cross-token (e.g. ETH->POL or POL->ETH): calculate proportionally with 20% buffer
-  const adjustedFromAmount = (targetOutputWei * targetOutputWei * 120n) / (probeToAmount * 100n);
-  return getLiFiQuote(fromChainId, toChainId, adjustedFromAmount, fromAddress, toAddress);
+  // Tier 2 — standard fast-bridge path with the ~$1.50 floor that Across /
+  // Relay need. Sub-$1 requests get rejected here, so we never let
+  // `targetOutputWei` slip below the destination's minimum bridgeable value.
+  const target =
+    targetOutputWei > minCrossChainTargetWei(toChainId) ? targetOutputWei : minCrossChainTargetWei(toChainId);
+  return probeWithBuffer(target);
 }
 
 /**

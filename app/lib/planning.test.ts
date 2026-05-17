@@ -15,6 +15,14 @@ vi.mock("./gas", () => ({
   getNativeBalance: vi.fn().mockResolvedValue(1000000000000000000n), // 1 ETH
   findRichestSource: vi.fn().mockResolvedValue(null),
 }));
+vi.mock("./api/odos", () => ({
+  // Default: no native USD prices known. createGasTopUpSteps falls back to
+  // raw-balance tie-break, which preserves pre-USD-sort behavior in tests
+  // that don't care about pricing. Tests that exercise USD-aware ordering
+  // override this per-test.
+  fetchOdosPrices: vi.fn().mockResolvedValue(new Map()),
+  odosPriceKey: (chainId: number, address: string) => `${chainId}:${address.toLowerCase()}`,
+}));
 vi.mock("./lifi", () => ({
   getLiFiQuoteForTargetOutput: vi.fn(),
 }));
@@ -1838,7 +1846,11 @@ describe("planConsolidation", () => {
       const { getLiFiQuoteForTargetOutput } = await import("./lifi");
       const { estimateChainGasCosts, estimateOperationsForChainWallet } = await import("./gas-estimation");
 
-      vi.mocked(getNativeBalance).mockResolvedValue(100_000_000_000n); // 0.0000001 ETH
+      // Chain 10 (source) and chain 1 (dest) start with dust → both record gaps.
+      // Polygon (137) carries 10 POL — the only candidate that can cover the deficits.
+      vi.mocked(getNativeBalance).mockImplementation(async (chain) =>
+        chain.id === 137 ? 10_000_000_000_000_000_000n : 100_000_000_000n,
+      );
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 1_000_000_000_000_000n, // 0.001 ETH
         maxFeePerGas: 20_000_000_000n,
@@ -1846,11 +1858,7 @@ describe("planConsolidation", () => {
       });
       vi.mocked(estimateOperationsForChainWallet).mockReturnValue(["cctp-approval", "cctp-burn"]);
       vi.mocked(getBridgeFee).mockResolvedValue(0n);
-      vi.mocked(findRichestSource).mockResolvedValue({
-        chainId: 137, // polygon — distinct from dest chain (1) so it's a real fallback
-        address: WALLET,
-        balance: 10_000_000_000_000_000_000n, // 10 POL (ample)
-      });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
       vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue({
         tool: "across",
         action: {
@@ -2186,18 +2194,18 @@ describe("planConsolidation", () => {
       const { getLiFiQuoteForTargetOutput } = await import("./lifi");
       const { estimateChainGasCosts } = await import("./gas-estimation");
 
-      vi.mocked(getNativeBalance).mockResolvedValue(100_000_000_000_000_000n); // 0.1 ETH
+      // Source/dest chains have just enough to leave a 0.22 ETH deficit;
+      // Polygon (137) carries 10 POL — the only candidate that can cover it.
+      vi.mocked(getNativeBalance).mockImplementation(async (chain) =>
+        chain.id === 137 ? 10_000_000_000_000_000_000n : 100_000_000_000_000_000n,
+      );
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 100_000_000_000_000_000n, // 0.1 ETH gas
         maxFeePerGas: 20_000_000_000n,
         perOperation: [],
       });
       vi.mocked(getBridgeFee).mockResolvedValue(0n);
-      vi.mocked(findRichestSource).mockResolvedValue({
-        chainId: 137, // polygon, distinct from dest chain
-        address: WALLET,
-        balance: 10_000_000_000_000_000_000n,
-      });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
       vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue({
         tool: "across",
         action: {
@@ -2263,18 +2271,17 @@ describe("planConsolidation", () => {
       const { getLiFiQuoteForTargetOutput } = await import("./lifi");
       const { estimateChainGasCosts } = await import("./gas-estimation");
 
-      vi.mocked(getNativeBalance).mockResolvedValue(0n);
+      // All wallets at 0 except Polygon, which holds 10 POL — the funding source.
+      vi.mocked(getNativeBalance).mockImplementation(async (chain) =>
+        chain.id === 137 ? 10_000_000_000_000_000_000n : 0n,
+      );
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 10_000_000_000_000_000n, // 0.01 ETH
         maxFeePerGas: 20_000_000_000n,
         perOperation: [],
       });
       vi.mocked(getBridgeFee).mockResolvedValue(0n);
-      vi.mocked(findRichestSource).mockResolvedValue({
-        chainId: 137,
-        address: WALLET,
-        balance: 10_000_000_000_000_000_000n,
-      });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
       vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue({
         tool: "across",
         action: {
@@ -2428,18 +2435,17 @@ describe("planConsolidation", () => {
       const { getLiFiQuoteForTargetOutput } = await import("./lifi");
 
       // Both source chain (10) and destination chain (1) WALLET have 0 → both gaps recorded.
-      vi.mocked(getNativeBalance).mockResolvedValue(0n);
+      // Polygon (137) carries 100 POL — the only candidate that can cover both deficits.
+      vi.mocked(getNativeBalance).mockImplementation(async (chain) =>
+        chain.id === 137 ? 100_000_000_000_000_000_000n : 0n,
+      );
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 1_000_000_000_000_000n,
         maxFeePerGas: 20_000_000_000n,
         perOperation: [],
       });
       vi.mocked(getBridgeFee).mockResolvedValue(0n);
-      vi.mocked(findRichestSource).mockResolvedValue({
-        chainId: 137,
-        address: WALLET,
-        balance: 100_000_000_000_000_000_000n,
-      });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
       vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue({
         tool: "across",
         action: {
@@ -2499,13 +2505,15 @@ describe("planConsolidation", () => {
       const { getNativeBalance, findRichestSource } = await import("./gas");
       const { estimateChainGasCosts } = await import("./gas-estimation");
 
-      // Wallet 2 has lots of native on chain 10. Wallet 1 has nothing on chain 10
-      // and is doing the work there — gap on chain 10 funded same-chain by wallet 2.
+      // WALLET_2 is broke on chain 10 (gap for WALLET_2's USDC transfer).
+      // WALLET holds 10 ETH on chain 10 and acts as funding source — both wallets
+      // participate (intermediate + source-token holder), so both end up in
+      // executorAddresses. WALLET funds WALLET_2's gap same-chain — no bridge wait.
       const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
       vi.mocked(getNativeBalance).mockImplementation(async (chain, address) => {
-        if (chain.id === 10 && address === WALLET) return 0n;
-        if (chain.id === 10 && address === WALLET_2) return 10_000_000_000_000_000_000n;
-        return 1_000_000_000_000_000_000n;
+        if (chain.id === 10 && address === WALLET_2) return 0n;
+        if (chain.id === 10 && address === WALLET) return 10_000_000_000_000_000_000n;
+        return 0n;
       });
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 1_000_000_000_000_000n,
@@ -2513,18 +2521,14 @@ describe("planConsolidation", () => {
         perOperation: [],
       });
       vi.mocked(getBridgeFee).mockResolvedValue(0n);
-      vi.mocked(findRichestSource).mockResolvedValue({
-        chainId: 10,
-        address: WALLET_2,
-        balance: 10_000_000_000_000_000_000n,
-      });
+      vi.mocked(findRichestSource).mockResolvedValue(null);
 
       const sourceTokens: TokenAmount[] = [
         {
           token: USDC_OPTIMISM,
           amount: 1_000_000n,
           chainId: 10,
-          walletAddress: WALLET,
+          walletAddress: WALLET_2,
           symbol: "USDC",
           decimals: 6,
         },
@@ -2550,6 +2554,75 @@ describe("planConsolidation", () => {
         perOperation: [],
       });
       vi.mocked(findRichestSource).mockResolvedValue(null);
+    });
+
+    test("prefers higher-USD-value chain over higher raw-wei chain (Optimism ETH > Polygon POL)", async () => {
+      // Regression: planner used to compare native balances by raw wei. POL on
+      // Polygon (1 POL = 1e18 wei ≈ $0.20) would outrank ETH on Optimism (0.5
+      // ETH = 5e17 wei ≈ $1500) numerically, so the bridge attempt would fire
+      // off Polygon and fall through to mainnet on failure. With USD-aware
+      // sorting, Optimism wins.
+      const { getNativeBalance, findRichestSource } = await import("./gas");
+      const { fetchOdosPrices } = await import("./api/odos");
+      const { getLiFiQuoteForTargetOutput } = await import("./lifi");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+
+      // 0.5 ETH on Optimism, 100 POL on Polygon. Raw wei says Polygon wins
+      // (1e20 > 5e17); USD value says Optimism wins ($1000 vs $20).
+      vi.mocked(getNativeBalance).mockImplementation(async (chain) => {
+        if (chain.id === 10) return 500_000_000_000_000_000n; // 0.5 ETH
+        if (chain.id === 137) return 100_000_000_000_000_000_000n; // 100 POL
+        return 0n;
+      });
+      vi.mocked(fetchOdosPrices).mockResolvedValue(
+        new Map([
+          [`10:${"0x0000000000000000000000000000000000000000"}`, 2000], // ETH = $2000
+          [`137:${"0x0000000000000000000000000000000000000000"}`, 0.2], // POL = $0.20
+        ]),
+      );
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 1_000_000_000_000_000n, // 0.001 ETH gas (creates a gap on chain 1)
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      vi.mocked(findRichestSource).mockResolvedValue(null);
+      vi.mocked(getLiFiQuoteForTargetOutput).mockImplementation(async (fromChainId) => ({
+        tool: "across",
+        action: {
+          fromChainId,
+          toChainId: 1,
+          fromToken: { symbol: fromChainId === 137 ? "POL" : "ETH", decimals: 18, priceUSD: "0" },
+          toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
+        },
+        estimate: { fromAmount: "5500000000000000", toAmount: "1000000000000000", toAmountMin: "1000000000000000" },
+        transactionRequest: {
+          value: "5500000000000000",
+          to: "0x1111111111111111111111111111111111111111" as Address,
+          data: "0x" as `0x${string}`,
+          from: WALLET,
+          chainId: fromChainId,
+        },
+      }));
+
+      const sourceTokens: TokenAmount[] = [
+        { token: USDC_OPTIMISM, amount: 1_000_000n, chainId: 10, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+      ];
+      const destinationToken = { token: USDC_ADDRESS, chainId: 1, walletAddress: WALLET, symbol: "USDC", decimals: 6 };
+
+      const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+      const topup = plan.find((s) => s.type === "gas-topup");
+      expect(topup).toBeDefined();
+      // Optimism (10) wins on USD value despite Polygon's bigger raw-wei balance.
+      expect(topup?.chainId).toBe(10);
+
+      vi.mocked(fetchOdosPrices).mockResolvedValue(new Map());
+      vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
     });
 
     test("throws PlanningError when no wallet can fund the deficit", async () => {

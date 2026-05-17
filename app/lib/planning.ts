@@ -2,8 +2,9 @@ import { type Address, formatUnits, getAddress, isAddressEqual, zeroAddress } fr
 import { mainnet } from "viem/chains";
 import { chains, transports } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
+import { fetchOdosPrices, odosPriceKey } from "./api/odos";
 import { getBridgeFee } from "./cctp";
-import { findRichestSource, getNativeBalance } from "./gas";
+import { getNativeBalance } from "./gas";
 import {
   attachGasEstimates,
   buildGasContext,
@@ -1128,31 +1129,52 @@ async function createGasTopUpSteps(
     });
   }
 
-  // Prefer the richest non-L1 source; only fall back to Ethereum mainnet if no
-  // non-L1 source can cover the deposit. Bridging gas *out of* L1 is expensive,
-  // so mainnet sits at the bottom of the candidate list and the trial loop below
-  // reaches it only when necessary.
+  // Build the full fallback candidate set from on-chain native balances. We
+  // sort non-L1 pairs by USD value of the native balance — comparing raw wei
+  // across chains is wrong because natives have wildly different prices and
+  // decimals: e.g. 5 POL (5e18 wei ≈ $1) would otherwise outrank 0.5 ETH
+  // (5e17 wei ≈ $1500). Mainnet pairs sort to the bottom regardless, because
+  // bridging gas *out of* L1 is expensive. When Odos has no price for a chain
+  // (or the fetch fails), that pair gets `usd = 0` and tie-breaks by raw
+  // balance, matching the previous behavior so the sort never makes things
+  // worse.
   const executorPairs = [...executorAddresses].flatMap((addr) =>
     SUPPORTED_CHAINS.map((c) => [c, addr] as [number, Address]),
   );
-  const nonL1Fallback = await findRichestSource(
-    executorPairs.filter(([c]) => c !== mainnet.id),
-    transports,
-  );
-  const l1Fallback = await findRichestSource(
-    executorPairs.filter(([c]) => c === mainnet.id),
-    transports,
-  );
-  for (const fallback of [nonL1Fallback, l1Fallback]) {
-    if (!fallback) continue;
+  const fallbackBalances = (
+    await Promise.all(
+      executorPairs.map(async ([chainId, address]) => {
+        const chain = chains[chainId as keyof typeof chains];
+        if (!chain) return null;
+        const balance = await getNativeBalance(chain, address, transports?.[chainId as keyof typeof transports]);
+        return balance > 0n ? { chainId, address: getAddress(address) as Address, balance, chain } : null;
+      }),
+    )
+  ).filter(<T>(x: T | null): x is T => x !== null);
+
+  const uniqueChains = [...new Set(fallbackBalances.map((b) => b.chainId))];
+  const priceMap = await fetchOdosPrices(uniqueChains.map((chainId) => ({ chainId, token: zeroAddress })));
+
+  const sortedFallbacks = fallbackBalances
+    .map((b) => {
+      const priceUsd = priceMap.get(odosPriceKey(b.chainId, zeroAddress)) ?? 0;
+      const usd = priceUsd * Number(formatUnits(b.balance, b.chain.nativeCurrency.decimals));
+      return { ...b, usd, isMainnet: b.chainId === mainnet.id };
+    })
+    .sort((a, b) => {
+      if (a.isMainnet !== b.isMainnet) return a.isMainnet ? 1 : -1;
+      if (a.usd !== b.usd) return b.usd - a.usd;
+      return a.balance > b.balance ? -1 : a.balance < b.balance ? 1 : 0;
+    });
+
+  for (const fallback of sortedFallbacks) {
     const isDup = candidates.some((c) => c.chainId === fallback.chainId && isAddressEqual(c.address, fallback.address));
     if (isDup) continue;
-    const fallbackChain = chains[fallback.chainId as keyof typeof chains];
     candidates.push({
       chainId: fallback.chainId,
       address: fallback.address,
       balance: fallback.balance,
-      label: `richest source ${fallback.address} on ${fallbackChain?.name ?? `chain ${fallback.chainId}`}`,
+      label: `richest source ${fallback.address} on ${fallback.chain.name}`,
     });
   }
 
