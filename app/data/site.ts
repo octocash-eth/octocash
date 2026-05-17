@@ -13,4 +13,5 @@ export const SITE_FOUNDED = "2025";
 // Social Links
 export const SOCIAL_LINKS = {
   twitter: "https://x.com/octocash_eth",
+  github: "https://github.com/octocash-eth/octocash",
 };

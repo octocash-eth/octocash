@@ -1,6 +1,7 @@
 {
   "name": "octo.cash",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "build": "react-router build",
@@ -83,5 +84,6 @@
   "engines": {
     "node": ">=22"
   },
-  "packageManager": "bun@1.2.19"
+  "packageManager": "bun@1.2.19",
+  "license": "AGPL-3.0-only"
 }

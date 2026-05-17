@@ -1,6 +1,16 @@
+import { Github } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router";
 import { FOOTER_CONTENT } from "~/data/homepage";
+import { SOCIAL_LINKS } from "~/data/site";
+
+function XIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+    </svg>
+  );
+}
 
 export default function FooterSection() {
   const footerRef = useRef<HTMLElement>(null);
@@ -81,6 +91,28 @@ export default function FooterSection() {
           >
             Privacy Policy
           </Link>
+        </div>
+        <div className="mt-6 flex justify-center gap-6">
+          <a
+            href={SOCIAL_LINKS.github}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Octocash on GitHub"
+            aria-label="Octocash on GitHub"
+            className="text-orange-900/70 hover:text-orange-900 dark:text-white/70 dark:hover:text-white transition-colors"
+          >
+            <Github className="size-6" />
+          </a>
+          <a
+            href={SOCIAL_LINKS.twitter}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Octocash on X (Twitter)"
+            aria-label="Octocash on X (Twitter)"
+            className="text-orange-900/70 hover:text-orange-900 dark:text-white/70 dark:hover:text-white transition-colors"
+          >
+            <XIcon className="size-6" />
+          </a>
         </div>
       </div>
     </footer>
