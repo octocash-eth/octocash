@@ -1,5 +1,6 @@
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
+import { ScrollArea } from "~/components/ui/scroll-area";
 import type { TransactionError } from "~/lib/types";
 import type { ConsolidationStatusType } from "./types";
 
@@ -35,7 +36,11 @@ export function ExecutionStatusAlert({ status, error }: ExecutionStatusAlertProp
         <AlertCircle className="h-4 w-4" />
         <AlertTitle>{error?.title || "A transaction failed."}</AlertTitle>
         <AlertDescription>
-          {error?.message || "You can retry it or skip and continue with remaining steps."}
+          <ScrollArea className="max-h-[300px] w-full">
+            <p className="whitespace-pre-wrap break-words pr-3">
+              {error?.message || "You can retry it or skip and continue with remaining steps."}
+            </p>
+          </ScrollArea>
         </AlertDescription>
       </Alert>
     );

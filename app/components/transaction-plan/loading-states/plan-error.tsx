@@ -2,6 +2,7 @@ import { AlertCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
+import { ScrollArea } from "~/components/ui/scroll-area";
 
 const COUNTDOWN_SECONDS = 5;
 
@@ -39,7 +40,11 @@ export function PlanError({ error, onRetry, autoRetry = false, attemptNumber }: 
     <Alert variant="destructive">
       <AlertCircle className="h-4 w-4" />
       <AlertTitle>Planning Error{attemptNumber && attemptNumber > 0 ? ` (attempt ${attemptNumber})` : ""}</AlertTitle>
-      <AlertDescription>{error}</AlertDescription>
+      <AlertDescription>
+        <ScrollArea className="max-h-[300px] w-full">
+          <p className="whitespace-pre-wrap break-words pr-3">{error}</p>
+        </ScrollArea>
+      </AlertDescription>
       {onRetry !== undefined && (
         <div className="mt-3 flex items-center gap-2">
           {showCountdown && <span className="text-sm">Retrying in {secondsLeft}s…</span>}
