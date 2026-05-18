@@ -22,7 +22,7 @@ export default function PrivacyPolicy() {
       <main className="flex-1 px-4 sm:px-6 lg:px-8 py-12 md:py-20">
         <article className="prose prose-lg dark:prose-invert mx-auto max-w-3xl">
           <h1>Privacy Policy</h1>
-          <p className="text-muted-foreground">Last updated: May 17, 2026</p>
+          <p className="text-muted-foreground">Last updated: May 18, 2026</p>
 
           <p>
             This Privacy Policy describes how OtoCo WY LLC - Octocash - Series 435, a Wyoming limited liability company
@@ -104,10 +104,10 @@ export default function PrivacyPolicy() {
             </li>
             <li>
               <strong>LI.FI</strong> (LI.FI GmbH) — bridge aggregator used to route cross-chain native gas top-ups when
-              a destination wallet lacks gas. Receives your wallet address, source and destination chain IDs, native
-              token amounts, source-chain transaction hashes (for status polling), and IP address. LI.FI may further
-              share this data with the underlying bridge it selects (e.g. Across, Relay, or Gas.zip), each of which
-              operates under its own privacy policy.
+              a source or destination wallet lacks gas. Receives your wallet address, source and destination chain IDs,
+              native token amounts, source-chain transaction hashes (for status polling), and IP address. LI.FI may
+              further share this data with the underlying bridge it selects (e.g. Across, Relay, or Gas.zip), each of
+              which operates under its own privacy policy.
             </li>
           </ul>
           <h3>Data services</h3>
