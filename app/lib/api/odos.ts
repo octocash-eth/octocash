@@ -5,6 +5,7 @@ import { USDC } from "~/data/token-contracts";
 import { getPublicClient } from "../public-client";
 import { groupTokensByChain } from "../tokens";
 import type { TokenAmount } from "../types";
+import { odosBaseUrl, odosHeaders } from "./odos-client";
 
 function isEffectivelyZero(balance: number): boolean {
   return balance < 0.01; // Consider anything less than $0.01 as effectively zero
@@ -41,6 +42,9 @@ interface OdosTokenInfo {
  * the `zeroAddress` we use internally — no special-casing required.
  */
 export async function fetchOdosTokensForChain(chainId: number, signal?: AbortSignal): Promise<ReadonlySet<string>> {
+  // Catalog stays on the public `api.odos.xyz` host without the API key: it's
+  // a free read endpoint that isn't subject to the `/sor/*` rate limit, so
+  // there's no need to spend monetized quota or pay the CORS-proxy hop on it.
   const url = new URL("https://api.odos.xyz/token");
   url.searchParams.set("query", "");
   url.searchParams.set("chainId", String(chainId));
@@ -72,8 +76,6 @@ export interface RoutabilityProbe {
   decimals: number;
   unitaryPrice: number;
 }
-
-const ODOS_QUOTE_V3_URL = "https://api.odos.xyz/sor/quote/v3";
 
 /**
  * Probe whether Odos can quote a swap from `token` → USDC on the same chain.
@@ -113,9 +115,9 @@ export async function checkOdosRoutableToUsdc(probe: RoutabilityProbe, signal?: 
   }
 
   try {
-    const response = await fetch(ODOS_QUOTE_V3_URL, {
+    const response = await fetch(`${odosBaseUrl()}/sor/quote/v3`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", accept: "application/json" },
+      headers: odosHeaders({ "Content-Type": "application/json", accept: "application/json" }),
       signal,
       body: JSON.stringify({
         chainId: probe.chainId,
@@ -201,6 +203,9 @@ export async function fetchOdosPrices(
 
         if (requestAddresses.size === 0) return;
 
+        // Pricing stays on the public `api.odos.xyz` host without the API key:
+        // it's a free read endpoint and we don't want to spend monetized quota
+        // on background price refreshes.
         const url = new URL(`https://api.odos.xyz/pricing/token/${chainId}`);
         for (const addr of requestAddresses) {
           url.searchParams.append("token_addresses", addr);

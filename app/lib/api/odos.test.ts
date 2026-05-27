@@ -11,6 +11,7 @@ import {
   fetchOdosTokensForChain,
   odosPriceKey,
 } from "./odos";
+import { odosBaseUrl } from "./odos-client";
 
 // biome-ignore lint/suspicious/noExplicitAny: Test mocks require any types for flexibility
 type MockContract = any;
@@ -974,7 +975,7 @@ describe("odos", () => {
       expect(result).toBe(true);
       // Routes to /sor/quote/v3 with the USDC mainnet address as the output.
       const [url, init] = mockFetch.mock.calls[0];
-      expect(url).toBe("https://api.odos.xyz/sor/quote/v3");
+      expect(url).toBe(`${odosBaseUrl()}/sor/quote/v3`);
       const body = JSON.parse((init as RequestInit).body as string) as {
         chainId: number;
         inputTokens: { tokenAddress: string; amount: string }[];

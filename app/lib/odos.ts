@@ -14,6 +14,7 @@ import {
 import { OCTOCASH_REFERRAL_INFO } from "~/data/odos";
 import type { SendCallsFn } from "~/lib/send-calls";
 import type { TokenAmount } from "~/lib/types";
+import { odosBaseUrl, odosHeaders } from "./api/odos-client";
 import { buildERC20ApprovalCalls } from "./tokens";
 
 interface OdosQuoteResponse {
@@ -30,8 +31,8 @@ interface OdosAssembleResponse {
   };
 }
 
-const ODOS_QUOTE_URL = "https://api.odos.xyz/sor/quote/v3";
-const ODOS_ASSEMBLE_URL = "https://api.odos.xyz/sor/assemble";
+const odosQuoteUrl = () => `${odosBaseUrl()}/sor/quote/v3`;
+const odosAssembleUrl = () => `${odosBaseUrl()}/sor/assemble`;
 
 const odosRouterV3Abi = parseAbi([
   "event Swap(address sender, uint256 inputAmount, address inputToken, uint256 amountOut, address outputToken, int256 slippage, uint64 referralCode, uint64 referralFee, address referralFeeRecipient)",
@@ -51,7 +52,7 @@ const odosRouterV3Abi = parseAbi([
 async function fetchJson<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: odosHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -114,7 +115,7 @@ async function fetchSwapQuote(
     compact: false,
     simple,
   };
-  const quote = await fetchJson<OdosQuoteResponse>(ODOS_QUOTE_URL, quoteBody);
+  const quote = await fetchJson<OdosQuoteResponse>(odosQuoteUrl(), quoteBody);
   return quote;
 }
 
@@ -207,7 +208,7 @@ export async function buildOdosCalls(tokensToSwap: TokenAmount[], tokenOut: Toke
     pathId: quote.pathId,
     simulate: false,
   };
-  const assembled = await fetchJson<OdosAssembleResponse>(ODOS_ASSEMBLE_URL, assembleBody);
+  const assembled = await fetchJson<OdosAssembleResponse>(odosAssembleUrl(), assembleBody);
   const { to, data, value } = assembled.transaction;
   const swapWithRerralInfo = addReferralInfo(to, data, BigInt(value));
   return [...(await buildERC20ApprovalCalls(tokensToSwap, to)), swapWithRerralInfo];
