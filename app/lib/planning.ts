@@ -1342,6 +1342,122 @@ async function createGasTopUpSteps(
 }
 
 /**
+ * Fast path for plans whose every source token is already the destination token
+ * on the destination chain — used only when there's a single source wallet or
+ * the destination wallet is connected (multi-source non-connected destinations
+ * still need the intermediate-wallet aggregation handled by the general
+ * pipeline).
+ *
+ * Emits one transfer per source row directly to the destination, plus an
+ * optional gas-topup when a source wallet can't cover its own transfer gas.
+ * Avoids the multi-chain gas context, intermediate-wallet resolution, and the
+ * swap/bridge/claim phases that would all be no-ops here.
+ */
+async function planTransferOnly(
+  sourceTokens: TokenAmount[],
+  destinationToken: DestinationToken,
+  log: (...args: unknown[]) => void,
+): Promise<TransactionStep[]> {
+  const destChainId = destinationToken.chainId;
+  const destIsNative = isAddressEqual(destinationToken.token, zeroAddress);
+  const transferOp: OperationType = destIsNative ? "transfer-native" : "transfer-erc20";
+  const chain = chains[destChainId as keyof typeof chains];
+  const transport = transports?.[destChainId as keyof typeof transports];
+
+  const gasCtx = await buildGasContext([destChainId]);
+  const gaps: GasGaps = new Map();
+  const steps: TransactionStep[] = [];
+
+  // One transfer step per source row (mirrors createSwapsAndTransfers). Group
+  // by source wallet so one balance check covers every transfer that wallet
+  // signs.
+  const byWallet = groupTokensByChainAndWallet(sourceTokens);
+
+  for (const walletTokens of byWallet) {
+    const sourceWallet = walletTokens[0].walletAddress;
+
+    if (isAddressEqual(sourceWallet, destinationToken.walletAddress)) {
+      log(`🔍 [DEBUG] Transfer-only: ${walletTokens.length} row(s) already at destination ${sourceWallet}, skipping`);
+      continue;
+    }
+
+    const ops: OperationType[] = walletTokens.map(() => transferOp);
+    const gasCost = await estimateChainGasCosts(destChainId, ops, gasCtx.maxFeePerGas[destChainId]);
+    const nativeBalance = await getNativeBalance(chain, sourceWallet, transport);
+
+    let processedTokens: TokenAmount[] = walletTokens;
+
+    if (destIsNative) {
+      const totalAmount = walletTokens.reduce((sum, t) => sum + t.amount, 0n);
+      const maxAffordable = nativeBalance > gasCost.totalGasCost ? nativeBalance - gasCost.totalGasCost : 0n;
+
+      if (maxAffordable <= 0n) {
+        // Wallet can't cover its own gas. Refuse a sole dust transfer; otherwise
+        // record a top-up gap that covers amount + gas.
+        if (totalAmount <= dustTopUpThreshold(totalAmount, gasCost.totalGasCost, nativeBalance)) {
+          throwNativeAmountTooSmall(destChainId, sourceWallet, totalAmount, gasCost.totalGasCost);
+        }
+        recordGasGap(gaps, destChainId, sourceWallet, totalAmount + gasCost.totalGasCost - nativeBalance);
+      } else if (totalAmount > maxAffordable) {
+        // Cap the last row by the overshoot so enough native is left for gas.
+        const overshoot = totalAmount - maxAffordable;
+        processedTokens = [...walletTokens];
+        const last = processedTokens.length - 1;
+        processedTokens[last] = {
+          ...processedTokens[last],
+          amount: processedTokens[last].amount - overshoot,
+        };
+        log(
+          `🔍 [DEBUG] Transfer-only: capped native amount on ${sourceWallet}: total=${totalAmount.toString()} → ${maxAffordable.toString()} (gas=${gasCost.totalGasCost.toString()})`,
+        );
+      }
+    } else if (nativeBalance < gasCost.totalGasCost) {
+      recordGasGap(gaps, destChainId, sourceWallet, gasCost.totalGasCost - nativeBalance);
+      log(
+        `🔍 [DEBUG] Transfer-only: gas gap on ${sourceWallet}: balance=${nativeBalance.toString()}, need=${gasCost.totalGasCost.toString()}`,
+      );
+    }
+
+    for (const token of processedTokens) {
+      const stepId = `step-${steps.length + 1}`;
+      const transferOutput: TokenAmount = {
+        ...token,
+        walletAddress: destinationToken.walletAddress,
+        provenance: stepId,
+      };
+      steps.push({
+        id: stepId,
+        type: "transfer",
+        status: "pending",
+        chainId: destChainId,
+        inputTokens: [token],
+        outputToken: transferOutput,
+      });
+    }
+  }
+
+  let finalSteps = steps;
+  if (gaps.size > 0) {
+    const executorAddresses = new Set<Address>();
+    executorAddresses.add(getAddress(destinationToken.walletAddress) as Address);
+    for (const t of sourceTokens) {
+      executorAddresses.add(getAddress(t.walletAddress) as Address);
+    }
+    const gasTopUpSteps = await createGasTopUpSteps(
+      gaps,
+      destinationToken.walletAddress,
+      destinationToken,
+      executorAddresses,
+      log,
+    );
+    finalSteps = [...gasTopUpSteps, ...steps];
+  }
+
+  await attachGasEstimates(finalSteps, gasCtx);
+  return finalSteps;
+}
+
+/**
  * Plans a complete multi-chain token consolidation by generating transaction steps
  *
  * This is the main planning function that orchestrates the entire consolidation process:
@@ -1396,6 +1512,27 @@ export async function planConsolidation(
   // Validate inputs
   validateInputs(sourceTokens, destinationToken, connectedWallets, log);
   await assertEoaWallets(sourceTokens, destinationToken, connectedWallets);
+
+  // Fast path: when every source is already the destination token on the
+  // destination chain, the plan is pure transfers — no swap/bridge/claim is
+  // possible. Skip intermediate-wallet resolution, multi-chain gas context, and
+  // the swap/bridge/claim phases, doing one native-balance check per source
+  // wallet on the destination chain.
+  //
+  // We still defer to the general pipeline when destination is not connected
+  // AND there are multiple source wallets: in that case the intermediate-wallet
+  // step is what aggregates funds to a single final transfer, which is the
+  // existing UX.
+  const isTransferOnly = sourceTokens.every(
+    (t) => t.chainId === destinationToken.chainId && isAddressEqual(t.token, destinationToken.token),
+  );
+  if (isTransferOnly) {
+    const sourceWalletSet = new Set(sourceTokens.map((t) => getAddress(t.walletAddress)));
+    const destConnected = connectedWallets.some((w) => isAddressEqual(w, destinationToken.walletAddress));
+    if (sourceWalletSet.size === 1 || destConnected) {
+      return planTransferOnly(sourceTokens, destinationToken, log);
+    }
+  }
 
   // Build gas context for all involved chains (fetches gas prices + native token prices)
   const allChainIds = [...new Set([...sourceTokens.map((t) => t.chainId), destinationToken.chainId])];

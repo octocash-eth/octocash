@@ -579,7 +579,7 @@ describe("planConsolidation", () => {
 
     // Verify that the function recognized the token is already correct
     const logCalls = logSpy.mock.calls.flat().join(" ");
-    expect(logCalls).toContain("already destination token");
+    expect(logCalls).toContain("already at destination");
   });
 
   test("multiple wallets on same chain - should create one bridge step per wallet", async () => {
