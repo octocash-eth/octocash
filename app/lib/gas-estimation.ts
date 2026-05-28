@@ -353,6 +353,16 @@ const USDC_ALLOWED_SLOT = 10n;
 
 const MAX_UINT256_HEX: Hex = `0x${"f".repeat(64)}`;
 
+/**
+ * USDC FiatTokenV2_2 packs the blacklist flag into bit 255 of the balance slot
+ * (`balanceAndBlacklistStates`): bit 255 = blacklisted, bits 0–254 = balance.
+ * Overriding the balance slot with full `MAX_UINT256_HEX` flips that flag, so the
+ * simulated account reads as blacklisted and `transferFrom` reverts with
+ * `Blacklistable: account is blacklisted`. Cap at 2^255 - 1 to keep the top bit
+ * clear while still faking a balance far larger than any burn amount.
+ */
+const MAX_BALANCE_HEX: Hex = `0x7${"f".repeat(63)}`;
+
 function erc20BalanceSlot(owner: Address, mappingSlot: bigint): Hex {
   return keccak256(encodeAbiParameters(parseAbiParameters("address, uint256"), [owner, mappingSlot]));
 }
@@ -515,7 +525,7 @@ async function simulateOperationGas(
               {
                 address: usdc,
                 stateDiff: [
-                  { slot: balanceSlot, value: MAX_UINT256_HEX },
+                  { slot: balanceSlot, value: MAX_BALANCE_HEX },
                   { slot: allowanceSlot, value: MAX_UINT256_HEX },
                 ],
               },
