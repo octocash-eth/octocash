@@ -17,7 +17,10 @@ vi.mock("../../app/lib/cctp");
 vi.mock("../../app/lib/lifi");
 vi.mock("../../app/lib/gas", () => ({
   getNativeBalance: vi.fn(),
-  findRichestSource: vi.fn(),
+}));
+vi.mock("../../app/lib/api/odos", () => ({
+  fetchOdosPrices: vi.fn().mockResolvedValue(new Map()),
+  odosPriceKey: (chainId: number, address: string) => `${chainId}:${address.toLowerCase()}`,
 }));
 // The executor's `validateInputBalances` preflight (and planning's EIP-7702
 // delegation probe) read on-chain state via the public client. This suite
@@ -54,7 +57,7 @@ vi.mock("viem/actions", () => ({
 import { estimateGas, waitForTransactionReceipt } from "viem/actions";
 import { executeCCTPBurn, executeCCTPMint, getBridgeFee, retrieveAttestations } from "../../app/lib/cctp";
 import { executeConsolidationPlan } from "../../app/lib/execution";
-import { findRichestSource, getNativeBalance } from "../../app/lib/gas";
+import { getNativeBalance } from "../../app/lib/gas";
 import { estimateChainGasCosts } from "../../app/lib/gas-estimation";
 import { getLiFiQuoteForTargetOutput, pollLiFiTransferStatus } from "../../app/lib/lifi";
 import { executeOdosSwap, getSwapQuote } from "../../app/lib/odos";
@@ -171,14 +174,12 @@ describe("Gas Top-Up Integration: plan then execute", () => {
   });
 
   test("single chain needs gas top-up before consolidation (estimator-sized deficit)", async () => {
-    // Optimism wallet has zero native (no gas), Base wallet (richest source) has plenty.
-    // Destination wallet on Ethereum has plenty (so it's a viable funding candidate),
-    // but the source-chain (10) gap still gets recorded.
+    // Optimism wallet has zero native (no gas), destination wallet on Ethereum
+    // also has zero (so it can't fund itself), Base wallet has plenty so it
+    // wins the richest-source fallback.
     const DEFICIT_OPTIMISM = 5_000_000_000_000n; // 0.000005 ETH (above default budget tolerance)
     vi.mocked(getNativeBalance).mockImplementation(async (chain, address) => {
-      if (chain.id === 10 && address === WALLET) return 0n;
-      // Destination chain (Ethereum) wallet looks short too, so we fall back to richest.
-      if (chain.id === 1 && address === WALLET) return 0n;
+      if (chain.id === 8453 && address === WALLET) return 10_000_000_000_000_000_000n;
       return 0n;
     });
     vi.mocked(estimateChainGasCosts).mockImplementation(async (chainId) => {
@@ -186,11 +187,6 @@ describe("Gas Top-Up Integration: plan then execute", () => {
         return { totalGasCost: DEFICIT_OPTIMISM, maxFeePerGas: 20_000_000_000n, perOperation: [] };
       }
       return { totalGasCost: 0n, maxFeePerGas: 20_000_000_000n, perOperation: [] };
-    });
-    vi.mocked(findRichestSource).mockResolvedValue({
-      chainId: 8453,
-      address: WALLET,
-      balance: 10_000_000_000_000_000_000n,
     });
 
     // Make the LI.FI quote return a deposit close to the deficit so we can assert on it.
@@ -295,12 +291,6 @@ describe("Gas Top-Up Integration: plan then execute", () => {
       }
       return { totalGasCost: 0n, maxFeePerGas: 1_000_000n, perOperation: [] };
     });
-    vi.mocked(findRichestSource).mockResolvedValue({
-      chainId: 8453,
-      address: WALLET,
-      balance: 10_000_000_000_000_000_000n,
-    });
-
     const quoteEth = makeLiFiQuote({
       fromChainId: 8453,
       toChainId: 1,
@@ -411,17 +401,15 @@ describe("Gas Top-Up Integration: plan then execute", () => {
 
   test("forwards LI.FI poll progress via opts.onStepProgress without persisting it", async () => {
     const DEFICIT_OPTIMISM = 5_000_000_000_000n;
-    vi.mocked(getNativeBalance).mockResolvedValue(0n);
+    vi.mocked(getNativeBalance).mockImplementation(async (chain, address) => {
+      if (chain.id === 8453 && address === WALLET) return 10_000_000_000_000_000_000n;
+      return 0n;
+    });
     vi.mocked(estimateChainGasCosts).mockImplementation(async (chainId) =>
       chainId === 10
         ? { totalGasCost: DEFICIT_OPTIMISM, maxFeePerGas: 20_000_000_000n, perOperation: [] }
         : { totalGasCost: 0n, maxFeePerGas: 20_000_000_000n, perOperation: [] },
     );
-    vi.mocked(findRichestSource).mockResolvedValue({
-      chainId: 8453,
-      address: WALLET,
-      balance: 10_000_000_000_000_000_000n,
-    });
     vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue(
       makeLiFiQuote({
         fromChainId: 8453,
