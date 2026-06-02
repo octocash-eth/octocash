@@ -79,8 +79,31 @@ export function formatTokenAmount(token: TokenAmount): string {
  * Stays a pure formatting helper: it doesn't perform any conversion. Callers
  * are expected to pass the amount already denominated in the target currency.
  */
+/**
+ * Crypto asset codes (BTC, ETH) aren't valid ISO 4217 currency codes, so
+ * `Intl.NumberFormat`'s `style: "currency"` rejects them. We render these as a
+ * plain decimal with the code appended and a higher precision that suits their
+ * sub-unit values (e.g. `0.00012345 BTC`).
+ */
+const CRYPTO_ASSET_DECIMALS: Readonly<Record<string, number>> = Object.freeze({
+  BTC: 8,
+  ETH: 6,
+});
+
 export function formatFiat(amount: number, currency = "USD", decimals?: number): string {
+  const code = currency.toUpperCase();
   const locale = getCurrencyLocale(currency);
+
+  const cryptoDecimals = CRYPTO_ASSET_DECIMALS[code];
+  if (cryptoDecimals !== undefined) {
+    const fractionDigits = decimals ?? cryptoDecimals;
+    const formatted = amount.toLocaleString(locale, {
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    });
+    return `${formatted} ${code}`;
+  }
+
   const options: Intl.NumberFormatOptions = {
     style: "currency",
     currency,

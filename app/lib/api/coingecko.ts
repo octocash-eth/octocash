@@ -82,6 +82,9 @@ export const STATIC_FALLBACK_RATES: Readonly<Record<string, number>> = Object.fr
   VND: 25400,
   ZAR: 18.4,
   XDR: 0.75,
+  BTC: 0.0000095,
+  ETH: 0.00033,
+  XAU: 0.0003,
 });
 
 /**
@@ -117,7 +120,7 @@ export async function fetchCoinGeckoExchangeRates(signal?: AbortSignal): Promise
 
     const rates: Record<string, number> = { USD: 1 };
     for (const [code, rate] of Object.entries(data.rates)) {
-      if (rate.type !== "fiat" && rate.type !== "commodity") continue;
+      if (rate.type !== "fiat" && rate.type !== "commodity" && rate.type !== "crypto") continue;
       if (typeof rate.value !== "number" || !Number.isFinite(rate.value) || rate.value <= 0) continue;
       rates[code.toUpperCase()] = rate.value / usdAnchor;
     }

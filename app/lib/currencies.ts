@@ -10,7 +10,7 @@
  * the only metadata we keep here is `name` (for the modal) and `group`.
  */
 
-export type CurrencyGroup = "suggested" | "fiat";
+export type CurrencyGroup = "suggested" | "fiat" | "asset";
 
 export interface Currency {
   code: string;
@@ -86,7 +86,22 @@ const FIAT_CURRENCIES: Currency[] = [
   { code: "XDR", name: "IMF Special Drawing Rights", group: "fiat", locale: "en-US" },
 ];
 
-export const CURRENCIES: readonly Currency[] = Object.freeze([...SUGGESTED_CURRENCIES, ...FIAT_CURRENCIES]);
+/**
+ * Non-fiat stores of value. CoinGecko's `/exchange_rates` snapshot exposes BTC
+ * and ETH as `crypto` and gold (XAU) as a `commodity`, so all three convert
+ * through the same BTC-denominated pipeline as the fiat currencies above.
+ */
+const ASSET_CURRENCIES: Currency[] = [
+  { code: "BTC", name: "Bitcoin", group: "asset", locale: "en-US" },
+  { code: "ETH", name: "Ethereum", group: "asset", locale: "en-US" },
+  { code: "XAU", name: "Gold (troy ounce)", group: "asset", locale: "en-US" },
+];
+
+export const CURRENCIES: readonly Currency[] = Object.freeze([
+  ...SUGGESTED_CURRENCIES,
+  ...FIAT_CURRENCIES,
+  ...ASSET_CURRENCIES,
+]);
 
 const CURRENCIES_BY_CODE = new Map<string, Currency>(CURRENCIES.map((c) => [c.code, c]));
 

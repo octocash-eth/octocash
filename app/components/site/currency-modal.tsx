@@ -24,11 +24,12 @@ export function CurrencyModal({ open, onOpenChange }: CurrencyModalProps) {
     if (!open) setQuery("");
   }, [open]);
 
-  const { suggested, fiat } = React.useMemo(() => {
+  const { suggested, fiat, assets } = React.useMemo(() => {
     const matches = searchCurrencies(query);
     return {
       suggested: matches.filter((c) => c.group === "suggested"),
       fiat: matches.filter((c) => c.group === "fiat"),
+      assets: matches.filter((c) => c.group === "asset"),
     };
   }, [query]);
 
@@ -74,7 +75,7 @@ export function CurrencyModal({ open, onOpenChange }: CurrencyModalProps) {
         </div>
 
         <div className="-mx-2 min-h-0 flex-1 overflow-y-auto px-2 pb-1">
-          {suggested.length === 0 && fiat.length === 0 ? (
+          {suggested.length === 0 && fiat.length === 0 && assets.length === 0 ? (
             <p className="px-1 py-6 text-center text-sm text-muted-foreground">No currencies match "{query}".</p>
           ) : (
             <>
@@ -88,6 +89,9 @@ export function CurrencyModal({ open, onOpenChange }: CurrencyModalProps) {
               )}
               {fiat.length > 0 && (
                 <CurrencySection title="Fiat Currencies" items={fiat} selected={currency.code} onPick={handlePick} />
+              )}
+              {assets.length > 0 && (
+                <CurrencySection title="Other Assets" items={assets} selected={currency.code} onPick={handlePick} />
               )}
             </>
           )}

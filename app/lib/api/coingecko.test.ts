@@ -44,7 +44,27 @@ describe("fetchCoinGeckoExchangeRates", () => {
     expect(rates.EUR).toBeCloseTo(0.92, 5);
     // 9_300_000 / 60_000 = 155
     expect(rates.JPY).toBeCloseTo(155, 5);
-    expect(rates.BTC).toBeUndefined();
+    // 1 / 60_000 — crypto assets (BTC/ETH) are exposed as alternative units.
+    expect(rates.BTC).toBeCloseTo(1 / 60_000, 10);
+  });
+
+  test("includes crypto asset codes like BTC and ETH", async () => {
+    mockFetch.mockResolvedValue(
+      okResponse({
+        rates: {
+          usd: { name: "US Dollar", unit: "$", value: 60_000, type: "fiat" },
+          btc: { name: "Bitcoin", unit: "BTC", value: 1, type: "crypto" },
+          eth: { name: "Ether", unit: "ETH", value: 30, type: "crypto" },
+          xau: { name: "Gold - Troy Ounce", unit: "XAU", value: 25.6, type: "commodity" },
+        },
+      }),
+    );
+
+    const rates = await fetchCoinGeckoExchangeRates();
+
+    expect(rates.BTC).toBeCloseTo(1 / 60_000, 10);
+    expect(rates.ETH).toBeCloseTo(30 / 60_000, 10);
+    expect(rates.XAU).toBeCloseTo(25.6 / 60_000, 10);
   });
 
   test("uppercases currency codes", async () => {
