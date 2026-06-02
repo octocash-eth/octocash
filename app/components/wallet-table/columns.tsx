@@ -56,7 +56,7 @@ function ValueColumnHeader({ column }: { column: Column<TokenAmount> }) {
  * price is known yet — same as the cell's "—" rendering — which keeps
  * priceless rows sortable as the bottom of an ascending sort.
  */
-function getUsdValue(token: TokenAmount, priceFor?: (row: TokenAmount) => number | undefined): number {
+export function getUsdValue(token: TokenAmount, priceFor?: (row: TokenAmount) => number | undefined): number {
   const price = priceFor?.(token);
   if (price === undefined) return 0;
   const formattedAmount = Number(formatUnits(token.amount, token.decimals));

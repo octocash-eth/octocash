@@ -17,6 +17,7 @@ import { Coins, Link, RotateCw, Wallet } from "lucide-react";
 import * as React from "react";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
 import { TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySymbol } from "~/components/token";
+import { useFormatFiat } from "~/context/currency-provider";
 import { MAX_SOURCE_TOKENS } from "~/lib/planning";
 import { getChainName, getTokenId } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
@@ -26,6 +27,8 @@ import { DataGrid, DataGridContainer } from "../ui/data-grid";
 import { DataGridPaginationNav, DataGridPaginationSize } from "../ui/data-grid-pagination";
 import { DataGridTable } from "../ui/data-grid-table";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { getUsdValue } from "./columns";
 import type { WalletTableFilterConfig } from "./wallet-table-filters";
 import { WalletTableFilters } from "./wallet-table-filters";
 
@@ -192,17 +195,55 @@ export function DataTable<TData extends TokenAmount, TValue>({
     }
   }, [pageIndex, pageCount, table]);
 
+  const formatFiat = useFormatFiat();
+
+  // Total reflects the currently filtered/visible rows; the selection sum
+  // reflects every selected row. Both reuse the value column's `getUsdValue`
+  // so the indicator stays in lockstep with the displayed cell values.
+  const priceForToken = priceFor as ((row: TokenAmount) => number | undefined) | undefined;
+  // Grand total across every loaded token (ignores filters/selection).
+  const totalUsd = data.reduce((sum, row) => sum + getUsdValue(row, priceForToken), 0);
+  const filteredUsd = table
+    .getFilteredRowModel()
+    .rows.reduce((sum, row) => sum + getUsdValue(row.original, priceForToken), 0);
+  const selectedRows = table.getSelectedRowModel().rows;
+  const selectedUsd = selectedRows.reduce((sum, row) => sum + getUsdValue(row.original, priceForToken), 0);
+  const hasSelection = selectedRows.length > 0;
+  const hasActiveFilter = columnFilters.length > 0;
+
+  const indicatorLabel = hasSelection ? "Selected: " : hasActiveFilter ? "Filtered: " : "Total: ";
+  const indicatorUsd = hasSelection ? selectedUsd : hasActiveFilter ? filteredUsd : totalUsd;
+  const showTotalTooltip = hasSelection || hasActiveFilter;
+
   // Function to clear all filters
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
         <WalletTableFilters setColumnFilters={setColumnFilters} filterConfigs={filterConfigs} />
-        {onRefresh ? (
-          <Button variant="outline" size="icon" onClick={onRefresh} className="ml-auto" disabled={isRefreshing}>
-            <RotateCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-            <span className="sr-only">Refresh table data</span>
-          </Button>
-        ) : null}
+        <div className="flex items-center gap-3 ml-auto">
+          {showTotalTooltip ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-lg whitespace-nowrap text-muted-foreground cursor-default">
+                  {indicatorLabel}
+                  <span className="font-bold text-primary bg-primary-foreground">{formatFiat(indicatorUsd)}</span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Total: {formatFiat(totalUsd)}</TooltipContent>
+            </Tooltip>
+          ) : (
+            <span className="text-lg whitespace-nowrap text-muted-foreground">
+              {indicatorLabel}
+              <span className="font-bold text-primary bg-primary-foreground">{formatFiat(indicatorUsd)}</span>
+            </span>
+          )}
+          {onRefresh ? (
+            <Button variant="outline" size="icon" onClick={onRefresh} disabled={isRefreshing}>
+              <RotateCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+              <span className="sr-only">Refresh table data</span>
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       <DataGrid<TData>
