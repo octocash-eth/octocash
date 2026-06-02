@@ -349,4 +349,12 @@ body {
   input[type="number"] {
     -moz-appearance: textfield;
   }
+  /* Make popups match the dialog surface, without the shadow */
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="popover-content"],
+  [data-slot="select-content"],
+  [data-slot="tooltip-content"] {
+    @apply bg-background border-secondary rounded-lg shadow-none;
+  }
 }

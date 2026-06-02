@@ -229,7 +229,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
                   <span className="font-bold text-primary bg-primary-foreground">{formatFiat(indicatorUsd)}</span>
                 </span>
               </TooltipTrigger>
-              <TooltipContent>Total: {formatFiat(totalUsd)}</TooltipContent>
+              <TooltipContent className="text-lg text-nowrap">Total: {formatFiat(totalUsd)}</TooltipContent>
             </Tooltip>
           ) : (
             <span className="text-lg whitespace-nowrap text-muted-foreground">
