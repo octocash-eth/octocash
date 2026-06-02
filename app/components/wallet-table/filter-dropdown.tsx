@@ -37,12 +37,13 @@ export function FilterDropdown<T>({
         <Button variant="outline" size="sm" className="flex gap-2">
           <Icon className="h-4 w-4 text-pink-500" />
           {label}
-          {selectedCount > 0 && (
+          {selectedCount > 0 ? (
             <span className="ml-1 rounded-full bg-primary text-primary-foreground px-2 py-0.5 text-xs">
               {selectedCount}
             </span>
+          ) : (
+            <ChevronDown className="h-4 w-4" />
           )}
-          <ChevronDown className="h-4 w-4" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">

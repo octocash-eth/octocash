@@ -23,6 +23,7 @@ import { getChainName, getTokenId } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
 import { ChainIcon } from "../chain/chain-icon";
 import { Button } from "../ui/button";
+import { Card } from "../ui/card";
 import { DataGrid, DataGridContainer } from "../ui/data-grid";
 import { DataGridPaginationNav, DataGridPaginationSize } from "../ui/data-grid-pagination";
 import { DataGridTable } from "../ui/data-grid-table";
@@ -215,34 +216,45 @@ export function DataTable<TData extends TokenAmount, TValue>({
   const indicatorUsd = hasSelection ? selectedUsd : hasActiveFilter ? filteredUsd : totalUsd;
   const showTotalTooltip = hasSelection || hasActiveFilter;
 
+  const totalIndicator = showTotalTooltip ? (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="text-lg whitespace-nowrap text-muted-foreground cursor-default">
+          {indicatorLabel}
+          <span className="font-bold text-primary bg-primary-foreground">{formatFiat(indicatorUsd)}</span>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="text-lg text-nowrap">Total: {formatFiat(totalUsd)}</TooltipContent>
+    </Tooltip>
+  ) : (
+    <span className="text-lg whitespace-nowrap text-muted-foreground">
+      {indicatorLabel}
+      <span className="font-bold text-primary bg-primary-foreground">{formatFiat(indicatorUsd)}</span>
+    </span>
+  );
+
+  const refreshButton = onRefresh ? (
+    <Button variant="outline" size="icon" onClick={onRefresh} disabled={isRefreshing}>
+      <RotateCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+      <span className="sr-only">Refresh table data</span>
+    </Button>
+  ) : null;
+
   // Function to clear all filters
   return (
     <div className="space-y-4">
+      {/* Mobile: total + refresh in a dedicated card above the filters. */}
+      <Card className="flex md:hidden flex-row items-center justify-between gap-3 px-4 py-3">
+        {totalIndicator}
+        {refreshButton}
+      </Card>
+
       <div className="flex items-center justify-between gap-2">
         <WalletTableFilters setColumnFilters={setColumnFilters} filterConfigs={filterConfigs} />
-        <div className="flex items-center gap-3 ml-auto">
-          {showTotalTooltip ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="text-lg whitespace-nowrap text-muted-foreground cursor-default">
-                  {indicatorLabel}
-                  <span className="font-bold text-primary bg-primary-foreground">{formatFiat(indicatorUsd)}</span>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent className="text-lg text-nowrap">Total: {formatFiat(totalUsd)}</TooltipContent>
-            </Tooltip>
-          ) : (
-            <span className="text-lg whitespace-nowrap text-muted-foreground">
-              {indicatorLabel}
-              <span className="font-bold text-primary bg-primary-foreground">{formatFiat(indicatorUsd)}</span>
-            </span>
-          )}
-          {onRefresh ? (
-            <Button variant="outline" size="icon" onClick={onRefresh} disabled={isRefreshing}>
-              <RotateCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
-              <span className="sr-only">Refresh table data</span>
-            </Button>
-          ) : null}
+        {/* Desktop: total + refresh inline in the header row. */}
+        <div className="hidden md:flex items-center gap-3 ml-auto">
+          {totalIndicator}
+          {refreshButton}
         </div>
       </div>
 

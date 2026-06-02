@@ -146,13 +146,29 @@ export function WalletTableFilters<TData>({ setColumnFilters, filterConfigs }: U
   }, [filterConfigs]);
 
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex items-center gap-2 flex-1">
+    <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center md:gap-2 md:flex-1">
+      {/* Mobile: top line with the "Filter by" label and "Clear all".
+          Desktop: `contents` dissolves this wrapper so the children sit inline. */}
+      <div className="flex items-center gap-2 md:contents">
         <span className="text-sm font-medium">
           <Filter className="h-4 w-4 inline-block mr-1" />
           Filter by
         </span>
 
+        <Button
+          disabled={!hasActiveFilters}
+          variant="ghost"
+          size="sm"
+          onClick={onClearAll}
+          className="text-xs md:order-last"
+        >
+          Clear all
+        </Button>
+      </div>
+
+      {/* Mobile: bottom line with the filter dropdowns.
+          Desktop: `contents` dissolves this wrapper so dropdowns sit inline. */}
+      <div className="flex items-center gap-2 flex-wrap md:contents">
         {filters.map((filter) => (
           <FilterDropdown<unknown>
             key={filter.id}
@@ -167,10 +183,6 @@ export function WalletTableFilters<TData>({ setColumnFilters, filterConfigs }: U
             emptyMessage={filter.emptyMessage}
           />
         ))}
-
-        <Button disabled={!hasActiveFilters} variant="ghost" size="sm" onClick={onClearAll} className="text-xs">
-          Clear all
-        </Button>
       </div>
     </div>
   );
