@@ -282,7 +282,10 @@ export function ConsolidateTokensModal({
           {selectedRows === 0 ? "Consolidate Tokens" : <>Consolidate tokens</>}
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-5xl" showCloseButton={!isExecuting}>
+      <DialogContent
+        className="sm:max-w-5xl border-2 border-pink-500 shadow-[10px_8px_0_0_var(--color-pink-600)] dark:shadow-[10px_8px_0_0_var(--color-pink-700)]"
+        showCloseButton={!isExecuting}
+      >
         <DialogHeader className="items-center pb-4 text-center">
           <DialogTitle className="flex flex-col items-center gap-1">
             {completedState ? (
@@ -291,8 +294,8 @@ export function ConsolidateTokensModal({
               </span>
             ) : (
               <>
-                <span className="text-base font-semibold text-foreground">Consolidate</span>
-                <span className="font-grotesque text-3xl font-bold text-primary">
+                <span className="text-xl font-semibold text-foreground">Consolidate</span>
+                <span className="font-grotesque text-4xl font-semibold text-primary">
                   {formatFiat(actualTotalToConsolidate)}
                 </span>
               </>
