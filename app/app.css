@@ -289,7 +289,7 @@ body {
   --destructive-shadow: var(--color-red-900);
   --destructive-hover: var(--color-red-600);
   --destructive-hover-foreground: var(--color-white);
-  --border: var(--color-violet-500);
+  --border: var(--color-violet-400);
   --input: var(--color-violet-300);
   --ring: var(--color-pink-500);
   --chart-1: var(--color-orange-400);

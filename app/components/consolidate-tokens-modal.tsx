@@ -1,5 +1,6 @@
 import * as React from "react";
 import { getAddress, isAddress, parseUnits } from "viem";
+import { AnimateHeight } from "~/components/ui/animate-height";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
@@ -282,20 +283,23 @@ export function ConsolidateTokensModal({
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-5xl" showCloseButton={!isExecuting}>
-        <DialogHeader className="pb-4">
-          <DialogTitle className="text-xl">
+        <DialogHeader className="items-center pb-4 text-center">
+          <DialogTitle className="flex flex-col items-center gap-1">
             {completedState ? (
-              completedState.status === "completed" ? (
-                "Consolidation Complete"
-              ) : (
-                "Consolidation Partially Complete"
-              )
+              <span className="text-xl">
+                {completedState.status === "completed" ? "Consolidation Complete" : "Consolidation Partially Complete"}
+              </span>
             ) : (
-              <>Consolidate {formatFiat(actualTotalToConsolidate)}</>
+              <>
+                <span className="text-base font-semibold text-foreground">Consolidate</span>
+                <span className="font-grotesque text-3xl font-bold text-primary">
+                  {formatFiat(actualTotalToConsolidate)}
+                </span>
+              </>
             )}
           </DialogTitle>
           {!completedState && (
-            <DialogDescription>
+            <DialogDescription className="text-center">
               {currentStage === 1 &&
                 `Adjust amounts for ${selectedRows} selected token${selectedRows !== 1 ? "s" : ""}.`}
               {currentStage === 2 && "Select the destination wallet, chain, and token."}
@@ -323,53 +327,55 @@ export function ConsolidateTokensModal({
                     disabled={!canNavigateToStage(stageNumber)}
                   >
                     <StepperTrigger className="flex flex-col items-start justify-center gap-3.5 grow">
-                      <StepperIndicator className="bg-border rounded-full h-1 w-full data-[state=active]:bg-secondary/80 data-[state=completed]:bg-secondary/50" />
                       <div className="flex flex-col items-start gap-1">
                         <StepperTitle className="text-start font-semibold group-data-[state=inactive]/step:text-muted-foreground">
                           {stage.title}
                         </StepperTitle>
                       </div>
+                      <StepperIndicator className="bg-border rounded-full h-1 w-full data-[state=active]:bg-secondary/80 data-[state=completed]:bg-secondary/50" />
                     </StepperTrigger>
                   </StepperItem>
                 );
               })}
             </StepperNav>
 
-            <StepperPanel step={currentStage} className="text-sm">
-              <StepperContent value={1}>
-                <SelectAmountStage tokens={consolidatedTokens} onAmountsChange={setTokenAmounts} />
-                <div className="pt-4 flex gap-2">
-                  <Button onClick={handleNext} disabled={!canNavigateToStage(2)} className="w-full">
-                    Next
-                  </Button>
-                </div>
-              </StepperContent>
+            <AnimateHeight>
+              <StepperPanel step={currentStage} className="text-sm">
+                <StepperContent value={1}>
+                  <SelectAmountStage tokens={consolidatedTokens} onAmountsChange={setTokenAmounts} />
+                  <div className="pt-4 flex gap-2">
+                    <Button onClick={handleNext} disabled={!canNavigateToStage(2)} className="w-full">
+                      Next
+                    </Button>
+                  </div>
+                </StepperContent>
 
-              <StepperContent value={2}>
-                <SelectDestinationStage value={destination} onChange={setDestination} />
-                <div className="pt-4 flex gap-2">
-                  <Button onClick={handleBack} variant="outline" className="flex-1">
-                    Back
-                  </Button>
-                  <Button onClick={handleNext} disabled={!canNavigateToStage(3)} className="flex-1">
-                    Next
-                  </Button>
-                </div>
-              </StepperContent>
+                <StepperContent value={2}>
+                  <SelectDestinationStage value={destination} onChange={setDestination} />
+                  <div className="pt-4 flex gap-2">
+                    <Button onClick={handleBack} variant="outline" className="flex-1">
+                      Back
+                    </Button>
+                    <Button onClick={handleNext} disabled={!canNavigateToStage(3)} className="flex-1">
+                      Next
+                    </Button>
+                  </div>
+                </StepperContent>
 
-              <StepperContent value={3}>
-                {planId && destinationToken && (
-                  <ConfirmPlanStage
-                    planId={planId}
-                    sourceTokens={sourceTokens}
-                    destinationToken={destinationToken}
-                    onComplete={handleComplete}
-                    onBack={handleBack}
-                    onExecutionStateChange={setIsExecuting}
-                  />
-                )}
-              </StepperContent>
-            </StepperPanel>
+                <StepperContent value={3}>
+                  {planId && destinationToken && (
+                    <ConfirmPlanStage
+                      planId={planId}
+                      sourceTokens={sourceTokens}
+                      destinationToken={destinationToken}
+                      onComplete={handleComplete}
+                      onBack={handleBack}
+                      onExecutionStateChange={setIsExecuting}
+                    />
+                  )}
+                </StepperContent>
+              </StepperPanel>
+            </AnimateHeight>
           </Stepper>
         )}
       </DialogContent>
