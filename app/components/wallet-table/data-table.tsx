@@ -30,6 +30,7 @@ import { DataGridTable } from "../ui/data-grid-table";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { getUsdValue } from "./columns";
+import { MobileTokenList } from "./mobile-token-list";
 import type { WalletTableFilterConfig } from "./wallet-table-filters";
 import { WalletTableFilters } from "./wallet-table-filters";
 
@@ -282,7 +283,8 @@ export function DataTable<TData extends TokenAmount, TValue>({
           bodyRow: "cursor-default",
         }}
       >
-        <DataGridContainer>
+        {/* Desktop: the full data grid table with horizontal scroll. */}
+        <DataGridContainer className="hidden md:grid">
           <ScrollArea className="max-h-[calc(100vh-300px)]">
             <div className="min-w-5xl">
               <DataGridTable<TData> />
@@ -292,7 +294,17 @@ export function DataTable<TData extends TokenAmount, TValue>({
           </ScrollArea>
         </DataGridContainer>
 
-        <div className="grid grid-cols-3 items-center gap-4 px-2 pt-1 pb-2">
+        {/* Mobile: card list driven by the same table, with infinite scroll. */}
+        <MobileTokenList<TData>
+          table={table}
+          priceFor={priceForToken}
+          isPending={isPending as ((row: TokenAmount) => boolean) | undefined}
+          canSelectMore={canSelectMore}
+          className="md:hidden"
+        />
+
+        {/* Pagination is desktop-only; mobile uses infinite scroll. */}
+        <div className="hidden md:grid grid-cols-3 items-center gap-4 px-2 pt-1 pb-2">
           <p
             className={`text-sm whitespace-nowrap justify-self-start ${
               Object.keys(rowSelection).length >= MAX_SOURCE_TOKENS ? "text-amber-600" : "text-muted-foreground"

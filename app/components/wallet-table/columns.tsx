@@ -1,6 +1,5 @@
 import type { Column, ColumnDef } from "@tanstack/react-table";
-import { MoreHorizontal } from "lucide-react";
-import { formatUnits, zeroAddress } from "viem";
+import { formatUnits } from "viem";
 import {
   AddressDisplayAvatar,
   AddressDisplayCopy,
@@ -17,24 +16,15 @@ import {
   TokenDisplayRoot,
   TokenDisplaySymbol,
 } from "~/components/token";
-import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DataGridColumnHeader } from "~/components/ui/data-grid-column-header";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useFormatFiat, useSelectedCurrency } from "~/context/currency-provider";
-import { supportedChains } from "~/data/supported-chains";
 import { getChainName } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
 import { ChainIcon } from "../chain/chain-icon";
 import { ButtonGroup } from "../ui/button-group";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
+import { TokenActionsMenu } from "./token-actions-menu";
 
 /**
  * Header for the value column. Reflects the user's selected fiat currency
@@ -90,17 +80,6 @@ function ValueCell({
     return <div className="text-right font-medium text-muted-foreground">-</div>;
   }
   return <div className="text-right font-medium">{formatFiat(usd)}</div>;
-}
-
-function getExplorerUrl(chainId: number, tokenAddress: string | undefined, walletAddress: string): string {
-  const chain = supportedChains.find((c) => c.id === chainId);
-  if (!chain) {
-    return "";
-  }
-  if (!tokenAddress || tokenAddress === zeroAddress) {
-    return `${chain.explorerUrl}/address/${walletAddress}`;
-  }
-  return `${chain.explorerUrl}/token/${tokenAddress}?a=${walletAddress}`;
 }
 
 /**
@@ -311,39 +290,11 @@ export function buildColumns(priceFor?: (row: TokenAmount) => number | undefined
     {
       id: "actions",
       size: 70,
-      cell: ({ row }) => {
-        const token = row.original;
-
-        return (
-          <div className="text-right">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="h-8 w-8 p-0">
-                  <span className="sr-only">Open menu</span>
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                <DropdownMenuItem onClick={() => navigator.clipboard.writeText(token.walletAddress)}>
-                  Copy wallet address
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem>View details</DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => {
-                    if (token.token) {
-                      window.open(getExplorerUrl(token.chainId, token.token, token.walletAddress), "_blank");
-                    }
-                  }}
-                >
-                  View on explorer
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        );
-      },
+      cell: ({ row }) => (
+        <div className="text-right">
+          <TokenActionsMenu token={row.original} />
+        </div>
+      ),
       meta: {
         skeleton: <Skeleton className="h-8 w-8 rounded ml-auto" />,
       },
