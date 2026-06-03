@@ -280,7 +280,7 @@ body {
   --primary-foreground: var(--color-violet-800);
   --secondary: var(--color-purple-500);
   --secondary-foreground: var(--color-white);
-  --muted: var(--color-violet-700);
+  --muted: var(--color-violet-400);
   --muted-foreground: var(--color-purple-100);
   --accent: var(--color-violet-700);
   --accent-foreground: var(--color-pink-500);

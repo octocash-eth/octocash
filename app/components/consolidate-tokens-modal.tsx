@@ -276,14 +276,14 @@ export function ConsolidateTokensModal({
       <DialogTrigger asChild>
         <Button
           size="lg"
-          className={`text-lg font-semibold py-6 px-8 transition-all duration-200 ${selectedRows > 0 ? "min-w-[240px]" : ""}`}
+          className={`text-lg font-semibold py-6 px-8 transition-all duration-200 max-md:w-full ${selectedRows > 0 ? "min-w-[240px]" : ""}`}
           disabled={selectedRows === 0}
         >
           {selectedRows === 0 ? "Consolidate Tokens" : <>Consolidate tokens</>}
         </Button>
       </DialogTrigger>
       <DialogContent
-        className="sm:max-w-5xl border-2 border-pink-500 shadow-[10px_8px_0_0_var(--color-pink-600)] dark:shadow-[10px_8px_0_0_var(--color-pink-700)]"
+        className="sm:max-w-5xl border-2 border-pink-500 shadow-[10px_8px_0_0_var(--color-pink-600)] dark:shadow-[10px_8px_0_0_var(--color-pink-700)] [&_[data-slot=dialog-close]]:text-primary [&_[data-slot=dialog-close]]:opacity-100"
         showCloseButton={!isExecuting}
       >
         <DialogHeader className="items-center pb-4 text-center">
@@ -317,9 +317,9 @@ export function ConsolidateTokensModal({
           <Stepper value={currentStage} onValueChange={navigateToStage} className="space-y-6">
             <StepperNav className="gap-3.5">
               {[
-                { id: "select-amount", title: "Select Amount" },
-                { id: "select-destination", title: "Select Destination" },
-                { id: "confirm-plan", title: "Confirm Plan" },
+                { id: "select-amount", title: "Select Amount", shortTitle: "Amount" },
+                { id: "select-destination", title: "Select Destination", shortTitle: "Destination" },
+                { id: "confirm-plan", title: "Confirm Plan", shortTitle: "Confirm Plan" },
               ].map((stage, index) => {
                 const stageNumber = index + 1;
                 return (
@@ -332,7 +332,8 @@ export function ConsolidateTokensModal({
                     <StepperTrigger className="flex flex-col items-start justify-center gap-3.5 grow">
                       <div className="flex flex-col items-start gap-1">
                         <StepperTitle className="text-start font-semibold group-data-[state=inactive]/step:text-muted-foreground">
-                          {stage.title}
+                          <span className="md:hidden">{stage.shortTitle}</span>
+                          <span className="hidden md:inline">{stage.title}</span>
                         </StepperTitle>
                       </div>
                       <StepperIndicator className="bg-border rounded-full h-1 w-full data-[state=active]:bg-secondary/80 data-[state=completed]:bg-secondary/50" />
