@@ -2,7 +2,6 @@ import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration }
 
 import type { Route } from "./+types/root";
 import "./app.css";
-import { SupportWidget } from "./components/site/support-widget";
 import { ThemeMeta, ThemeProvider } from "./components/theme";
 
 export const links: Route.LinksFunction = () => [];
@@ -30,7 +29,6 @@ export default function App() {
   return (
     <ThemeProvider>
       <Outlet />
-      <SupportWidget />
     </ThemeProvider>
   );
 }

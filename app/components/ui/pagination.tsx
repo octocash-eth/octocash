@@ -159,7 +159,7 @@ function Pagination({
   return (
     <div
       data-slot="pagination"
-      className={cn("flex flex-wrap items-center justify-end gap-x-6 gap-y-2.5 py-2.5 sm:py-0", className)}
+      className={cn("flex flex-wrap items-center justify-center gap-x-6 gap-y-2.5 py-2.5 sm:py-0", className)}
     >
       {showSize ? (
         <PaginationSize

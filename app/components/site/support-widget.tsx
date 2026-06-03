@@ -3,6 +3,7 @@ import {
   CheckCircle2Icon,
   ChevronLeftIcon,
   CircleAlertIcon,
+  HandCoinsIcon,
   LightbulbIcon,
   Loader2Icon,
   MessageSquareIcon,
@@ -11,11 +12,12 @@ import {
   XIcon,
 } from "lucide-react";
 import type * as React from "react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { cn } from "~/lib/utils";
+import { ManualClaimDialog } from "~/routes/_wallet.history/manual-claim-dialog";
 
 const API_URL = "https://octosupport.blossom.deno.net";
 
@@ -69,6 +71,7 @@ export function SupportWidget() {
   const [capturing, setCapturing] = useState(false);
   const [sending, setSending] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [manualClaimOpen, setManualClaimOpen] = useState(false);
 
   const wrapperRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -174,6 +177,13 @@ export function SupportWidget() {
   const onPickCategory = (next: Category) => {
     setCategory(next);
     setView("form");
+  };
+
+  // Manual claim runs in its own modal dialog. Close the support panel first
+  // so the (lower z-index) dialog isn't rendered behind the floating widget.
+  const onOpenManualClaim = () => {
+    closePanel();
+    setManualClaimOpen(true);
   };
 
   const onBackToPicker = () => {
@@ -304,7 +314,12 @@ export function SupportWidget() {
         type="button"
         size="lg"
         data-support-trigger
-        className="pointer-events-auto fixed bottom-4 right-4 z-[100] shadow-lg max-md:size-12 max-md:rounded-full max-md:p-0"
+        className={cn(
+          "pointer-events-auto fixed bottom-4 right-4 z-[100] shadow-lg max-md:size-12 max-md:rounded-full max-md:p-0",
+          // Hide the floating trigger while the manual-claim modal is open so
+          // it doesn't sit on top of the dialog's dimmed overlay.
+          manualClaimOpen && "hidden",
+        )}
         onClick={() => {
           setOpen((prev) => {
             if (prev) resetState();
@@ -361,17 +376,34 @@ export function SupportWidget() {
                 const copy = CATEGORY_COPY[c];
                 const Icon = copy.Icon;
                 return (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => onPickCategory(c)}
-                    className="group flex w-full items-center gap-3 rounded-xl border border-border/70 bg-background px-3 py-2.5 text-left transition-colors hover:border-pink-400/50 hover:bg-pink-500/[0.04]"
-                  >
-                    <span className="inline-flex size-8 items-center justify-center rounded-lg bg-muted/60">
-                      <Icon className={cn("size-4", copy.iconClassName)} />
-                    </span>
-                    <span className="text-sm font-medium">{copy.pickerLabel}</span>
-                  </button>
+                  <Fragment key={c}>
+                    <button
+                      type="button"
+                      onClick={() => onPickCategory(c)}
+                      className="group flex w-full items-center gap-3 rounded-xl border border-border/70 bg-background px-3 py-2.5 text-left transition-colors hover:border-pink-400/50 hover:bg-pink-500/[0.04]"
+                    >
+                      <span className="inline-flex size-8 items-center justify-center rounded-lg bg-muted/60">
+                        <Icon className={cn("size-4", copy.iconClassName)} />
+                      </span>
+                      <span className="text-sm font-medium">{copy.pickerLabel}</span>
+                    </button>
+
+                    {/* Slot the manual claim between "Share an idea" and "Something else". */}
+                    {c === "idea" && (
+                      <button
+                        type="button"
+                        onClick={onOpenManualClaim}
+                        className="group flex w-full items-center gap-3 rounded-xl border border-border/70 bg-background px-3 py-2.5 text-left transition-colors hover:border-pink-400/50 hover:bg-pink-500/[0.04]"
+                      >
+                        <span className="inline-flex size-8 items-center justify-center rounded-lg bg-muted/60">
+                          <HandCoinsIcon className="size-4 text-green-500" />
+                        </span>
+                        <span className="flex min-w-0 flex-col">
+                          <span className="text-sm font-medium">Claim a stuck cross-chain transfer</span>
+                        </span>
+                      </button>
+                    )}
+                  </Fragment>
                 );
               })}
             </div>
@@ -473,6 +505,8 @@ export function SupportWidget() {
           )}
         </div>
       )}
+
+      <ManualClaimDialog open={manualClaimOpen} onOpenChange={setManualClaimOpen} />
     </div>,
     document.body,
   );

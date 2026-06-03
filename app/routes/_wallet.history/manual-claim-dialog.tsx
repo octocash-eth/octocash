@@ -27,8 +27,24 @@ const isAbortError = (e: unknown): boolean => {
   return name === "AbortError" || code === "ABORT_ERR" || code === 20;
 };
 
-export function ManualClaimDialog({ children }: { children: React.ReactNode }) {
-  const [isOpen, setIsOpen] = useState(false);
+export function ManualClaimDialog({
+  children,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+}: {
+  children?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  // Support both controlled (no trigger, opened from elsewhere) and
+  // uncontrolled (rendered with a `children` trigger) usage.
+  const isControlled = controlledOpen !== undefined;
+  const isOpen = isControlled ? controlledOpen : internalOpen;
+  const setOpen = (next: boolean) => {
+    if (isControlled) controlledOnOpenChange?.(next);
+    else setInternalOpen(next);
+  };
   const [txUrl, setTxUrl] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -86,7 +102,7 @@ export function ManualClaimDialog({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      setIsOpen(false);
+      setOpen(false);
     } catch (err) {
       // User cancellations come back as AbortError / DOMException("AbortError").
       // Stay silent — the dialog is already closing and the cancel was intentional.
@@ -102,12 +118,12 @@ export function ManualClaimDialog({ children }: { children: React.ReactNode }) {
     // Any close path (Cancel, X button, Escape, click-outside) must stop the
     // in-flight poll. Open transitions don't need to touch the controller.
     if (!next) abortInFlightClaim();
-    setIsOpen(next);
+    setOpen(next);
   }
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>{children}</DialogTrigger>
+      {children ? <DialogTrigger asChild>{children}</DialogTrigger> : null}
       <DialogContent className="sm:max-w-[480px]">
         <form onSubmit={handleManualClaimSubmit} className="grid gap-4">
           <DialogHeader>

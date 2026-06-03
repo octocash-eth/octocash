@@ -12,6 +12,12 @@ vi.mock("~/context/wallet-provider", () => ({
   WalletProvider: ({ children }: { children: React.ReactNode }) => <div data-testid="wallet-provider">{children}</div>,
 }));
 
+// Mock SupportWidget — its real implementation portals to <body> and pulls in
+// heavy deps; the layout test only cares about the provider wiring.
+vi.mock("~/components/site/support-widget", () => ({
+  SupportWidget: () => <div data-testid="support-widget" />,
+}));
+
 // Mock TokenPriceProvider — its real implementation uses `useQuery`, which
 // requires a QueryClientProvider. Here we only care that the layout wires
 // the providers in the correct order.

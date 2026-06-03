@@ -5,7 +5,7 @@ import { ConsolidationTokensSummary } from "~/components/consolidation-tokens-su
 import { SiteHeader } from "~/components/site";
 import { TransactionPlanViewer } from "~/components/transaction-plan";
 import { Button } from "~/components/ui/button";
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
+import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle } from "~/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +18,6 @@ import { Pagination } from "~/components/ui/pagination";
 import { useConsolidationRecords } from "~/hooks/use-consolidation-records";
 import type { ConsolidationState } from "~/lib/types";
 import { generateMeta } from "~/utils/meta";
-import ManualClaimDialog from "./manual-claim-dialog";
 
 const PAGE_SIZE = 10;
 
@@ -85,14 +84,9 @@ export default function History() {
       <SiteHeader />
       <main className="flex-1 p-4">
         <div className="w-full max-w-7xl mx-auto">
-          <div className="mb-6 flex items-center justify-between">
-            <h2 className="font-grotesque text-3xl font-semibold tracking-[0.01em]">Consolidation History</h2>
+          <div className="mb-6 flex items-center justify-between py-4">
+            <h2 className="font-grotesque text-2xl font-semibold tracking-[0.01em]">Consolidation History</h2>
             <div className="flex items-center gap-2">
-              <ManualClaimDialog>
-                <Button variant="outline" size="sm">
-                  Manual CCTP Claim
-                </Button>
-              </ManualClaimDialog>
               {consolidations.length > 0 && (
                 <Button variant="destructive" size="sm" onClick={() => setShowDeleteAllConfirm(true)}>
                   Clear All
@@ -126,7 +120,7 @@ export default function History() {
               </div>
 
               {pageCount > 1 && (
-                <div className="mt-4">
+                <div className="mt-8">
                   <Pagination
                     pageIndex={pageIndex}
                     pageSize={PAGE_SIZE}
@@ -212,31 +206,17 @@ function ConsolidationCard({ consolidation, expanded, onToggle, onDelete, getSta
           <div className="text-xs text-muted-foreground/70 mt-1">ID: {consolidation.id}</div>
 
           <CardAction>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="link"
-                size="icon"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggle();
-                }}
-                aria-label={expanded ? "Collapse" : "Expand"}
-              >
-                {expanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-              </Button>
-              <Button
-                variant="link"
-                size="icon"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowDeleteConfirm(true);
-                }}
-                className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                aria-label="Delete consolidation"
-              >
-                <Trash2 className="w-5 h-5" />
-              </Button>
-            </div>
+            <Button
+              variant="link"
+              size="icon"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle();
+              }}
+              aria-label={expanded ? "Collapse" : "Expand"}
+            >
+              {expanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+            </Button>
           </CardAction>
         </CardHeader>
 
@@ -253,6 +233,24 @@ function ConsolidationCard({ consolidation, expanded, onToggle, onDelete, getSta
               </div>
             </div>
           </CardContent>
+        )}
+
+        {expanded && (
+          <CardFooter className="border-t border-border py-4 justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowDeleteConfirm(true);
+              }}
+              className="text-destructive hover:text-destructive hover:bg-destructive/10"
+              aria-label="Delete consolidation"
+            >
+              <Trash2 className="w-4 h-4" />
+              Delete
+            </Button>
+          </CardFooter>
         )}
       </Card>
 

@@ -1,4 +1,5 @@
 import { Outlet } from "react-router";
+import { SupportWidget } from "~/components/site/support-widget";
 import { CurrencyProvider } from "~/context/currency-provider";
 import { TokenPriceProvider } from "~/context/token-price-provider";
 import { WalletProvider } from "~/context/wallet-provider";
@@ -13,6 +14,7 @@ export default function WalletLayout() {
       <TokenPriceProvider>
         <CurrencyProvider>
           <Outlet />
+          <SupportWidget />
         </CurrencyProvider>
       </TokenPriceProvider>
     </WalletProvider>
