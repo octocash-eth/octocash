@@ -217,7 +217,7 @@ export function MobileTokenList<TData extends TokenAmount>({
   const visibleRows = rows.slice(0, visibleCount);
 
   return (
-    <div className={cn("flex flex-col gap-3", className)}>
+    <div className={cn("flex flex-col gap-3 max-md:pb-24", className)}>
       {visibleRows.map((row) => (
         <MobileTokenCard
           key={row.id}

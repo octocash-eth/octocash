@@ -304,7 +304,7 @@ export function SupportWidget() {
         type="button"
         size="lg"
         data-support-trigger
-        className="pointer-events-auto fixed bottom-4 right-4 z-[100] shadow-lg"
+        className="pointer-events-auto fixed bottom-4 right-4 z-[100] shadow-lg max-md:size-12 max-md:rounded-full max-md:p-0"
         onClick={() => {
           setOpen((prev) => {
             if (prev) resetState();
@@ -315,7 +315,7 @@ export function SupportWidget() {
         aria-controls={panelId}
       >
         <MessageSquareIcon />
-        Get Support
+        <span className="hidden md:inline">Get Support</span>
       </Button>
 
       {open && (

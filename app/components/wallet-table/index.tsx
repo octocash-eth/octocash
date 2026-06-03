@@ -302,7 +302,12 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
             isPending={isPriceLoading}
             canSelectMore={Object.keys(rowSelection).length < MAX_SOURCE_TOKENS}
           />
-          <div className="flex flex-col items-center gap-2 mt-6">
+          {/* Mobile: gradient scrim so the list fades out behind the floating buttons. */}
+          <div
+            aria-hidden
+            className="pointer-events-none fixed inset-x-0 bottom-0 z-30 h-32 bg-linear-to-t from-background via-background/80 to-transparent md:hidden mb-0 pb-2"
+          />
+          <div className="flex flex-col items-center gap-2 mt-6 max-md:fixed max-md:bottom-4 max-md:left-4 max-md:right-20 max-md:z-40 max-md:mt-0">
             <ConsolidateTokensModal
               tokens={tokens}
               rowSelection={rowSelection}

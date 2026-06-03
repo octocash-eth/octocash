@@ -244,18 +244,21 @@ export function DataTable<TData extends TokenAmount, TValue>({
   // Function to clear all filters
   return (
     <div className="space-y-4">
-      {/* Mobile: total + refresh in a dedicated card above the filters. */}
-      <Card className="flex md:hidden flex-row items-center justify-between gap-3 px-4 py-3">
-        {totalIndicator}
-        {refreshButton}
-      </Card>
-
-      <div className="flex items-center justify-between gap-2">
-        <WalletTableFilters setColumnFilters={setColumnFilters} filterConfigs={filterConfigs} />
-        {/* Desktop: total + refresh inline in the header row. */}
-        <div className="hidden md:flex items-center gap-3 ml-auto">
+      {/* On mobile, keep the total + filters pinned below the sticky site header. */}
+      <div className="space-y-4 max-md:sticky max-md:top-[57px] max-md:z-30 max-md:-mx-4 max-md:bg-background/95 max-md:px-4 max-md:py-3 max-md:backdrop-blur">
+        {/* Mobile: total + refresh in a dedicated card above the filters. */}
+        <Card className="flex md:hidden flex-row items-center justify-between gap-3 px-4 py-3">
           {totalIndicator}
           {refreshButton}
+        </Card>
+
+        <div className="flex items-center justify-between gap-2">
+          <WalletTableFilters setColumnFilters={setColumnFilters} filterConfigs={filterConfigs} />
+          {/* Desktop: total + refresh inline in the header row. */}
+          <div className="hidden md:flex items-center gap-3 ml-auto">
+            {totalIndicator}
+            {refreshButton}
+          </div>
         </div>
       </div>
 
