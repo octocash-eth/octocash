@@ -234,6 +234,23 @@ export function DataTable<TData extends TokenAmount, TValue>({
     </span>
   );
 
+  const selectedCount = Object.keys(rowSelection).length;
+  const atSelectionLimit = selectedCount >= MAX_SOURCE_TOKENS;
+  const totalTokens = data.length;
+
+  const selectionText =
+    selectedCount === 0
+      ? `${totalTokens} available ${totalTokens === 1 ? "token" : "tokens"}`
+      : `${selectedCount} of ${totalTokens} ${totalTokens === 1 ? "token" : "tokens"} selected${
+          atSelectionLimit ? " (consolidation limit reached)" : ""
+        }`;
+
+  const selectionIndicator = (
+    <p className={`text-sm whitespace-nowrap ${atSelectionLimit ? "text-amber-600" : "text-muted-foreground"}`}>
+      {selectionText}
+    </p>
+  );
+
   const refreshButton = onRefresh ? (
     <Button variant="outline" size="icon" onClick={onRefresh} disabled={isRefreshing}>
       <RotateCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
@@ -248,7 +265,10 @@ export function DataTable<TData extends TokenAmount, TValue>({
       <div className="space-y-4 max-md:sticky max-md:top-[57px] max-md:z-30 max-md:-mx-4 max-md:bg-background/95 max-md:px-4 max-md:py-3 max-md:backdrop-blur">
         {/* Mobile: total + refresh in a dedicated card above the filters. */}
         <Card className="flex md:hidden flex-row items-center justify-between gap-3 px-4 py-3">
-          {totalIndicator}
+          <div className="flex min-w-0 flex-col gap-0.5">
+            {totalIndicator}
+            {selectionIndicator}
+          </div>
           {refreshButton}
         </Card>
 
@@ -308,13 +328,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
 
         {/* Pagination is desktop-only; mobile uses infinite scroll. */}
         <div className="hidden md:grid grid-cols-3 items-center gap-4 px-2 pt-1 pb-2">
-          <p
-            className={`text-sm whitespace-nowrap justify-self-start ${
-              Object.keys(rowSelection).length >= MAX_SOURCE_TOKENS ? "text-amber-600" : "text-muted-foreground"
-            }`}
-          >
-            {Object.keys(rowSelection).length} of {Math.min(MAX_SOURCE_TOKENS, data.length)} token(s) selected.
-          </p>
+          <div className="justify-self-start -mt-1">{selectionIndicator}</div>
           <DataGridPaginationNav className="justify-self-center" />
           <DataGridPaginationSize sizes={[10, 25, 50, 100]} className="justify-self-end" />
         </div>
