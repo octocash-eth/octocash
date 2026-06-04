@@ -64,6 +64,77 @@ const CONNECTOR_COPY = {
   },
 } as const;
 
+type MobileWalletId = "metamask";
+
+interface MobileWallet {
+  id: MobileWalletId;
+  title: string;
+  description: string;
+  eyebrow: string;
+  icon: typeof WalletIcon;
+  /** Builds the WalletConnect deeplink that opens the wallet app with the pairing URI. */
+  deeplink: (uri: string) => string;
+}
+
+// Reown/WalletConnect mobile deeplinks. The wallet app approves the session and
+// returns to this browser tab, where the pending connectAsync resolves.
+const MOBILE_WALLETS: readonly MobileWallet[] = [
+  {
+    id: "metamask",
+    title: "MetaMask",
+    description: "Open the MetaMask app to approve, then come back here automatically.",
+    eyebrow: "Mobile app",
+    icon: WalletIcon,
+    deeplink: (uri) => `metamask://wc?uri=${encodeURIComponent(uri)}`,
+  },
+] as const;
+
+function WalletOptionButton({
+  icon: Icon,
+  eyebrow,
+  title,
+  description,
+  disabled,
+  onClick,
+}: {
+  icon: typeof WalletIcon;
+  eyebrow: string;
+  title: string;
+  description?: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "group flex w-full items-start gap-4 rounded-3xl border border-border/70 bg-background px-4 py-4 text-left shadow-sm transition-all duration-200",
+        "hover:border-pink-400/50 hover:bg-pink-500/4 hover:shadow-md",
+        "focus-visible:border-pink-500 focus-visible:ring-4 focus-visible:ring-pink-500/15 focus-visible:outline-none",
+        disabled && "cursor-not-allowed opacity-55 hover:bg-background hover:shadow-sm",
+      )}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <div className="mt-0.5 flex size-11 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-muted/60 text-foreground transition-colors group-hover:border-pink-400/40 group-hover:bg-pink-500/10 group-hover:text-pink-600 dark:group-hover:text-pink-300">
+        <Icon className="size-5" />
+      </div>
+      <div className="min-w-0 flex-1 space-y-1">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{eyebrow}</p>
+            <p className="text-base font-semibold text-foreground">{title}</p>
+          </div>
+          <div className="rounded-full border border-border/70 bg-muted/50 p-2 text-muted-foreground transition-colors group-hover:border-pink-400/40 group-hover:bg-pink-500/10 group-hover:text-pink-600 dark:group-hover:text-pink-300">
+            <ArrowUpRightIcon className="size-4" />
+          </div>
+        </div>
+        <p className="pr-6 text-sm leading-relaxed text-muted-foreground">{description}</p>
+      </div>
+    </button>
+  );
+}
+
 export function GatedConnectButton() {
   const connectedAddresses = useConnectedAddresses();
   const { connectors, connectAsync, error, status } = useConnect();
@@ -74,6 +145,7 @@ export function GatedConnectButton() {
   const [walletConnectUri, setWalletConnectUri] = useState<string | null>(null);
   const [copiedWalletConnectUri, setCopiedWalletConnectUri] = useState(false);
   const [walletConnectPreparing, setWalletConnectPreparing] = useState(false);
+  const [selectedMobileWalletId, setSelectedMobileWalletId] = useState<MobileWalletId | null>(null);
   const [checked, setChecked] = useState(false);
   const [termsAccepted, setTermsAccepted] = useLocalStorageState(TERMS_ACCEPTED_KEY, {
     defaultValue: false,
@@ -83,6 +155,12 @@ export function GatedConnectButton() {
     () => connectors.filter((connector) => SUPPORTED_CONNECTOR_IDS.has(connector.id)),
     [connectors],
   );
+  const walletConnectConnector = useMemo(
+    () => connectors.find((connector) => connector.id === "walletConnect"),
+    [connectors],
+  );
+  const mobile = isMobile();
+  const selectedMobileWallet = MOBILE_WALLETS.find((wallet) => wallet.id === selectedMobileWalletId);
   const isConnecting = status === "pending";
 
   const onRequestConnect = () => {
@@ -90,6 +168,7 @@ export function GatedConnectButton() {
       setWalletConnectUri(null);
       setCopiedWalletConnectUri(false);
       setWalletConnectPreparing(false);
+      setSelectedMobileWalletId(null);
       setWalletDialogOpen(true);
       return;
     }
@@ -109,6 +188,7 @@ export function GatedConnectButton() {
     setWalletConnectUri(null);
     setCopiedWalletConnectUri(false);
     setWalletConnectPreparing(false);
+    setSelectedMobileWalletId(null);
     setWalletDialogOpen(true);
   };
 
@@ -136,10 +216,6 @@ export function GatedConnectButton() {
   const handleDisconnect = () => {
     disconnect();
     setConnectedDialogOpen(false);
-  };
-
-  const handleOpenInMetaMask = () => {
-    window.location.href = getMetaMaskDeeplink();
   };
 
   const handleWalletConnect = async (connector: (typeof supportedConnectors)[number]) => {
@@ -180,10 +256,51 @@ export function GatedConnectButton() {
     }
   };
 
+  const handleMobileWalletConnect = async (wallet: MobileWallet) => {
+    // Without a WalletConnect connector (no project id) we can only fall back to
+    // MetaMask's in-app dapp browser deeplink.
+    if (!walletConnectConnector) {
+      if (wallet.id === "metamask") {
+        window.location.href = getMetaMaskDeeplink();
+      }
+      return;
+    }
+
+    setWalletConnectUri(null);
+    setCopiedWalletConnectUri(false);
+    setSelectedMobileWalletId(wallet.id);
+    setWalletConnectPreparing(true);
+
+    const handleMessage = ({ type, data }: { type: string; data?: unknown }) => {
+      if (type === "display_uri" && typeof data === "string") {
+        // Render the QR/copy view as a fallback (e.g. if the app does not open),
+        // then jump into the wallet app to approve the session.
+        setWalletConnectUri(data);
+        setWalletConnectPreparing(false);
+        walletConnectConnector.emitter.off("message", handleMessage);
+        window.location.href = wallet.deeplink(data);
+      }
+    };
+
+    walletConnectConnector.emitter.on("message", handleMessage);
+
+    try {
+      await connectAsync({ connector: walletConnectConnector });
+      setWalletDialogOpen(false);
+      setWalletConnectPreparing(false);
+      walletConnectConnector.emitter.off("message", handleMessage);
+    } catch {
+      setWalletConnectPreparing(false);
+      walletConnectConnector.emitter.off("message", handleMessage);
+      // keep the dialog open so the user can retry or scan the QR code
+    }
+  };
+
   const handleWalletConnectBack = () => {
     setWalletConnectUri(null);
     setCopiedWalletConnectUri(false);
     setWalletConnectPreparing(false);
+    setSelectedMobileWalletId(null);
   };
 
   const handleCopyWalletConnectUri = async () => {
@@ -322,9 +439,13 @@ export function GatedConnectButton() {
                     <QrCodeIcon className="size-5" />
                   </div>
                   <div className="space-y-1">
-                    <h3 className="text-base font-semibold text-foreground">Scan with WalletConnect</h3>
+                    <h3 className="text-base font-semibold text-foreground">
+                      {selectedMobileWallet ? `Connect ${selectedMobileWallet.title}` : "Scan with WalletConnect"}
+                    </h3>
                     <p className="text-sm leading-snug text-muted-foreground">
-                      Open your wallet app and scan this QR code, or copy the link and open it on another device.
+                      {selectedMobileWallet
+                        ? "If the wallet app didn't open, copy the link below and paste it into the app."
+                        : "Open your wallet app and scan this QR code, or copy the link and open it on another device."}
                     </p>
                   </div>
 
@@ -361,55 +482,45 @@ export function GatedConnectButton() {
               </div>
             ) : (
               <>
-                {supportedConnectors.map((connector) => {
-                  const copy = CONNECTOR_COPY[connector.id as keyof typeof CONNECTOR_COPY];
-                  const isInjectedUnavailable =
-                    connector.id === "injected" && typeof window !== "undefined" && !window.ethereum;
-                  const showMetaMaskDeeplink = isInjectedUnavailable && isMobile();
-                  const disabled = isConnecting || (isInjectedUnavailable && !showMetaMaskDeeplink);
-                  const Icon = copy?.icon ?? WalletIcon;
-                  const eyebrow = showMetaMaskDeeplink ? "Mobile app" : (copy?.eyebrow ?? "Wallet option");
-                  const title = showMetaMaskDeeplink ? "Open in MetaMask" : (copy?.title ?? connector.name);
-                  const description = showMetaMaskDeeplink
-                    ? "Open Octocash in the MetaMask app to connect."
-                    : isInjectedUnavailable
-                      ? "No injected wallet detected in this browser."
-                      : copy?.description;
+                {mobile
+                  ? MOBILE_WALLETS.map((wallet) => {
+                      // MetaMask can fall back to its in-app dapp browser when WalletConnect is unavailable.
+                      const hasFallback = wallet.id === "metamask";
+                      const disabled = isConnecting || (!walletConnectConnector && !hasFallback);
 
-                  return (
-                    <button
-                      key={connector.uid}
-                      type="button"
-                      className={cn(
-                        "group flex w-full items-start gap-4 rounded-3xl border border-border/70 bg-background px-4 py-4 text-left shadow-sm transition-all duration-200",
-                        "hover:border-pink-400/50 hover:bg-pink-500/[0.04] hover:shadow-md",
-                        "focus-visible:border-pink-500 focus-visible:ring-4 focus-visible:ring-pink-500/15 focus-visible:outline-none",
-                        disabled && "cursor-not-allowed opacity-55 hover:bg-background hover:shadow-sm",
-                      )}
-                      disabled={disabled}
-                      onClick={() => (showMetaMaskDeeplink ? handleOpenInMetaMask() : handleWalletConnect(connector))}
-                    >
-                      <div className="mt-0.5 flex size-11 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-muted/60 text-foreground transition-colors group-hover:border-pink-400/40 group-hover:bg-pink-500/10 group-hover:text-pink-600 dark:group-hover:text-pink-300">
-                        <Icon className="size-5" />
-                      </div>
-                      <div className="min-w-0 flex-1 space-y-1">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-                              {eyebrow}
-                            </p>
-                            <p className="text-base font-semibold text-foreground">{title}</p>
-                          </div>
-                          <div className="rounded-full border border-border/70 bg-muted/50 p-2 text-muted-foreground transition-colors group-hover:border-pink-400/40 group-hover:bg-pink-500/10 group-hover:text-pink-600 dark:group-hover:text-pink-300">
-                            <ArrowUpRightIcon className="size-4" />
-                          </div>
-                        </div>
-                        <p className="pr-6 text-sm leading-relaxed text-muted-foreground">{description}</p>
-                      </div>
-                    </button>
-                  );
-                })}
-                {supportedConnectors.length === 0 ? (
+                      return (
+                        <WalletOptionButton
+                          key={wallet.id}
+                          icon={wallet.icon}
+                          eyebrow={wallet.eyebrow}
+                          title={wallet.title}
+                          description={wallet.description}
+                          disabled={disabled}
+                          onClick={() => handleMobileWalletConnect(wallet)}
+                        />
+                      );
+                    })
+                  : supportedConnectors.map((connector) => {
+                      const copy = CONNECTOR_COPY[connector.id as keyof typeof CONNECTOR_COPY];
+                      const isInjectedUnavailable =
+                        connector.id === "injected" && typeof window !== "undefined" && !window.ethereum;
+                      const disabled = isConnecting || isInjectedUnavailable;
+
+                      return (
+                        <WalletOptionButton
+                          key={connector.uid}
+                          icon={copy?.icon ?? WalletIcon}
+                          eyebrow={copy?.eyebrow ?? "Wallet option"}
+                          title={copy?.title ?? connector.name}
+                          description={
+                            isInjectedUnavailable ? "No injected wallet detected in this browser." : copy?.description
+                          }
+                          disabled={disabled}
+                          onClick={() => handleWalletConnect(connector)}
+                        />
+                      );
+                    })}
+                {!mobile && supportedConnectors.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-border/70 bg-muted/30 px-4 py-5 text-sm text-muted-foreground">
                     No wallet connectors are available right now.
                   </div>
@@ -420,8 +531,9 @@ export function GatedConnectButton() {
                   </div>
                 ) : null}
                 <p className="text-xs leading-relaxed text-muted-foreground">
-                  Browser Wallet works best when you already have a wallet extension installed. WalletConnect is ideal
-                  for mobile wallets and secondary devices.
+                  {mobile
+                    ? "Tap a wallet to open its app, approve the connection, and you'll be sent right back here."
+                    : "Browser Wallet works best when you already have a wallet extension installed. WalletConnect is ideal for mobile wallets and secondary devices."}
                 </p>
               </>
             )}

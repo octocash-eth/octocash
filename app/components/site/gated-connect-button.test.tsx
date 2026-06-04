@@ -346,12 +346,7 @@ describe("GatedConnectButton", () => {
     expect(screen.getByText(/no injected wallet detected/i)).toBeInTheDocument();
   });
 
-  test("shows an enabled 'Open in MetaMask' deeplink option on mobile when no injected provider is available", async () => {
-    Object.defineProperty(window, "ethereum", {
-      value: undefined,
-      writable: true,
-      configurable: true,
-    });
+  test("deeplinks into MetaMask via WalletConnect on mobile and returns to the browser", async () => {
     const originalUserAgent = navigator.userAgent;
     Object.defineProperty(navigator, "userAgent", {
       value:
@@ -366,17 +361,19 @@ describe("GatedConnectButton", () => {
       configurable: true,
     });
     mockUseLocalStorageState.mockReturnValue([true, mockSetTermsAccepted]);
+    mockConnectAsync.mockImplementation(async ({ connector }: { connector: typeof walletConnectConnector }) => {
+      const handler = walletConnectEmitter.on.mock.calls.find(([eventName]) => eventName === "message")?.[1];
+      handler?.({ type: "display_uri", data: "wc:octocash-test", uid: connector.uid });
+      return await new Promise(() => {});
+    });
     const user = userEvent.setup();
     render(<GatedConnectButton />);
 
     await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+    await user.click(screen.getByRole("button", { name: /metamask/i }));
 
-    const metaMaskButton = screen.getByRole("button", { name: /open in metamask/i });
-    expect(metaMaskButton).not.toBeDisabled();
-
-    await user.click(metaMaskButton);
-
-    expect(window.location.href).toBe("https://metamask.app.link/dapp/octo.cash/dashboard");
+    expect(mockConnectAsync).toHaveBeenCalledWith({ connector: walletConnectConnector });
+    expect(window.location.href).toBe(`metamask://wc?uri=${encodeURIComponent("wc:octocash-test")}`);
 
     Object.defineProperty(navigator, "userAgent", {
       value: originalUserAgent,
