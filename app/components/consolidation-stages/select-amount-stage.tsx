@@ -65,12 +65,12 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
   };
 
   return (
-    <div className="space-y-4">
-      <div className="text-sm text-muted-foreground mb-4">
+    <div className="space-y-3 sm:space-y-4">
+      <div className="text-xs sm:text-sm text-muted-foreground mb-3 sm:mb-4">
         Adjust the amount you want to consolidate for each token. Use the slider or enter a value directly.
       </div>
 
-      <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
+      <div className="space-y-3 sm:space-y-4 max-h-[min(24rem,calc(100dvh-19rem))] overflow-y-auto pr-2">
         {tokens.map((token) => {
           const tokenId = getTokenId(token);
           const chainName = getChainName(token.chainId);
@@ -83,7 +83,7 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
           const currentUsdValue = (Number.parseFloat(amountValue) || 0) * price;
 
           return (
-            <div key={tokenId} className="border rounded-lg p-4 space-y-3">
+            <div key={tokenId} className="border rounded-lg p-3 sm:p-4 space-y-3">
               {/* Token Header */}
               <div className="flex justify-between items-start">
                 <TokenDisplayRoot

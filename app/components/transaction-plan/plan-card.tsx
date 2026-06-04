@@ -374,9 +374,9 @@ export function PlanCard({ step, result, stepNumber, progress }: PlanCardProps) 
   const isFailed = step.status === "failed";
 
   return (
-    <div className="flex items-center justify-between py-2 px-3 rounded transition-colors hover:bg-muted/60 dark:hover:bg-muted/30">
+    <div className="flex items-center justify-between py-1.5 px-2 sm:py-2 sm:px-3 rounded transition-colors hover:bg-muted/60 dark:hover:bg-muted/30">
       {/* Left side: Status icon + Action text */}
-      <div className="flex gap-3 flex-1 min-w-0">
+      <div className="flex gap-2 sm:gap-3 flex-1 min-w-0">
         {/* Status Icon or Step Number */}
         {isPending && stepNumber !== undefined ? (
           <div className="w-5 h-5 flex items-center justify-center shrink-0 bg-primary text-primary-foreground rounded-full">
@@ -393,14 +393,14 @@ export function PlanCard({ step, result, stepNumber, progress }: PlanCardProps) 
         ) : null}
 
         {/* Action description + inline transient wait status */}
-        <div className="text-sm text-foreground flex items-center gap-1.5 flex-wrap min-w-0">
+        <div className="text-xs sm:text-sm text-foreground flex items-center gap-1.5 flex-wrap min-w-0">
           <ActionContent step={step} result={result} />
           {isExecuting && progress && <StepProgressLine progress={progress} />}
         </div>
       </div>
 
       {/* Right side: Gas cost + Transaction link or status */}
-      <div className="flex items-center gap-2 shrink-0 ml-4">
+      <div className="flex items-center gap-2 shrink-0 ml-2 sm:ml-4">
         {step.estimatedGas && !isFailed && !(isSuccess && result?.transactionHash) && (
           <GasCostDisplay gas={step.estimatedGas} chainId={step.chainId} />
         )}

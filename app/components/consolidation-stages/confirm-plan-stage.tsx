@@ -19,8 +19,8 @@ export function ConfirmPlanStage({
   onExecutionStateChange,
 }: ConfirmPlanStageProps) {
   return (
-    <div className="space-y-4">
-      <div className="text-sm text-muted-foreground mb-4">
+    <div className="space-y-3 sm:space-y-4">
+      <div className="text-xs sm:text-sm text-muted-foreground mb-3 sm:mb-4">
         Review the transaction steps below and execute the consolidation plan.
       </div>
 

@@ -290,7 +290,7 @@ export function GatedConnectButton() {
       </Dialog>
 
       <Dialog open={walletDialogOpen} onOpenChange={setWalletDialogOpen}>
-        <DialogContent className="overflow-hidden border-border/60 bg-background p-0 shadow-2xl sm:max-w-xl">
+        <DialogContent className="grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden border-2 border-pink-500 bg-background p-0 shadow-[10px_8px_0_0_var(--color-pink-600)] dark:shadow-[10px_8px_0_0_var(--color-pink-700)] sm:max-w-xl">
           <div className="border-b border-border/60 bg-muted/30 px-6 py-5">
             <DialogHeader className="gap-3">
               <div className="inline-flex w-fit items-center rounded-full border border-pink-500/30 bg-pink-500/10 px-3 py-1 text-xs font-medium text-pink-600 dark:text-pink-300">
@@ -299,14 +299,13 @@ export function GatedConnectButton() {
               <div className="space-y-1">
                 <DialogTitle className="text-xl">Choose a Wallet</DialogTitle>
                 <DialogDescription className="max-w-md text-sm leading-relaxed">
-                  Pick the connection method that fits your setup. You can swap addresses later from the connected
-                  wallets menu.
+                  Pick the connection method that fits your setup.
                 </DialogDescription>
               </div>
             </DialogHeader>
           </div>
 
-          <div className="space-y-3 px-6 py-5">
+          <div className="min-h-0 space-y-3 overflow-y-auto px-6 py-5">
             {walletConnectUri || walletConnectPreparing ? (
               <div className="space-y-4">
                 <button
@@ -318,20 +317,20 @@ export function GatedConnectButton() {
                   Back
                 </button>
 
-                <div className="mx-auto flex max-w-[18rem] flex-col items-center gap-4 px-2 py-2 text-center">
-                  <div className="flex size-12 items-center justify-center rounded-2xl border border-border/70 bg-pink-500/10 text-pink-600 dark:text-pink-300">
-                    <QrCodeIcon className="size-6" />
+                <div className="mx-auto flex max-w-[18rem] flex-col items-center gap-3 px-2 text-center">
+                  <div className="flex size-10 items-center justify-center rounded-2xl border border-border/70 bg-pink-500/10 text-pink-600 dark:text-pink-300">
+                    <QrCodeIcon className="size-5" />
                   </div>
                   <div className="space-y-1">
-                    <h3 className="text-lg font-semibold text-foreground">Scan with WalletConnect</h3>
-                    <p className="text-sm leading-relaxed text-muted-foreground">
+                    <h3 className="text-base font-semibold text-foreground">Scan with WalletConnect</h3>
+                    <p className="text-sm leading-snug text-muted-foreground">
                       Open your wallet app and scan this QR code, or copy the link and open it on another device.
                     </p>
                   </div>
 
-                  <div className="flex min-h-[17rem] w-full items-center justify-center rounded-[1.75rem] bg-white p-4 shadow-[0_12px_32px_rgba(0,0,0,0.08)] ring-1 ring-border/60">
+                  <div className="flex min-h-52 w-full items-center justify-center rounded-[1.75rem] bg-white p-3 shadow-[0_12px_32px_rgba(0,0,0,0.08)] ring-1 ring-border/60">
                     {walletConnectUri ? (
-                      <QRCode value={walletConnectUri} size={224} className="h-auto w-full max-w-[14rem]" />
+                      <QRCode value={walletConnectUri} size={208} className="h-auto w-full max-w-50" />
                     ) : (
                       <div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
                         <LoaderCircleIcon className="size-8 animate-spin" />

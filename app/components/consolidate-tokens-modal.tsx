@@ -283,26 +283,26 @@ export function ConsolidateTokensModal({
         </Button>
       </DialogTrigger>
       <DialogContent
-        className="sm:max-w-5xl border-2 border-pink-500 shadow-[10px_8px_0_0_var(--color-pink-600)] dark:shadow-[10px_8px_0_0_var(--color-pink-700)] [&_[data-slot=dialog-close]]:text-primary [&_[data-slot=dialog-close]]:opacity-100"
+        className="sm:max-w-5xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] gap-3 sm:gap-4 p-4 sm:p-6 border-2 border-pink-500 shadow-[10px_8px_0_0_var(--color-pink-600)] dark:shadow-[10px_8px_0_0_var(--color-pink-700)] [&_[data-slot=dialog-close]]:text-primary [&_[data-slot=dialog-close]]:opacity-100"
         showCloseButton={!isExecuting}
       >
-        <DialogHeader className="items-center pb-4 text-center">
-          <DialogTitle className="flex flex-col items-center gap-1">
+        <DialogHeader className="items-center pb-2 sm:pb-4 text-center">
+          <DialogTitle className="flex flex-col items-center gap-0.5 sm:gap-1">
             {completedState ? (
-              <span className="text-xl">
+              <span className="text-lg sm:text-xl">
                 {completedState.status === "completed" ? "Consolidation Complete" : "Consolidation Partially Complete"}
               </span>
             ) : (
               <>
-                <span className="text-xl font-semibold text-foreground">Consolidate</span>
-                <span className="font-grotesque text-4xl font-semibold text-primary">
+                <span className="text-base sm:text-xl font-semibold text-foreground">Consolidate</span>
+                <span className="font-grotesque text-3xl sm:text-4xl font-semibold text-primary">
                   {formatFiat(actualTotalToConsolidate)}
                 </span>
               </>
             )}
           </DialogTitle>
           {!completedState && (
-            <DialogDescription className="text-center">
+            <DialogDescription className="text-center text-xs sm:text-sm">
               {currentStage === 1 &&
                 `Adjust amounts for ${selectedRows} selected token${selectedRows !== 1 ? "s" : ""}.`}
               {currentStage === 2 && "Select the destination wallet, chain, and token."}
@@ -314,8 +314,8 @@ export function ConsolidateTokensModal({
         {completedState ? (
           <CompletionStage state={completedState} onClose={() => handleOpenChange(false)} />
         ) : (
-          <Stepper value={currentStage} onValueChange={navigateToStage} className="space-y-6">
-            <StepperNav className="gap-3.5">
+          <Stepper value={currentStage} onValueChange={navigateToStage} className="space-y-4 sm:space-y-6">
+            <StepperNav className="gap-2 sm:gap-3.5">
               {[
                 { id: "select-amount", title: "Select Amount", shortTitle: "Amount" },
                 { id: "select-destination", title: "Select Destination", shortTitle: "Destination" },
@@ -329,9 +329,9 @@ export function ConsolidateTokensModal({
                     className="relative flex-1 items-start"
                     disabled={!canNavigateToStage(stageNumber)}
                   >
-                    <StepperTrigger className="flex flex-col items-start justify-center gap-3.5 grow">
+                    <StepperTrigger className="flex flex-col items-start justify-center gap-2 sm:gap-3.5 grow">
                       <div className="flex flex-col items-start gap-1">
-                        <StepperTitle className="text-start font-semibold group-data-[state=inactive]/step:text-muted-foreground">
+                        <StepperTitle className="text-start text-xs sm:text-sm font-semibold group-data-[state=inactive]/step:text-muted-foreground">
                           <span className="md:hidden">{stage.shortTitle}</span>
                           <span className="hidden md:inline">{stage.title}</span>
                         </StepperTitle>
@@ -347,7 +347,7 @@ export function ConsolidateTokensModal({
               <StepperPanel step={currentStage} className="text-sm">
                 <StepperContent value={1}>
                   <SelectAmountStage tokens={consolidatedTokens} onAmountsChange={setTokenAmounts} />
-                  <div className="pt-4 flex gap-2">
+                  <div className="pt-3 sm:pt-4 flex gap-2">
                     <Button onClick={handleNext} disabled={!canNavigateToStage(2)} className="w-full">
                       Next
                     </Button>
@@ -356,7 +356,7 @@ export function ConsolidateTokensModal({
 
                 <StepperContent value={2}>
                   <SelectDestinationStage value={destination} onChange={setDestination} />
-                  <div className="pt-4 flex gap-2">
+                  <div className="pt-3 sm:pt-4 flex gap-2">
                     <Button onClick={handleBack} variant="outline" className="flex-1">
                       Back
                     </Button>

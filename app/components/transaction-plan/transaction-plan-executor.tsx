@@ -73,7 +73,7 @@ export function TransactionPlanExecutor({
   const showStatusAlert = isCompleted || state.status === "partial" || isPaused;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3 sm:space-y-4">
       {/* Transaction Cards Preview */}
       <PlanList state={state} liveProgress={liveProgress} />
 
@@ -84,7 +84,7 @@ export function TransactionPlanExecutor({
 
       {/* Action Buttons */}
       {showActions && (
-        <div className="pt-4 flex gap-2">
+        <div className="pt-3 sm:pt-4 flex gap-2">
           {isPaused ? (
             <PausedActions onSkip={skipFailedStep} onRetry={retryFailedStep} disabled={isExecuting} />
           ) : (

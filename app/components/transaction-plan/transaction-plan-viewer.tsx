@@ -24,7 +24,7 @@ export function TransactionPlanViewer({ state: initialState, onComplete, onBack,
   const showStatusAlert = isCompleted || currentState.status === "partial" || isPaused;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3 sm:space-y-4">
       {/* Transaction Cards Preview */}
       <PlanList state={currentState} liveProgress={liveProgress} />
 
@@ -38,7 +38,7 @@ export function TransactionPlanViewer({ state: initialState, onComplete, onBack,
 
       {/* Action Buttons */}
       {showActions && (
-        <div className="pt-4 flex gap-2">
+        <div className="pt-3 sm:pt-4 flex gap-2">
           {isPaused ? (
             <PausedActions onSkip={skipFailedStep} onRetry={retryFailedStep} disabled={isExecuting} />
           ) : (

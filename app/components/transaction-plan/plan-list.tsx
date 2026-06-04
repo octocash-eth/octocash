@@ -9,7 +9,7 @@ interface PlanListProps {
   liveProgress?: LiveProgress;
 }
 
-export function PlanList({ state, maxHeight = "400px", liveProgress }: PlanListProps) {
+export function PlanList({ state, maxHeight = "min(25rem, calc(100dvh - 19rem))", liveProgress }: PlanListProps) {
   return (
     <div className="overflow-y-auto space-y-3 pr-2" style={{ maxHeight }}>
       {state.plan.map((step, index) => {
