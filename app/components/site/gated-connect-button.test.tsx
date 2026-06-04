@@ -346,6 +346,50 @@ describe("GatedConnectButton", () => {
     expect(screen.getByText(/no injected wallet detected/i)).toBeInTheDocument();
   });
 
+  test("shows an enabled 'Open in MetaMask' deeplink option on mobile when no injected provider is available", async () => {
+    Object.defineProperty(window, "ethereum", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
+    const originalUserAgent = navigator.userAgent;
+    Object.defineProperty(navigator, "userAgent", {
+      value:
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+      writable: true,
+      configurable: true,
+    });
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      value: { host: "octo.cash", pathname: "/dashboard", search: "", href: "https://octo.cash/dashboard" },
+      writable: true,
+      configurable: true,
+    });
+    mockUseLocalStorageState.mockReturnValue([true, mockSetTermsAccepted]);
+    const user = userEvent.setup();
+    render(<GatedConnectButton />);
+
+    await user.click(screen.getByRole("button", { name: /connect wallet/i }));
+
+    const metaMaskButton = screen.getByRole("button", { name: /open in metamask/i });
+    expect(metaMaskButton).not.toBeDisabled();
+
+    await user.click(metaMaskButton);
+
+    expect(window.location.href).toBe("https://metamask.app.link/dapp/octo.cash/dashboard");
+
+    Object.defineProperty(navigator, "userAgent", {
+      value: originalUserAgent,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(window, "location", {
+      value: originalLocation,
+      writable: true,
+      configurable: true,
+    });
+  });
+
   test("renders wagmi connection errors inside the wallet chooser", async () => {
     mockUseLocalStorageState.mockReturnValue([true, mockSetTermsAccepted]);
     mockUseConnect.mockReturnValue({

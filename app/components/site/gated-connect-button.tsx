@@ -38,6 +38,17 @@ import { cn } from "~/lib/utils";
 const TERMS_ACCEPTED_KEY = "octocash:terms-accepted";
 const SUPPORTED_CONNECTOR_IDS = new Set(["injected", "walletConnect"]);
 
+function isMobile() {
+  if (typeof navigator === "undefined") return false;
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+function getMetaMaskDeeplink() {
+  if (typeof window === "undefined") return "https://metamask.app.link";
+  const { host, pathname, search } = window.location;
+  return `https://metamask.app.link/dapp/${host}${pathname}${search}`;
+}
+
 const CONNECTOR_COPY = {
   injected: {
     title: "Browser Wallet",
@@ -125,6 +136,10 @@ export function GatedConnectButton() {
   const handleDisconnect = () => {
     disconnect();
     setConnectedDialogOpen(false);
+  };
+
+  const handleOpenInMetaMask = () => {
+    window.location.href = getMetaMaskDeeplink();
   };
 
   const handleWalletConnect = async (connector: (typeof supportedConnectors)[number]) => {
@@ -351,8 +366,16 @@ export function GatedConnectButton() {
                   const copy = CONNECTOR_COPY[connector.id as keyof typeof CONNECTOR_COPY];
                   const isInjectedUnavailable =
                     connector.id === "injected" && typeof window !== "undefined" && !window.ethereum;
-                  const disabled = isConnecting || isInjectedUnavailable;
+                  const showMetaMaskDeeplink = isInjectedUnavailable && isMobile();
+                  const disabled = isConnecting || (isInjectedUnavailable && !showMetaMaskDeeplink);
                   const Icon = copy?.icon ?? WalletIcon;
+                  const eyebrow = showMetaMaskDeeplink ? "Mobile app" : (copy?.eyebrow ?? "Wallet option");
+                  const title = showMetaMaskDeeplink ? "Open in MetaMask" : (copy?.title ?? connector.name);
+                  const description = showMetaMaskDeeplink
+                    ? "Open Octocash in the MetaMask app to connect."
+                    : isInjectedUnavailable
+                      ? "No injected wallet detected in this browser."
+                      : copy?.description;
 
                   return (
                     <button
@@ -365,7 +388,7 @@ export function GatedConnectButton() {
                         disabled && "cursor-not-allowed opacity-55 hover:bg-background hover:shadow-sm",
                       )}
                       disabled={disabled}
-                      onClick={() => handleWalletConnect(connector)}
+                      onClick={() => (showMetaMaskDeeplink ? handleOpenInMetaMask() : handleWalletConnect(connector))}
                     >
                       <div className="mt-0.5 flex size-11 shrink-0 items-center justify-center rounded-2xl border border-border/70 bg-muted/60 text-foreground transition-colors group-hover:border-pink-400/40 group-hover:bg-pink-500/10 group-hover:text-pink-600 dark:group-hover:text-pink-300">
                         <Icon className="size-5" />
@@ -374,17 +397,15 @@ export function GatedConnectButton() {
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-                              {copy?.eyebrow ?? "Wallet option"}
+                              {eyebrow}
                             </p>
-                            <p className="text-base font-semibold text-foreground">{copy?.title ?? connector.name}</p>
+                            <p className="text-base font-semibold text-foreground">{title}</p>
                           </div>
                           <div className="rounded-full border border-border/70 bg-muted/50 p-2 text-muted-foreground transition-colors group-hover:border-pink-400/40 group-hover:bg-pink-500/10 group-hover:text-pink-600 dark:group-hover:text-pink-300">
                             <ArrowUpRightIcon className="size-4" />
                           </div>
                         </div>
-                        <p className="pr-6 text-sm leading-relaxed text-muted-foreground">
-                          {isInjectedUnavailable ? "No injected wallet detected in this browser." : copy?.description}
-                        </p>
+                        <p className="pr-6 text-sm leading-relaxed text-muted-foreground">{description}</p>
                       </div>
                     </button>
                   );
