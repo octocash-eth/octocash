@@ -2,6 +2,7 @@ import { Check, Search } from "lucide-react";
 import * as React from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
+import { ScrollArea } from "~/components/ui/scroll-area";
 import { useSelectedCurrency } from "~/context/currency-provider";
 import { type Currency, searchCurrencies } from "~/lib/currencies";
 import { cn } from "~/lib/utils";
@@ -47,8 +48,8 @@ export function CurrencyModal({ open, onOpenChange }: CurrencyModalProps) {
        * Override the default grid layout with flex-column so the header and
        * search input stay pinned to the top while the list below takes the
        * remaining vertical space and scrolls internally. `min-h-0` on the
-       * list is required for it to shrink inside its flex parent and let
-       * `overflow-y-auto` activate.
+       * list is required for it to shrink inside its flex parent so the
+       * ScrollArea can take over scrolling.
        */}
       <DialogContent className="flex max-h-[80vh] flex-col gap-3 overflow-hidden sm:max-w-4xl">
         <DialogHeader>
@@ -74,28 +75,30 @@ export function CurrencyModal({ open, onOpenChange }: CurrencyModalProps) {
           />
         </div>
 
-        <div className="-mx-2 min-h-0 flex-1 overflow-y-auto px-2 pb-1">
-          {suggested.length === 0 && fiat.length === 0 && assets.length === 0 ? (
-            <p className="px-1 py-6 text-center text-sm text-muted-foreground">No currencies match "{query}".</p>
-          ) : (
-            <>
-              {suggested.length > 0 && (
-                <CurrencySection
-                  title="Suggested Currencies"
-                  items={suggested}
-                  selected={currency.code}
-                  onPick={handlePick}
-                />
-              )}
-              {fiat.length > 0 && (
-                <CurrencySection title="Fiat Currencies" items={fiat} selected={currency.code} onPick={handlePick} />
-              )}
-              {assets.length > 0 && (
-                <CurrencySection title="Other Assets" items={assets} selected={currency.code} onPick={handlePick} />
-              )}
-            </>
-          )}
-        </div>
+        <ScrollArea className="-mx-2 min-h-0 flex-1">
+          <div className="px-2 pb-1">
+            {suggested.length === 0 && fiat.length === 0 && assets.length === 0 ? (
+              <p className="px-1 py-6 text-center text-sm text-muted-foreground">No currencies match "{query}".</p>
+            ) : (
+              <>
+                {suggested.length > 0 && (
+                  <CurrencySection
+                    title="Suggested Currencies"
+                    items={suggested}
+                    selected={currency.code}
+                    onPick={handlePick}
+                  />
+                )}
+                {fiat.length > 0 && (
+                  <CurrencySection title="Fiat Currencies" items={fiat} selected={currency.code} onPick={handlePick} />
+                )}
+                {assets.length > 0 && (
+                  <CurrencySection title="Other Assets" items={assets} selected={currency.code} onPick={handlePick} />
+                )}
+              </>
+            )}
+          </div>
+        </ScrollArea>
       </DialogContent>
     </Dialog>
   );

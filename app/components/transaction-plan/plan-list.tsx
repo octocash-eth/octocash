@@ -1,6 +1,6 @@
+import { ScrollArea } from "~/components/ui/scroll-area";
 import type { LiveProgress } from "~/hooks/use-consolidation-execution";
 import type { ConsolidationState } from "~/lib/types";
-import { cn } from "~/lib/utils";
 import { PlanCard } from "./plan-card";
 
 interface PlanListProps {
@@ -19,19 +19,21 @@ export function PlanList({
   className,
 }: PlanListProps) {
   return (
-    <div className={cn("overflow-y-auto space-y-3 pr-2", className)} style={{ maxHeight }}>
-      {state.plan.map((step, index) => {
-        const result = state.results[step.id];
-        return (
-          <PlanCard
-            key={step.id}
-            step={step}
-            result={result}
-            stepNumber={index + 1}
-            progress={liveProgress?.[step.id]}
-          />
-        );
-      })}
-    </div>
+    <ScrollArea className={className} style={{ maxHeight }}>
+      <div className="space-y-3 pr-2">
+        {state.plan.map((step, index) => {
+          const result = state.results[step.id];
+          return (
+            <PlanCard
+              key={step.id}
+              step={step}
+              result={result}
+              stepNumber={index + 1}
+              progress={liveProgress?.[step.id]}
+            />
+          );
+        })}
+      </div>
+    </ScrollArea>
   );
 }
