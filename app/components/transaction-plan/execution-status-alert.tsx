@@ -37,7 +37,7 @@ export function ExecutionStatusAlert({ status, error }: ExecutionStatusAlertProp
         <AlertTitle>{error?.title || "A transaction failed."}</AlertTitle>
         <AlertDescription>
           <ScrollArea className="max-h-[300px] w-full">
-            <p className="whitespace-pre-wrap break-words pr-3">
+            <p className="whitespace-pre-wrap wrap-break-word pr-3">
               {error?.message || "You can retry it or skip and continue with remaining steps."}
             </p>
           </ScrollArea>

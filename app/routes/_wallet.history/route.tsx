@@ -1,9 +1,7 @@
 import { ChevronDown, ChevronUp, Inbox, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Link } from "react-router";
-import { ConsolidationTokensSummary } from "~/components/consolidation-tokens-summary";
 import { SiteHeader } from "~/components/site";
-import { TransactionPlanViewer } from "~/components/transaction-plan";
 import { Button } from "~/components/ui/button";
 import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle } from "~/components/ui/card";
 import {
@@ -15,9 +13,19 @@ import {
   DialogTitle,
 } from "~/components/ui/dialog";
 import { Pagination } from "~/components/ui/pagination";
+import { Skeleton } from "~/components/ui/skeleton";
 import { useConsolidationRecords } from "~/hooks/use-consolidation-records";
 import type { ConsolidationState } from "~/lib/types";
 import { generateMeta } from "~/utils/meta";
+
+// Heavy components (viem/wagmi/CCTP/LiFi/Odos execution stack) are only needed when
+// a card is expanded, so keep them out of the initial route chunk for fast navigation.
+const ConsolidationTokensSummary = lazy(() =>
+  import("~/components/consolidation-tokens-summary").then((m) => ({ default: m.ConsolidationTokensSummary })),
+);
+const TransactionPlanViewer = lazy(() =>
+  import("~/components/transaction-plan/transaction-plan-viewer").then((m) => ({ default: m.TransactionPlanViewer })),
+);
 
 const PAGE_SIZE = 10;
 
@@ -157,6 +165,21 @@ export default function History() {
   );
 }
 
+function ExpandedCardSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="space-y-3">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-20 w-full" />
+      </div>
+      <div className="space-y-3">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-32 w-full" />
+      </div>
+    </div>
+  );
+}
+
 interface ConsolidationCardProps {
   consolidation: ConsolidationState;
   expanded: boolean;
@@ -222,16 +245,18 @@ function ConsolidationCard({ consolidation, expanded, onToggle, onDelete, getSta
 
         {expanded && (
           <CardContent className="border-t border-border bg-muted/30 py-5 space-y-6">
-            {/* Source & Final Tokens */}
-            <ConsolidationTokensSummary state={consolidation} />
+            <Suspense fallback={<ExpandedCardSkeleton />}>
+              {/* Source & Final Tokens */}
+              <ConsolidationTokensSummary state={consolidation} />
 
-            {/* Transaction Steps */}
-            <div>
-              <h4 className="text-sm font-medium mb-3 text-muted-foreground">Transaction Steps</h4>
-              <div className="bg-background rounded-lg border border-border p-3">
-                <TransactionPlanViewer state={consolidation} showActions={false} />
+              {/* Transaction Steps */}
+              <div>
+                <h4 className="text-sm font-medium mb-3 text-muted-foreground">Transaction Steps</h4>
+                <div className="bg-background rounded-lg border border-border p-3">
+                  <TransactionPlanViewer state={consolidation} showActions={false} />
+                </div>
               </div>
-            </div>
+            </Suspense>
           </CardContent>
         )}
 

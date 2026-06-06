@@ -40,16 +40,12 @@ vi.mock("~/components/consolidation-tokens-summary", () => ({
   ),
 }));
 
-vi.mock("~/components/transaction-plan", () => ({
+vi.mock("~/components/transaction-plan/transaction-plan-viewer", () => ({
   TransactionPlanViewer: ({ state, showActions }: { state: ConsolidationState; showActions: boolean }) => (
     <div data-testid="transaction-plan-viewer" data-show-actions={showActions}>
       {state.id}
     </div>
   ),
-}));
-
-vi.mock("./manual-claim-dialog", () => ({
-  default: ({ children }: { children: React.ReactNode }) => <div data-testid="manual-claim-dialog">{children}</div>,
 }));
 
 // Mock UI components
@@ -87,6 +83,7 @@ vi.mock("~/components/ui/card", () => ({
   ),
   CardAction: ({ children }: { children: React.ReactNode }) => <div data-testid="card-action">{children}</div>,
   CardContent: ({ children }: { children: React.ReactNode }) => <div data-testid="card-content">{children}</div>,
+  CardFooter: ({ children }: { children: React.ReactNode }) => <div data-testid="card-footer">{children}</div>,
   CardHeader: ({ children }: { children: React.ReactNode }) => <div data-testid="card-header">{children}</div>,
   CardTitle: ({ children }: { children: React.ReactNode }) => <h3>{children}</h3>,
 }));
@@ -216,13 +213,6 @@ describe("History component - Empty state", () => {
     render(<History />);
 
     expect(screen.queryByText("Clear All")).not.toBeInTheDocument();
-  });
-
-  test("shows Manual CCTP Claim button when empty", () => {
-    render(<History />);
-
-    expect(screen.getByText("Manual CCTP Claim")).toBeInTheDocument();
-    expect(screen.getByTestId("manual-claim-dialog")).toBeInTheDocument();
   });
 });
 
@@ -375,15 +365,18 @@ describe("ConsolidationCard component", () => {
     expect(screen.getByTestId("chevron-down")).toBeInTheDocument();
   });
 
-  test("shows delete button", async () => {
+  test("shows delete button when expanded", async () => {
     const { useConsolidationRecords } = await import("~/hooks/use-consolidation-records");
     const mockConsolidation = createMockConsolidation();
 
     vi.mocked(useConsolidationRecords).mockReturnValue(createMockHookReturn([mockConsolidation]));
 
+    const user = userEvent.setup();
     render(<History />);
 
-    expect(screen.getByTestId("trash-icon")).toBeInTheDocument();
+    await user.click(screen.getByTestId("card"));
+
+    expect(await screen.findByTestId("trash-icon")).toBeInTheDocument();
   });
 });
 
@@ -412,7 +405,7 @@ describe("ConsolidationCard - Expand/Collapse", () => {
     const card = screen.getByTestId("card");
     await user.click(card);
 
-    expect(screen.getByTestId("consolidation-tokens-summary")).toBeInTheDocument();
+    expect(await screen.findByTestId("consolidation-tokens-summary")).toBeInTheDocument();
     expect(screen.getByText("Transaction Steps")).toBeInTheDocument();
     expect(screen.getByTestId("chevron-up")).toBeInTheDocument();
   });
@@ -430,7 +423,7 @@ describe("ConsolidationCard - Expand/Collapse", () => {
 
     // Expand by clicking the card
     await user.click(card);
-    expect(screen.getByTestId("consolidation-tokens-summary")).toBeInTheDocument();
+    expect(await screen.findByTestId("consolidation-tokens-summary")).toBeInTheDocument();
 
     // Collapse by clicking the chevron-up button (card body click is disabled when expanded)
     const chevronUpButton = screen.getByTestId("chevron-up").closest("button");
@@ -451,7 +444,7 @@ describe("ConsolidationCard - Expand/Collapse", () => {
     const card = screen.getByTestId("card");
     await user.click(card);
 
-    const summary = screen.getByTestId("consolidation-tokens-summary");
+    const summary = await screen.findByTestId("consolidation-tokens-summary");
     expect(summary).toHaveTextContent("test-123");
   });
 
@@ -467,7 +460,7 @@ describe("ConsolidationCard - Expand/Collapse", () => {
     const card = screen.getByTestId("card");
     await user.click(card);
 
-    const viewer = screen.getByTestId("transaction-plan-viewer");
+    const viewer = await screen.findByTestId("transaction-plan-viewer");
     expect(viewer).toHaveTextContent("test-456");
     expect(viewer).toHaveAttribute("data-show-actions", "false");
   });
@@ -483,7 +476,8 @@ describe("ConsolidationCard - Delete functionality", () => {
     const user = userEvent.setup();
     render(<History />);
 
-    const deleteButton = screen.getByTestId("trash-icon").closest("button");
+    await user.click(screen.getByTestId("card"));
+    const deleteButton = (await screen.findByTestId("trash-icon")).closest("button");
     if (!deleteButton) throw new Error("Delete button not found");
     await user.click(deleteButton);
 
@@ -500,9 +494,9 @@ describe("ConsolidationCard - Delete functionality", () => {
     const user = userEvent.setup();
     render(<History />);
 
-    // Open delete dialog
-    // Open delete dialog
-    const deleteButton = screen.getByTestId("trash-icon").closest("button");
+    // Expand the card, then open the delete dialog
+    await user.click(screen.getByTestId("card"));
+    const deleteButton = (await screen.findByTestId("trash-icon")).closest("button");
     if (!deleteButton) throw new Error("Delete button not found");
     await user.click(deleteButton);
 
@@ -526,9 +520,9 @@ describe("ConsolidationCard - Delete functionality", () => {
     const user = userEvent.setup();
     render(<History />);
 
-    // Open delete dialog
-    // Open delete dialog
-    const deleteButton = screen.getByTestId("trash-icon").closest("button");
+    // Expand the card, then open the delete dialog
+    await user.click(screen.getByTestId("card"));
+    const deleteButton = (await screen.findByTestId("trash-icon")).closest("button");
     if (!deleteButton) throw new Error("Delete button not found");
     await user.click(deleteButton);
 
@@ -640,13 +634,13 @@ describe("Multiple consolidations", () => {
 
     // Expand first card
     await user.click(cards[0]);
-    const summaries = screen.getAllByTestId("consolidation-tokens-summary");
+    const summaries = await screen.findAllByTestId("consolidation-tokens-summary");
     expect(summaries).toHaveLength(1);
     expect(summaries[0]).toHaveTextContent("card-1");
 
     // Expand second card
     await user.click(cards[1]);
-    const summariesAfter = screen.getAllByTestId("consolidation-tokens-summary");
+    const summariesAfter = await screen.findAllByTestId("consolidation-tokens-summary");
     expect(summariesAfter).toHaveLength(2);
   });
 

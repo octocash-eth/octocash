@@ -1,6 +1,5 @@
 import { isAddressEqual } from "viem";
 import { TokenCard } from "~/components/token";
-import { ScrollArea } from "~/components/ui/scroll-area";
 import type { ConsolidationState, DestinationToken, TokenAmount, TransactionStep } from "~/lib/types";
 
 /**
@@ -39,13 +38,11 @@ export function ConsolidationTokensSummary({ state }: ConsolidationTokensSummary
       {/* Source Tokens */}
       <div>
         <h4 className="text-sm font-medium mb-3 text-muted-foreground">Source Tokens</h4>
-        <ScrollArea className="max-h-[400px]">
-          <div className="space-y-2 pr-3">
-            {sourceTokensWithStatus.map(({ token, label }, idx) => (
-              <TokenCard key={`${token.token}-${token.chainId}-${idx}`} token={token} label={label} />
-            ))}
-          </div>
-        </ScrollArea>
+        <div className="max-h-[400px] overflow-y-auto space-y-2 pr-3">
+          {sourceTokensWithStatus.map(({ token, label }, idx) => (
+            <TokenCard key={`${token.token}-${token.chainId}-${idx}`} token={token} label={label} />
+          ))}
+        </div>
       </div>
 
       {/* Final Token(s) */}
@@ -53,13 +50,11 @@ export function ConsolidationTokensSummary({ state }: ConsolidationTokensSummary
         <h4 className="text-sm font-medium mb-3 text-muted-foreground">
           {finalTokens.length === 1 ? "Final Token" : "Final Tokens"}
         </h4>
-        <ScrollArea className="max-h-[400px]">
-          <div className="space-y-2 pr-3">
-            {finalTokens.map(({ token, label }, idx) => (
-              <TokenCard key={`${token.token}-${token.chainId}-${idx}`} token={token} label={label} />
-            ))}
-          </div>
-        </ScrollArea>
+        <div className="max-h-[400px] overflow-y-auto space-y-2 pr-3">
+          {finalTokens.map(({ token, label }, idx) => (
+            <TokenCard key={`${token.token}-${token.chainId}-${idx}`} token={token} label={label} />
+          ))}
+        </div>
       </div>
     </div>
   );
