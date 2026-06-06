@@ -1057,6 +1057,54 @@ describe("executeConsolidationPlan", () => {
     expect(finalState.results["attestation-1"].status).toBe("success"); // Not skipped - at least one input token has successful provenance
   });
 
+  test("skipping a swap does NOT skip a bridge that also carries independently-held USDC", async () => {
+    // Bridge combines the swap's USDC output with USDC the wallet already held.
+    // Skipping the swap must leave the bridge running on just the held USDC.
+    const swap: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 10,
+      inputTokens: [makeToken("0x6B175474E89094C44Da98b954EedeAC495271d0F" as Address, 1_000_000n, 10)],
+      outputToken: makeToken(USDC_ADDRESS, 1_000_000n, 10, { provenance: "swap-1" }),
+    };
+
+    const bridge: TransactionStep = {
+      id: "bridge-1",
+      type: "bridge",
+      status: "pending",
+      chainId: 10,
+      inputTokens: [
+        makeToken(USDC_ADDRESS, 1_000_000n, 10, { provenance: "swap-1" }), // produced by the swap
+        makeToken(USDC_ADDRESS, 500_000n, 10), // independently held, no provenance
+      ],
+      outputToken: makeToken(USDC_ADDRESS, 1_500_000n, 1, { provenance: "bridge-1" }),
+    };
+
+    mockState.plan = [swap, bridge];
+
+    // The swap fails on its first (and only) attempt.
+    vi.mocked(executeOdosSwap).mockRejectedValueOnce(new Error("Swap failed: insufficient liquidity"));
+
+    // Capture what the bridge actually burns so we can assert it only moved the
+    // independently-held USDC (not the missing swap output).
+    let burnedAmount: bigint | undefined;
+    vi.mocked(executeCCTPBurn).mockImplementationOnce(async (input) => {
+      burnedAmount = input.amount;
+      return ["0xburn", 10];
+    });
+
+    const { finalValue: finalState, skips } = await executeWithSkips(mockState, mockWalletClient);
+
+    // User skipped exactly one step (the failed swap).
+    expect(skips).toBe(1);
+    expect(finalState.results["swap-1"].status).toBe("skipped");
+
+    // The bridge survives the skipped swap and runs on the held USDC only.
+    expect(finalState.results["bridge-1"].status).toBe("success");
+    expect(burnedAmount).toBe(500_000n);
+  });
+
   test("attestation step forwards (received,total) progress via opts.onStepProgress", async () => {
     const bridge1: TransactionStep = {
       id: "bridge-1",

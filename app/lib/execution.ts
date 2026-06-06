@@ -168,6 +168,18 @@ export async function* executeConsolidationPlan(
       continue;
     }
 
+    // Partial-dependency pruning: drop inputs produced by failed/skipped steps
+    // so a step that still has usable inputs (independently-held funds or
+    // successfully-produced outputs) runs on only what remains, rather than
+    // over-counting a balance that no longer exists. `shouldSkipStep` above has
+    // already guaranteed at least one usable input survives.
+    const prunedStep = pruneUnusableInputs(workingState.plan[i], workingState.results);
+    if (prunedStep !== workingState.plan[i]) {
+      workingState.plan = [...workingState.plan];
+      workingState.plan[i] = prunedStep;
+      workingState.updatedAt = Date.now();
+    }
+
     // Refresh swap quote immediately before execution so the UI shows the
     // freshest amount (and any delta vs the previously displayed quote).
     // Skip when the quote was fetched within `SWAP_QUOTE_STALE_MS` to avoid
@@ -1104,21 +1116,48 @@ function getProvenanceSteps(step: TransactionStep): Set<string> {
 
 /**
  * Check if a step should be skipped due to failed dependencies (T015)
- * Uses input token provenance to determine dependencies
+ *
+ * A step is skipped only when EVERY one of its input tokens is unusable — i.e.
+ * produced by a failed/skipped step. An input keeps the step alive when it has
+ * no provenance (independently-held funds, e.g. USDC already on the chain) or
+ * when its provenance step succeeded.
+ *
+ * This matters when a step combines dependent and independent inputs — e.g. a
+ * bridge that carries both a swap's USDC output and USDC the wallet already
+ * held. Skipping the swap must NOT skip the bridge; the bridge should still
+ * move the independently-held USDC. {@link pruneUnusableInputs} then drops the
+ * unusable inputs so the step only processes what actually exists.
+ *
  * @param step - Transaction step
  * @param results - Map of step results
  * @returns True if step should be skipped
  */
 export function shouldSkipStep(step: TransactionStep, results: Record<string, StepResult>): boolean {
-  const provenanceSteps = getProvenanceSteps(step);
+  // No provenance on any input → fully independent funds, never auto-skipped.
+  if (getProvenanceSteps(step).size === 0) return false;
 
-  if (provenanceSteps.size === 0) return false; // No dependencies
-
-  // Skip if ALL provenance steps failed/skipped
-  return Array.from(provenanceSteps).every((stepId) => {
-    const result = results[stepId];
+  return step.inputTokens.every((input) => {
+    if (!input.provenance) return false; // independently-held funds remain usable
+    const result = results[input.provenance];
     return result?.status === "failed" || result?.status === "skipped";
   });
+}
+
+/**
+ * Drops input tokens produced by a failed/skipped step so a partially-fed step
+ * executes on only the funds that actually exist. Returns the original step
+ * when nothing is pruned (or when pruning would leave no inputs — that case is
+ * already handled upstream by {@link shouldSkipStep}, which skips the step).
+ */
+function pruneUnusableInputs(step: TransactionStep, results: Record<string, StepResult>): TransactionStep {
+  const usable = step.inputTokens.filter((input) => {
+    if (!input.provenance) return true;
+    const result = results[input.provenance];
+    return result?.status !== "failed" && result?.status !== "skipped";
+  });
+
+  if (usable.length === step.inputTokens.length || usable.length === 0) return step;
+  return { ...step, inputTokens: usable as [TokenAmount, ...TokenAmount[]] };
 }
 
 /**
