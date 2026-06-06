@@ -73,18 +73,21 @@ export function TransactionPlanExecutor({
   const showStatusAlert = isCompleted || state.status === "partial" || isPaused;
 
   return (
-    <div className="space-y-3 sm:space-y-4">
-      {/* Transaction Cards Preview */}
-      <PlanList state={state} liveProgress={liveProgress} />
+    <div className="flex flex-col gap-3 sm:gap-4 min-h-0 max-h-[calc(100dvh-16rem)] sm:max-h-[calc(100dvh-21rem)]">
+      {/* Transaction Cards Preview — the only scrollable region; shrinks to keep
+          the status alert and actions fixed and visible. */}
+      <PlanList state={state} liveProgress={liveProgress} maxHeight="25rem" className="min-h-0" />
 
       {/* Execution Status Alerts */}
       {showStatusAlert && (
-        <ExecutionStatusAlert status={state.status} error={state.plan[state.currentStepIndex]?.error} />
+        <div className="shrink-0">
+          <ExecutionStatusAlert status={state.status} error={state.plan[state.currentStepIndex]?.error} />
+        </div>
       )}
 
       {/* Action Buttons */}
       {showActions && (
-        <div className="pt-3 sm:pt-4 flex gap-2">
+        <div className="shrink-0 pt-3 sm:pt-4 flex gap-2">
           {isPaused ? (
             <PausedActions onSkip={skipFailedStep} onRetry={retryFailedStep} disabled={isExecuting} />
           ) : (
