@@ -182,7 +182,6 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
         results: remainingResults,
         status: "ready",
         currentStepIndex: stepIndex !== -1 ? stepIndex : state.currentStepIndex,
-        hasSubsequentExecution: false,
         updatedAt: Date.now(),
       };
 
@@ -213,8 +212,10 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
             skipReason: "Skipped by user after failure",
           },
         },
+        // Skip exactly one failed step: resume just after it. The executor
+        // always pauses on the next failure, so we never run the remainder of
+        // the plan unattended.
         currentStepIndex: stepIndex !== -1 ? stepIndex + 1 : state.currentStepIndex,
-        hasSubsequentExecution: true,
         status: "ready",
         updatedAt: Date.now(),
       };

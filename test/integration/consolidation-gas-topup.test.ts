@@ -237,9 +237,7 @@ describe("Gas Top-Up Integration: plan then execute", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
+      updatedAt: Date.now(),    };
 
     const { finalValue: executedState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
@@ -358,9 +356,7 @@ describe("Gas Top-Up Integration: plan then execute", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
+      updatedAt: Date.now(),    };
 
     const { finalValue: executedState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
@@ -443,9 +439,7 @@ describe("Gas Top-Up Integration: plan then execute", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
+      updatedAt: Date.now(),    };
 
     const events: unknown[] = [];
     const { finalValue: executedState } = await consumeGenerator(

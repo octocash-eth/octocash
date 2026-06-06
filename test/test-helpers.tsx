@@ -1,6 +1,7 @@
 import { render, type RenderOptions } from "@testing-library/react";
 import type { ReactElement } from "react";
-import type { Address } from "viem";
+import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
+import { executeConsolidationPlan } from "../app/lib/execution";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "../app/lib/types";
 import { TokenPriceProvider } from "~/context/token-price-provider";
 import { WalletProvider } from "~/context/wallet-provider";
@@ -131,7 +132,6 @@ export const makeState = (overrides: MakeStateOverrides): ConsolidationState => 
     results,
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    hasSubsequentExecution: false,
     ...overrides,
   };
 };
@@ -166,4 +166,56 @@ export async function consumeGenerator<TYield>(
   }
 
   return { finalValue, values };
+}
+
+/**
+ * Drives `executeConsolidationPlan` the way the UI does when the user keeps
+ * clicking "Skip & Continue": run until the plan settles or pauses on a
+ * failure; on a pause, mark the failed step `skipped`, resume just after it,
+ * and re-run. Returns the terminal state (`completed` / `partial`).
+ *
+ * This mirrors `useConsolidationExecution.skipStep` and lets tests assert the
+ * skip-one-at-a-time behavior without depending on the removed
+ * `hasSubsequentExecution` "run unattended" flag.
+ */
+export async function executeWithSkips(
+  state: ConsolidationState,
+  walletClient: WalletClient<HttpTransport, Chain, Account>,
+): Promise<{ finalValue: ConsolidationState; skips: number }> {
+  let current = state;
+  let skips = 0;
+
+  // Bound the loop: at most one skip per step, plus a final settling pass.
+  for (let i = 0; i <= current.plan.length; i++) {
+    const { finalValue } = await consumeGenerator(executeConsolidationPlan(current, walletClient));
+    if (finalValue.status !== "paused") {
+      return { finalValue, skips };
+    }
+
+    const failedIndex = finalValue.plan.findIndex((s) => s.status === "failed");
+    if (failedIndex === -1) {
+      return { finalValue, skips };
+    }
+
+    const failed = finalValue.plan[failedIndex];
+    skips += 1;
+    current = {
+      ...finalValue,
+      plan: finalValue.plan.map((s) => (s.id === failed.id ? { ...s, status: "skipped" as const } : s)),
+      results: {
+        ...finalValue.results,
+        [failed.id]: {
+          stepId: failed.id,
+          chainId: failed.chainId,
+          status: "skipped",
+          skipReason: "Skipped by user after failure",
+        },
+      },
+      currentStepIndex: failedIndex + 1,
+      status: "ready",
+      updatedAt: Date.now(),
+    };
+  }
+
+  throw new Error("executeWithSkips did not terminate");
 }

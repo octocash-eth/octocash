@@ -259,7 +259,6 @@ const happyPathState: ConsolidationState = {
   },
   createdAt: Date.now(),
   updatedAt: Date.now(),
-  hasSubsequentExecution: false,
 };
 
 // Scenario 2: Partial Dependency Adaptation - One swap fails
@@ -510,7 +509,6 @@ const partialAdaptationState: ConsolidationState = {
   },
   createdAt: Date.now(),
   updatedAt: Date.now(),
-  hasSubsequentExecution: true,
 };
 
 // Scenario 3: Paused State - Mid-execution failure
@@ -643,7 +641,6 @@ const pausedState: ConsolidationState = {
   },
   createdAt: Date.now(),
   updatedAt: Date.now(),
-  hasSubsequentExecution: false,
 };
 
 // Scenario 4: Simple Same-Chain Swap
@@ -703,7 +700,6 @@ const simpleSwapState: ConsolidationState = {
   },
   createdAt: Date.now(),
   updatedAt: Date.now(),
-  hasSubsequentExecution: false,
 };
 
 // Scenario 5: Executing State
@@ -827,7 +823,6 @@ const executingState: ConsolidationState = {
   },
   createdAt: Date.now(),
   updatedAt: Date.now(),
-  hasSubsequentExecution: false,
 };
 
 const mockScenarios = [

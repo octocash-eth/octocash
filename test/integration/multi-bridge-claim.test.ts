@@ -134,9 +134,7 @@ describe("Scenario: Multi-Bridge Claim Amount Aggregation", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
+      updatedAt: Date.now(),    };
 
     const { finalValue: executedState, values: states } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 

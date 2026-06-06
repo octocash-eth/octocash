@@ -171,9 +171,7 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
+      updatedAt: Date.now(),    };
 
     const { finalValue: executedState, values: states } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
@@ -246,9 +244,7 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
+      updatedAt: Date.now(),    };
 
     const { finalValue: executedState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
@@ -299,9 +295,7 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
+      updatedAt: Date.now(),    };
 
     const { values: states } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 

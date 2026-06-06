@@ -160,9 +160,6 @@ export interface ConsolidationState {
 
   createdAt: number; // Timestamp
   updatedAt: number; // Timestamp
-
-  // Retry tracking
-  hasSubsequentExecution: boolean; // True if user continued past failure
 }
 
 // ============================================================================

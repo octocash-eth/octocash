@@ -128,9 +128,7 @@ describe("Scenario 8: Browser Recovery", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
+      updatedAt: Date.now(),    };
 
     // Start execution (simulate completing 2 steps, then browser closes)
     const { finalValue: partialState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient), 2);
@@ -198,9 +196,7 @@ describe("Scenario 8: Browser Recovery", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false, // Retry is allowed
-    };
+      updatedAt: Date.now(),    };
 
     // Simulate browser close and reopen - load state
     const recoveredState: ConsolidationState = parse(stringify(state));
@@ -218,9 +214,6 @@ describe("Scenario 8: Browser Recovery", () => {
     expect(recoveredState!.plan[0].status).toBe("success");
     expect(recoveredState!.plan[1].status).toBe("failed");
     expect(recoveredState!.plan[2].status).toBe("pending");
-
-    // Verify retry is allowed
-    expect(recoveredState!.hasSubsequentExecution).toBe(false);
 
     // User clicks retry - execution resumes
     const { finalValue: resumedState } = await consumeGenerator(executeConsolidationPlan(recoveredState!, mockWalletClient));
@@ -258,9 +251,7 @@ describe("Scenario 8: Browser Recovery", () => {
       sourceTokens: sourceTokens1,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
+      updatedAt: Date.now(),    };
 
     const state2: ConsolidationState = {
       id: "consolidation-2",
@@ -271,9 +262,7 @@ describe("Scenario 8: Browser Recovery", () => {
       sourceTokens: sourceTokens2,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
+      updatedAt: Date.now(),    };
 
     
     // Simulate browser close and reopen - load state
@@ -323,9 +312,7 @@ describe("Scenario 8: Browser Recovery", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
+      updatedAt: Date.now(),    };
 
     const loaded: ConsolidationState = parse(stringify(incompleteState));
 
@@ -376,9 +363,7 @@ describe("Scenario 8: Browser Recovery", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),
-      hasSubsequentExecution: false,
-    };
+      updatedAt: Date.now(),    };
 
     const loaded: ConsolidationState = parse(stringify(completedState));
     expect(loaded).toBeDefined();
@@ -432,9 +417,7 @@ describe("Scenario 8: Browser Recovery", () => {
       sourceTokens,
       destinationToken,
       createdAt: 1234567890,
-      updatedAt: 1234567900,
-      hasSubsequentExecution: true,
-    };
+      updatedAt: 1234567900,    };
 
     // Simulate browser close and reopen - load state
     const loaded: ConsolidationState = parse(stringify(state));
@@ -443,7 +426,6 @@ describe("Scenario 8: Browser Recovery", () => {
     expect(loaded!.id).toBe(state.id);
     expect(loaded!.currentStepIndex).toBe(state.currentStepIndex);
     expect(loaded!.status).toBe(state.status);
-    expect(loaded!.hasSubsequentExecution).toBe(state.hasSubsequentExecution);
     expect(loaded!.createdAt).toBe(state.createdAt);
     expect(loaded!.updatedAt).toBe(state.updatedAt);
 

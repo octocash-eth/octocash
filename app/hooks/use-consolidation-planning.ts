@@ -56,7 +56,6 @@ export function useConsolidationPlanning({
       destinationToken,
       createdAt: timestamp,
       updatedAt: timestamp,
-      hasSubsequentExecution: false,
     };
   }, [plan, planId, sourceTokens, destinationToken]);
 

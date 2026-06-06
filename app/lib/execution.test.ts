@@ -1,6 +1,6 @@
 import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { consumeGenerator, makeState, makeStep, makeToken, WALLET } from "../../test/test-helpers";
+import { consumeGenerator, executeWithSkips, makeState, makeStep, makeToken, WALLET } from "../../test/test-helpers";
 import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
 
 // Mock dependencies BEFORE imports
@@ -148,7 +148,6 @@ describe("executeConsolidationPlan", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
   });
 
@@ -749,7 +748,6 @@ describe("executeConsolidationPlan", () => {
     mockState.plan = [step1, step2];
     mockState.status = "paused";
     mockState.currentStepIndex = 0;
-    mockState.hasSubsequentExecution = true; // User clicked continue
     mockState.results["step-1"] = { stepId: "step-1", status: "failed", chainId: 1 };
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
@@ -1015,7 +1013,7 @@ describe("executeConsolidationPlan", () => {
     expect(finalState.plan[1].inputTokens[0].amount).toBe(980000n);
   });
 
-  test("partial dependency adaptation - attestation adapts when some bridges fail", async () => {
+  test("partial dependency adaptation - attestation adapts when a failed bridge is skipped", async () => {
     const bridge1: TransactionStep = {
       id: "bridge-1",
       type: "bridge",
@@ -1044,16 +1042,18 @@ describe("executeConsolidationPlan", () => {
     };
 
     mockState.plan = [bridge1, bridge2, attestation];
-    mockState.hasSubsequentExecution = true;
 
     vi.mocked(executeCCTPBurn)
       .mockResolvedValueOnce(["0xabc", 137]) // Bridge 1 succeeds
       .mockRejectedValueOnce(new Error("Bridge failed")); // Bridge 2 fails
 
-    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+    // Bridge 2 fails → executor pauses; user skips it once and execution
+    // resumes, letting the attestation adapt to only the successful bridge.
+    const { finalValue: finalState, skips } = await executeWithSkips(mockState, mockWalletClient);
 
+    expect(skips).toBe(1);
     expect(finalState.results["bridge-1"].status).toBe("success");
-    expect(finalState.results["bridge-2"].status).toBe("failed");
+    expect(finalState.results["bridge-2"].status).toBe("skipped");
     expect(finalState.results["attestation-1"].status).toBe("success"); // Not skipped - at least one input token has successful provenance
   });
 
@@ -1084,8 +1084,6 @@ describe("executeConsolidationPlan", () => {
     };
 
     mockState.plan = [bridge1, bridge2, attestation];
-    mockState.hasSubsequentExecution = true;
-
     vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xb1", 137]).mockResolvedValueOnce(["0xb2", 10]);
 
     // Two source chains → 2 attestations; emit the monotonic count.
@@ -1484,7 +1482,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(DAI_ADDRESS, 0n, 10),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     // Step 1 swap execution
@@ -1542,7 +1539,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     // Step 1 completes with 2.5 USDC instead of 2 USDC
@@ -1596,7 +1592,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     // Step 1 completes with 2.3 USDC
@@ -1644,7 +1639,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     // Step 1 completes with different amount
@@ -1689,7 +1683,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xburn", 1]);
@@ -1742,7 +1735,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     vi.mocked(executeOdosSwap).mockResolvedValueOnce({
@@ -1790,7 +1782,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     vi.mocked(executeOdosSwap).mockResolvedValueOnce({
@@ -1849,7 +1840,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     vi.mocked(executeOdosSwap).mockResolvedValueOnce({
@@ -1918,7 +1908,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10, { walletAddress: WALLET_2 }),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     // Mock swap1 to produce actual amount 105 USDC (instead of 100)
@@ -2019,7 +2008,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     // Mock swap1 to produce actual amount 784.5 USDC
@@ -2083,7 +2071,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     vi.mocked(executeOdosSwap).mockResolvedValueOnce({
@@ -2134,7 +2121,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(DAI_ADDRESS, 0n, 1),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
@@ -2173,7 +2159,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xburn1", 1]);
@@ -2214,7 +2199,6 @@ describe("recalculatePlan - comprehensive coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
@@ -2397,7 +2381,6 @@ describe("Additional edge cases for complete coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
@@ -2433,7 +2416,6 @@ describe("Additional edge cases for complete coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
@@ -2471,7 +2453,6 @@ describe("Additional edge cases for complete coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
@@ -2504,7 +2485,6 @@ describe("Additional edge cases for complete coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
@@ -2551,7 +2531,6 @@ describe("Additional edge cases for complete coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xbridge", 1]);
@@ -2608,7 +2587,6 @@ describe("Additional edge cases for complete coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: true,
     };
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
@@ -2659,7 +2637,6 @@ describe("Additional edge cases for complete coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: false,
     };
 
     vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xbridge", 1]);
@@ -2711,7 +2688,6 @@ describe("Additional edge cases for complete coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      hasSubsequentExecution: true,
     };
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
@@ -2958,7 +2934,6 @@ describe("Additional edge cases for complete coverage", () => {
         destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        hasSubsequentExecution: false,
       };
     });
 
@@ -3263,7 +3238,6 @@ describe("validateInputBalances", () => {
     destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    hasSubsequentExecution: false,
   });
 
   beforeEach(() => {

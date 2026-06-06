@@ -179,7 +179,6 @@ describe("useConsolidationPlanning", () => {
       expect(result.current.state?.results).toEqual({});
       expect(result.current.state?.sourceTokens).toEqual(sourceTokens);
       expect(result.current.state?.destinationToken).toEqual(destinationToken);
-      expect(result.current.state?.hasSubsequentExecution).toBe(false);
     });
 
     test("sets isPlanning to true during planning", async () => {

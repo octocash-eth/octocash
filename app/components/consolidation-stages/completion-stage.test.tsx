@@ -132,7 +132,6 @@ describe("CompletionStage", () => {
         makeToken(WBTC_ADDRESS, 100000n, 10, { symbol: "WBTC", decimals: 8 }),
       ],
       destinationToken: makeToken(USDC_ETHEREUM, 0n, 10),
-      hasSubsequentExecution: true,
     });
 
     render(<CompletionStage state={state} onClose={vi.fn()} />);
@@ -191,7 +190,6 @@ describe("CompletionStage", () => {
         makeToken(WBTC_ADDRESS, 100000n, 10, { symbol: "WBTC", decimals: 8 }),
       ],
       destinationToken: makeToken(USDC_ETHEREUM, 0n, 10),
-      hasSubsequentExecution: true,
     });
 
     render(<CompletionStage state={state} onClose={vi.fn()} />);
@@ -222,7 +220,6 @@ describe("CompletionStage", () => {
       plan: [step1, step2],
       sourceTokens: [makeToken(DAI_ADDRESS, 1000000n, 1, { symbol: "DAI", decimals: 18 })],
       destinationToken: makeToken(USDC_ETHEREUM, 0n, 10),
-      hasSubsequentExecution: true,
     });
 
     render(<CompletionStage state={state} onClose={vi.fn()} />);
@@ -276,7 +273,6 @@ describe("CompletionStage", () => {
       plan: [step1, step2, step3, step4, step5],
       sourceTokens: [makeToken(DAI_ADDRESS, 1000000n, 1, { symbol: "DAI", decimals: 18 })],
       destinationToken: makeToken(WBTC_ADDRESS, 0n, 10, { symbol: "WBTC", decimals: 8 }),
-      hasSubsequentExecution: true,
     });
 
     render(<CompletionStage state={state} onClose={vi.fn()} />);
@@ -327,7 +323,6 @@ describe("CompletionStage", () => {
       plan: [step1, step2, step3, step4],
       sourceTokens: [makeToken(USDC_ETHEREUM, 1000000n, 42161)],
       destinationToken: makeToken(WBTC_ADDRESS, 0n, 137, { symbol: "WBTC", decimals: 8 }),
-      hasSubsequentExecution: true,
     });
 
     render(<CompletionStage state={state} onClose={vi.fn()} />);

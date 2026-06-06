@@ -69,7 +69,6 @@ describe("useConsolidationExecution", () => {
     },
     createdAt: 1000000,
     updatedAt: 1000000,
-    hasSubsequentExecution: false,
     ...overrides,
   });
 

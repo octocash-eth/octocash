@@ -131,8 +131,6 @@ export async function* executeConsolidationPlan(
   // Yield initial state change
   yield structuredClone(workingState);
 
-  let pausedDueToFailure = false;
-
   // Execute steps in order
   for (let i = workingState.currentStepIndex; i < workingState.plan.length; i++) {
     const step = workingState.plan[i];
@@ -260,7 +258,6 @@ export async function* executeConsolidationPlan(
         };
         workingState.plan = [...workingState.plan];
         workingState.plan[i] = failedStep;
-        pausedDueToFailure = true;
         workingState.status = "paused";
         workingState.currentStepIndex = i;
         workingState.updatedAt = Date.now();
@@ -349,35 +346,30 @@ export async function* executeConsolidationPlan(
       workingState.plan[i] = failedStep;
       workingState.updatedAt = Date.now();
 
-      // If hasSubsequentExecution is false, pause for retry
-      if (!workingState.hasSubsequentExecution) {
-        pausedDueToFailure = true;
-        workingState.status = "paused";
-        workingState.currentStepIndex = i;
+      // Always pause on failure so the user decides per step (retry, or skip
+      // exactly this one and resume). Steps whose dependencies were skipped are
+      // auto-skipped at the top of the loop on the next run — but we never run
+      // the remainder of the plan unattended after a failure.
+      workingState.status = "paused";
+      workingState.currentStepIndex = i;
 
-        // Yield paused state and return
-        yield structuredClone(workingState);
-        return;
-      }
-
-      // Otherwise, yield state and continue to next step
+      // Yield paused state and return
       yield structuredClone(workingState);
+      return;
     }
   }
 
-  // All steps completed (only if we didn't pause)
-  if (!pausedDueToFailure) {
-    const hasSkipped = Object.values(workingState.results).some((r) => r.status === "skipped");
-    const hasFailed = Object.values(workingState.results).some((r) => r.status === "failed");
-    const finalStatus = hasSkipped || hasFailed ? ("partial" as const) : ("completed" as const);
-    workingState.status = finalStatus;
-    workingState.currentStepIndex = workingState.plan.length;
-    workingState.updatedAt = Date.now();
+  // All steps completed without an unhandled failure (failures pause + return
+  // above). A plan that reaches here may still contain skipped steps.
+  const hasSkipped = Object.values(workingState.results).some((r) => r.status === "skipped");
+  const hasFailed = Object.values(workingState.results).some((r) => r.status === "failed");
+  const finalStatus = hasSkipped || hasFailed ? ("partial" as const) : ("completed" as const);
+  workingState.status = finalStatus;
+  workingState.currentStepIndex = workingState.plan.length;
+  workingState.updatedAt = Date.now();
 
-    // Yield final state and return
-    yield structuredClone(workingState);
-    return;
-  }
+  // Yield final state and return
+  yield structuredClone(workingState);
 }
 
 /**
