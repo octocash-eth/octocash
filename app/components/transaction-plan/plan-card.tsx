@@ -1,4 +1,4 @@
-import { Check, Circle, ExternalLink, Fuel, Loader2, X } from "lucide-react";
+import { Check, Circle, ExternalLink, Forward, Fuel, Loader2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Address } from "viem";
 import { formatUnits, zeroAddress } from "viem";
@@ -372,6 +372,7 @@ export function PlanCard({ step, result, stepNumber, progress }: PlanCardProps) 
   const isExecuting = step.status === "executing";
   const isSuccess = step.status === "success";
   const isFailed = step.status === "failed";
+  const isSkipped = step.status === "skipped";
 
   return (
     <div className="flex items-center justify-between py-1.5 px-2 sm:py-2 sm:px-3 rounded transition-colors hover:bg-muted/60 dark:hover:bg-muted/30">
@@ -390,6 +391,8 @@ export function PlanCard({ step, result, stepNumber, progress }: PlanCardProps) 
           <Check className="w-5 h-5 text-green-500 shrink-0" />
         ) : isFailed ? (
           <X className="w-5 h-5 text-red-500 shrink-0" />
+        ) : isSkipped ? (
+          <Forward className="w-5 h-5 text-muted-foreground shrink-0" />
         ) : null}
 
         {/* Action description + inline transient wait status */}
@@ -421,6 +424,11 @@ export function PlanCard({ step, result, stepNumber, progress }: PlanCardProps) 
             title={step.error ? `${step.error.title}. ${step.error.message}` : undefined}
           >
             Failed
+          </span>
+        )}
+        {isSkipped && (
+          <span className="text-sm font-medium text-muted-foreground" title={result?.skipReason}>
+            Skipped
           </span>
         )}
       </div>
