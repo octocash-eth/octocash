@@ -1,5 +1,5 @@
-import { render } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { render, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { TokenIcon } from "./token-icon";
 
 describe("TokenIcon", () => {
@@ -246,6 +246,97 @@ describe("TokenIcon", () => {
         const avatar = container.querySelector('[data-slot="avatar"]');
         expect(avatar).toBeInTheDocument();
       });
+    });
+  });
+});
+
+/**
+ * Stubs the global `Image` so Radix's <AvatarImage> immediately resolves to
+ * "loaded" (and therefore renders the underlying <img>), and records the last
+ * `src` that gets requested.
+ */
+class MockImage {
+  complete = false;
+  naturalWidth = 0;
+  referrerPolicy = "";
+  crossOrigin: string | null = null;
+  #listeners: Record<string, Set<() => void>> = {};
+  #src = "";
+
+  addEventListener(type: string, cb: () => void) {
+    const set = this.#listeners[type] ?? new Set();
+    set.add(cb);
+    this.#listeners[type] = set;
+  }
+
+  removeEventListener(type: string, cb: () => void) {
+    this.#listeners[type]?.delete(cb);
+  }
+
+  set src(value: string) {
+    this.#src = value;
+    this.complete = true;
+    this.naturalWidth = 1;
+    queueMicrotask(() => {
+      for (const cb of this.#listeners.load ?? []) cb();
+    });
+  }
+
+  get src() {
+    return this.#src;
+  }
+}
+
+describe("TokenIcon automatic asset variant", () => {
+  const ICON_URL = "https://assets.octo.cash/token/1/0xabc";
+  const originalClientWidth = Object.getOwnPropertyDescriptor(Element.prototype, "clientWidth");
+
+  function setRenderedWidth(width: number) {
+    Object.defineProperty(Element.prototype, "clientWidth", { configurable: true, get: () => width });
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("Image", MockImage);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (originalClientWidth) {
+      Object.defineProperty(Element.prototype, "clientWidth", originalClientWidth);
+    } else {
+      delete (Element.prototype as { clientWidth?: number }).clientWidth;
+    }
+  });
+
+  async function renderedSrc(width: number) {
+    setRenderedWidth(width);
+    const { container } = render(<TokenIcon token="USDC" iconUrl={ICON_URL} />);
+    let img: HTMLImageElement | null = null;
+    await waitFor(() => {
+      img = container.querySelector("img");
+      expect(img).toBeInTheDocument();
+    });
+    return img?.getAttribute("src");
+  }
+
+  test("keeps the default (thumb) url for small icons", async () => {
+    // size-4/size-5 desktop icons (~16-20px) stay on the proxy default.
+    expect(await renderedSrc(16)).toBe(ICON_URL);
+  });
+
+  test("requests ?size=small for a 44px (mobile list) icon", async () => {
+    expect(await renderedSrc(44)).toBe(`${ICON_URL}?size=small`);
+  });
+
+  test("requests ?size=large for an oversized icon", async () => {
+    expect(await renderedSrc(200)).toBe(`${ICON_URL}?size=large`);
+  });
+
+  test("an explicit size prop overrides the measured size", async () => {
+    setRenderedWidth(44);
+    const { container } = render(<TokenIcon token="USDC" iconUrl={ICON_URL} size="large" />);
+    await waitFor(() => {
+      expect(container.querySelector("img")).toHaveAttribute("src", `${ICON_URL}?size=large`);
     });
   });
 });

@@ -104,11 +104,16 @@ function TokenDisplayRoot({
 // Icon Component
 interface TokenDisplayIconProps {
   className?: string;
+  /**
+   * Force a specific asset variant. When omitted, `TokenIcon` derives the
+   * resolution automatically from the rendered size.
+   */
+  size?: "thumb" | "small" | "large";
 }
 
-function TokenDisplayIcon({ className }: TokenDisplayIconProps) {
+function TokenDisplayIcon({ className, size }: TokenDisplayIconProps) {
   const { symbol, iconUrl } = useTokenDisplay();
-  return <TokenIcon token={symbol} iconUrl={iconUrl} className={className} />;
+  return <TokenIcon token={symbol} iconUrl={iconUrl} size={size} className={className} />;
 }
 
 // Symbol Component
