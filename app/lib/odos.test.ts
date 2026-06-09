@@ -264,7 +264,7 @@ describe("odos", () => {
 
       expect(result).toEqual({
         ...outputToken,
-        amount: 2997000n, // 3000000n - 0.1% referral fee
+        amount: 3000000n, // outAmounts is already net of the referral fee
       });
     });
 
@@ -281,7 +281,7 @@ describe("odos", () => {
 
       expect(result).toEqual({
         ...outputToken,
-        amount: 2997000n, // 3000000n - 0.1% referral fee
+        amount: 3000000n, // outAmounts is already net of the referral fee
       });
     });
 

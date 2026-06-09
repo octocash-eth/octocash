@@ -1,11 +1,10 @@
 import { getAddress } from "viem";
 
-const OCTOCASH_REFERRAL_CODE = 3508502349;
-const OCTOCASH_REFERRAL_FEE = 1000000000000000; // 0.1%
-const OCTOCASH_FEE_BENEFICIARY = "0x6b3CffBfBeba292b1E588DA438d5D172Ee89387D";
+/**
+ * Odos splits the fee 80/20 with the recipient.
+ * See https://docs.odos.xyz/home/api-monetization.
+ */
+export const OCTOCASH_REFERRAL_FEE = 0.001;
 
-export const OCTOCASH_REFERRAL_INFO = {
-  code: BigInt(OCTOCASH_REFERRAL_CODE),
-  fee: BigInt(OCTOCASH_REFERRAL_FEE),
-  feeRecipient: getAddress(OCTOCASH_FEE_BENEFICIARY),
-};
+/** Checksummed recipient for the Odos `referralFeeRecipient` quote param. */
+export const OCTOCASH_FEE_RECIPIENT = getAddress("0x6b3CffBfBeba292b1E588DA438d5D172Ee89387D");
