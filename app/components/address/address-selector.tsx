@@ -4,6 +4,7 @@ import type { Address } from "viem";
 import { getAddress, isAddress } from "viem";
 import { normalize } from "viem/ens";
 import { usePublicClient } from "wagmi";
+import { isRailgunAddress } from "~/lib/railgun";
 import { Combobox, type ComboboxOption } from "../combobox";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "./address-display";
 
@@ -97,6 +98,8 @@ interface AddressSelectorProps {
   searchPlaceholder?: string;
   disabled?: boolean;
   chainId?: number;
+  /** Also accept pasted Railgun private addresses (0zk...). */
+  allowRailgun?: boolean;
 }
 
 export function AddressSelector({
@@ -107,6 +110,7 @@ export function AddressSelector({
   searchPlaceholder = "Select or paste an address",
   disabled,
   chainId,
+  allowRailgun = false,
 }: AddressSelectorProps) {
   // For ENS resolution
   const mainnetPublicClient = usePublicClient({
@@ -156,10 +160,14 @@ export function AddressSelector({
       });
       if (exists) return [false, "Already in the list"];
 
-      if (!looksLikeEns(s) && !isAddress(s)) return [false, `"${s}" is not a valid address/ENS`];
+      if (allowRailgun && isRailgunAddress(s)) return [true, ""];
+
+      if (!looksLikeEns(s) && !isAddress(s)) {
+        return [false, allowRailgun ? `"${s}" is not a valid address/ENS/0zk` : `"${s}" is not a valid address/ENS`];
+      }
       return [true, ""];
     },
-    [enrichedOptions],
+    [enrichedOptions, allowRailgun],
   );
 
   // Add custom option if it doesn't already exist
@@ -170,6 +178,9 @@ export function AddressSelector({
   // Resolve any user input to a formatted 'address:ensName' or null if invalid/unresolvable
   const resolveToFormattedValue = React.useCallback(
     async (input: string): Promise<string | null> => {
+      // Railgun 0zk addresses: no checksumming, no ENS — use verbatim.
+      if (allowRailgun && isRailgunAddress(input)) return input;
+
       if (!mainnetPublicClient) return null;
 
       // ENS-like input
@@ -189,7 +200,7 @@ export function AddressSelector({
       const ens = await mainnetPublicClient.getEnsName({ address }).catch(() => null);
       return formatAddressValue(address, ens || undefined);
     },
-    [mainnetPublicClient],
+    [mainnetPublicClient, allowRailgun],
   );
 
   // Handle address label display

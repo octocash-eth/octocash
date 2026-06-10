@@ -35,5 +35,5 @@ const IconLinkButton = React.forwardRef<HTMLButtonElement, IconLinkButtonProps>(
 
 IconLinkButton.displayName = "IconLinkButton";
 
-export { IconLinkButton };
 export type { IconLinkButtonProps };
+export { IconLinkButton };

@@ -279,12 +279,12 @@ const TokenDisplayLink = React.forwardRef<HTMLButtonElement, TokenDisplayLinkPro
 TokenDisplayLink.displayName = "TokenDisplayLink";
 
 export {
-  TokenDisplayRoot,
-  TokenDisplayIcon,
-  TokenDisplaySymbol,
-  TokenDisplayName,
   TokenDisplayAmount,
-  TokenDisplayFiat,
   TokenDisplayCopy,
+  TokenDisplayFiat,
+  TokenDisplayIcon,
   TokenDisplayLink,
+  TokenDisplayName,
+  TokenDisplayRoot,
+  TokenDisplaySymbol,
 };

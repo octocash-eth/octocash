@@ -21,8 +21,11 @@ global.MutationObserver = class MutationObserver {
   disconnect = vi.fn();
 } as unknown as typeof MutationObserver;
 
-// Mock scrollIntoView for cmdk/Combobox tests
-Element.prototype.scrollIntoView = vi.fn();
+// Mock scrollIntoView for cmdk/Combobox tests (skipped for node-environment
+// test files, which have no DOM)
+if (typeof Element !== "undefined") {
+  Element.prototype.scrollIntoView = vi.fn();
+}
 
 // Mock console.log, console.warn and console.error for test output cleanliness
 beforeAll(() => {

@@ -17,4 +17,4 @@ export {
 } from "./token-display";
 export { TokenIcon } from "./token-icon";
 export { TokenLabel } from "./token-label";
-export { getDefaultTokenOptions, type TokenData, TokenSelector } from "./token-selector";
+export { formatTokenValue, getDefaultTokenOptions, type TokenData, TokenSelector } from "./token-selector";

@@ -33,3 +33,15 @@ export const ETH: Record<number, `0x${string}`> = {
 export const POL: Record<number, `0x${string}`> = {
   [polygon.id]: "0x0000000000000000000000000000000000000000",
 };
+
+/**
+ * Canonical Wrapped Ether (ERC20) per chain. Unlike the `ETH` map above —
+ * which points at the native zero-address on most chains — these are always
+ * ERC20 contracts, usable wherever a real token contract is required
+ * (e.g. Railgun shielding only accepts ERC20s).
+ */
+export const WETH: Record<number, `0x${string}`> = {
+  [mainnet.id]: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+  [arbitrum.id]: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+  [polygon.id]: "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
+};

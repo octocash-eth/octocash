@@ -75,8 +75,8 @@ function DataGridPagination(props: DataGridPaginationProps) {
 export {
   DataGridPagination,
   DataGridPaginationNav,
-  DataGridPaginationSize,
   type DataGridPaginationNavProps,
   type DataGridPaginationProps,
+  DataGridPaginationSize,
   type DataGridPaginationSizeProps,
 };

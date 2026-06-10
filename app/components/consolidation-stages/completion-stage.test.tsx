@@ -421,4 +421,62 @@ describe("CompletionStage", () => {
     const tokenAmounts = screen.getAllByTestId("token-display-amount");
     expect(tokenAmounts[2].textContent).toBe("2000000");
   });
+
+  test("successful shield step - shows PPOI screening notice", () => {
+    const shieldStep = makeStep({
+      id: "step-1",
+      type: "shield",
+      inputTokens: [makeToken(USDC_ETHEREUM, 1000000n, 1)],
+      outputToken: makeToken(USDC_ETHEREUM, 997500n, 1, { provenance: "step-1" }),
+    });
+
+    const state = makeState({
+      plan: [shieldStep],
+      sourceTokens: [makeToken(USDC_ETHEREUM, 1000000n, 1)],
+      destinationToken: makeToken(USDC_ETHEREUM, 0n, 1),
+    });
+
+    render(<CompletionStage state={state} onClose={vi.fn()} />);
+
+    expect(screen.getByText("Privacy screening in progress")).toBeInTheDocument();
+  });
+
+  test("failed shield step - hides PPOI screening notice", () => {
+    const shieldStep = makeStep({
+      id: "step-1",
+      type: "shield",
+      status: "failed",
+      inputTokens: [makeToken(USDC_ETHEREUM, 1000000n, 1)],
+      outputToken: makeToken(USDC_ETHEREUM, 997500n, 1, { provenance: "step-1" }),
+    });
+
+    const state = makeState({
+      status: "partial",
+      plan: [shieldStep],
+      sourceTokens: [makeToken(USDC_ETHEREUM, 1000000n, 1)],
+      destinationToken: makeToken(USDC_ETHEREUM, 0n, 1),
+    });
+
+    render(<CompletionStage state={state} onClose={vi.fn()} />);
+
+    expect(screen.queryByText("Privacy screening in progress")).not.toBeInTheDocument();
+  });
+
+  test("no shield step - hides PPOI screening notice", () => {
+    const step1 = makeStep({
+      id: "step-1",
+      inputTokens: [makeToken(DAI_ADDRESS, 1000000n, 1, { symbol: "DAI", decimals: 18 })],
+      outputToken: makeToken(USDC_ETHEREUM, 500000n, 1),
+    });
+
+    const state = makeState({
+      plan: [step1],
+      sourceTokens: [makeToken(DAI_ADDRESS, 1000000n, 1, { symbol: "DAI", decimals: 18 })],
+      destinationToken: makeToken(USDC_ETHEREUM, 0n, 1),
+    });
+
+    render(<CompletionStage state={state} onClose={vi.fn()} />);
+
+    expect(screen.queryByText("Privacy screening in progress")).not.toBeInTheDocument();
+  });
 });

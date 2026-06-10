@@ -5,7 +5,6 @@ import { createContext, type ReactNode, useContext } from "react";
 import { cn } from "~/lib/utils";
 
 declare module "@tanstack/react-table" {
-  // biome-ignore lint/correctness/noUnusedVariables: TValue is required to match the original interface signature
   interface ColumnMeta<TData extends RowData, TValue> {
     headerTitle?: string;
     headerClassName?: string;
@@ -182,4 +181,4 @@ function DataGridContainer({
   );
 }
 
-export { useDataGrid, DataGridProvider, DataGrid, DataGridContainer };
+export { DataGrid, DataGridContainer, DataGridProvider, useDataGrid };

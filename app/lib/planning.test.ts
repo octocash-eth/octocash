@@ -1,5 +1,5 @@
 import { ETH_ADDRESS, USDC_ETHEREUM as USDC_ADDRESS, USDC_OPTIMISM, WALLET, WBTC_ADDRESS } from "test/test-helpers";
-import type { Address } from "viem";
+import { type Address, zeroAddress } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { TokenAmount, TransactionStep } from "./types";
 
@@ -2831,6 +2831,166 @@ describe("planConsolidation", () => {
       });
 
       await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).resolves.toBeDefined();
+    });
+  });
+
+  describe("railgun (0zk) destinations", () => {
+    const WETH_MAINNET = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" as Address;
+    const WETH_POLYGON = "0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619" as Address;
+    // Engine-generated fixtures (see railgun.test.ts): same key material,
+    // one bound to Ethereum mainnet, one valid on all chains.
+    const RAILGUN_MAINNET =
+      "0zk1qyqjx3t83x4ummcpydzk0zdtehhszg69v7y6hn00qy352euf40x77unpd9kxwatwq9um243w3ln9f72q0zc3969f3wneq8u98tnft0khur3ezzadqjtxgzp38kw";
+    const RAILGUN_ALL_CHAINS =
+      "0zk1qyqjx3t83x4ummcpydzk0zdtehhszg69v7y6hn00qy352euf40x7lrv7j6fe3z53laum243w3ln9f72q0zc3969f3wneq8u98tnft0khur3ezzadqjtxg9v756u";
+
+    const railgunDestination = (overrides?: Partial<Parameters<typeof planConsolidation>[1]>) => ({
+      token: WETH_MAINNET,
+      chainId: 1,
+      // The UI passes a zero-address placeholder; planning resolves the
+      // public holder (intermediate wallet) itself.
+      walletAddress: zeroAddress,
+      symbol: "WETH",
+      decimals: 18,
+      railgunAddress: RAILGUN_ALL_CHAINS,
+      ...overrides,
+    });
+
+    test("source already matches destination token - single shield step (no transfer fast path)", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: WETH_MAINNET, amount: 10n ** 18n, chainId: 1, walletAddress: WALLET, symbol: "WETH", decimals: 18 },
+      ];
+
+      const plan = await planConsolidation(sourceTokens, railgunDestination(), [WALLET]);
+
+      expect(plan).toHaveLength(1);
+      expect(plan[0].type).toBe("shield");
+      expect(plan[0].chainId).toBe(1);
+      expect(plan[0].railgunAddress).toBe(RAILGUN_ALL_CHAINS);
+      // The shield is performed by the connected intermediate wallet.
+      expect(plan[0].inputTokens[0].walletAddress).toBe(WALLET);
+      expect(plan[0].outputToken.walletAddress).toBe(WALLET);
+      // Output reflects the 0.25% Railgun shield fee.
+      expect(plan[0].outputToken.amount).toBe(997_500_000_000_000_000n);
+    });
+
+    test("swaps to the destination token first, then shields", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: USDC_ADDRESS, amount: 1_000_000n, chainId: 1, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+      ];
+
+      vi.mocked(getSwapQuote).mockResolvedValue({
+        token: WETH_MAINNET,
+        amount: 10_000_000_000_000_000n, // 0.01 WETH
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "WETH",
+        decimals: 18,
+      });
+
+      const plan = await planConsolidation(sourceTokens, railgunDestination(), [WALLET]);
+
+      expect(plan.map((s) => s.type)).toEqual(["swap", "shield"]);
+      const shield = plan[1];
+      expect(shield.inputTokens[0].amount).toBe(10_000_000_000_000_000n);
+      // 0.01 WETH minus 0.25% fee
+      expect(shield.outputToken.amount).toBe(9_975_000_000_000_000n);
+      expect(shield.railgunAddress).toBe(RAILGUN_ALL_CHAINS);
+    });
+
+    test("accepts an address bound to the destination chain", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: WETH_MAINNET, amount: 10n ** 18n, chainId: 1, walletAddress: WALLET, symbol: "WETH", decimals: 18 },
+      ];
+
+      const plan = await planConsolidation(sourceTokens, railgunDestination({ railgunAddress: RAILGUN_MAINNET }), [
+        WALLET,
+      ]);
+      expect(plan.at(-1)?.type).toBe("shield");
+      expect(plan.at(-1)?.railgunAddress).toBe(RAILGUN_MAINNET);
+    });
+
+    test("multi-chain sources bridge and swap first, then shield last", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: USDC_OPTIMISM, amount: 100_000_000n, chainId: 10, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+      ];
+
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      // Final swap on mainnet: bridged USDC -> WETH
+      vi.mocked(getSwapQuote).mockResolvedValue({
+        token: WETH_MAINNET,
+        amount: 30_000_000_000_000_000n, // 0.03 WETH
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "WETH",
+        decimals: 18,
+      });
+
+      const plan = await planConsolidation(sourceTokens, railgunDestination(), [WALLET]);
+
+      const types = plan.map((s) => s.type);
+      expect(types).toContain("bridge");
+      expect(types).toContain("attestation");
+      expect(types).toContain("claim");
+      expect(types.at(-1)).toBe("shield");
+      // Shield consumes the final swap output, minus the 0.25% fee.
+      const shield = plan.at(-1) as TransactionStep;
+      expect(shield.outputToken.amount).toBe(29_925_000_000_000_000n);
+    });
+
+    test("rejects a chain where Railgun is not deployed (Base)", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: USDC_ADDRESS, amount: 1_000_000n, chainId: 1, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+      ];
+
+      await expect(
+        planConsolidation(
+          sourceTokens,
+          railgunDestination({
+            chainId: 8453,
+            token: "0x4200000000000000000000000000000000000006" as Address,
+          }),
+          [WALLET],
+        ),
+      ).rejects.toThrow(/Railgun is not deployed/);
+    });
+
+    test("rejects a native destination token", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: USDC_ADDRESS, amount: 1_000_000n, chainId: 1, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+      ];
+
+      await expect(
+        planConsolidation(sourceTokens, railgunDestination({ token: ETH_ADDRESS, symbol: "ETH" }), [WALLET]),
+      ).rejects.toThrow(/cannot be shielded/);
+    });
+
+    test("rejects an invalid 0zk address", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: USDC_ADDRESS, amount: 1_000_000n, chainId: 1, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+      ];
+
+      await expect(
+        planConsolidation(sourceTokens, railgunDestination({ railgunAddress: "0zk1notvalid" }), [WALLET]),
+      ).rejects.toThrow(/Invalid Railgun/);
+    });
+
+    test("rejects a chain-bound address used on a different chain", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: USDC_ADDRESS, amount: 1_000_000n, chainId: 1, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+      ];
+
+      await expect(
+        planConsolidation(
+          sourceTokens,
+          railgunDestination({
+            chainId: 137,
+            token: WETH_POLYGON,
+            railgunAddress: RAILGUN_MAINNET, // bound to chain 1
+          }),
+          [WALLET],
+        ),
+      ).rejects.toThrow(/bound to chain 1/);
     });
   });
 });

@@ -1,3 +1,4 @@
+import { ShieldCheck } from "lucide-react";
 import * as React from "react";
 import type { Address } from "viem";
 import { isAddress } from "viem";
@@ -5,6 +6,7 @@ import { normalize } from "viem/ens";
 import { useEnsAddress, useEnsName } from "wagmi";
 import { IconCopyButton, IconLinkButton } from "~/components/icon";
 import { supportedChains } from "~/data/supported-chains";
+import { isRailgunAddress, truncateRailgunAddress } from "~/lib/railgun";
 import { cn, formatAddress } from "~/lib/utils";
 import type { Button } from "../ui/button";
 import AddressAvatar from "./address-avatar";
@@ -16,6 +18,8 @@ interface AddressDisplayContextValue {
   ensName?: string;
   formattedAddress: string;
   explorerUrl?: string;
+  /** True when the address is a private Railgun 0zk address. */
+  isRailgun: boolean;
 }
 
 const AddressDisplayContext = React.createContext<AddressDisplayContextValue | null>(null);
@@ -37,8 +41,9 @@ interface AddressDisplayRootProps {
 }
 
 function AddressDisplayRoot({ address, chainId, children, className }: AddressDisplayRootProps) {
-  const isEnsName = address.endsWith(".eth");
-  const isAddr = isAddress(address);
+  const isRailgun = isRailgunAddress(address);
+  const isEnsName = !isRailgun && address.endsWith(".eth");
+  const isAddr = !isRailgun && isAddress(address);
 
   // If address is an address, get the ENS name
   const { data: ensName } = useEnsName({
@@ -60,15 +65,15 @@ function AddressDisplayRoot({ address, chainId, children, className }: AddressDi
   });
 
   const resolvedAddress = ensAddress ?? address;
-  const formattedAddress = formatAddress(resolvedAddress);
+  const formattedAddress = isRailgun ? truncateRailgunAddress(address) : formatAddress(resolvedAddress);
 
-  // Get explorer URL if chainId is provided
+  // Get explorer URL if chainId is provided (0zk addresses have no explorer page)
   const explorerUrl = React.useMemo(() => {
-    if (!chainId) return undefined;
+    if (!chainId || isRailgun) return undefined;
     const chain = supportedChains.find((c) => c.id === chainId);
     if (!chain?.explorerUrl) return undefined;
     return `${chain.explorerUrl}/address/${resolvedAddress}`;
-  }, [chainId, resolvedAddress]);
+  }, [chainId, resolvedAddress, isRailgun]);
 
   const contextValue = React.useMemo(
     () => ({
@@ -77,8 +82,9 @@ function AddressDisplayRoot({ address, chainId, children, className }: AddressDi
       ensName: normalizedName,
       formattedAddress,
       explorerUrl,
+      isRailgun,
     }),
-    [resolvedAddress, chainId, normalizedName, formattedAddress, explorerUrl],
+    [resolvedAddress, chainId, normalizedName, formattedAddress, explorerUrl, isRailgun],
   );
 
   return (
@@ -95,7 +101,14 @@ interface AddressDisplayAvatarProps {
 }
 
 function AddressDisplayAvatar({ className, title }: AddressDisplayAvatarProps) {
-  const { address } = useAddressDisplay();
+  const { address, isRailgun } = useAddressDisplay();
+  if (isRailgun) {
+    return (
+      <span title={title ?? address} className="inline-flex shrink-0">
+        <ShieldCheck className={cn("text-primary", className)} aria-label="Private Railgun address" />
+      </span>
+    );
+  }
   return <AddressAvatar addressOrEns={address} className={className} title={title} />;
 }
 
@@ -104,11 +117,16 @@ interface AddressDisplayTextProps extends React.ComponentProps<"span"> {}
 
 const AddressDisplayText = React.forwardRef<HTMLSpanElement, AddressDisplayTextProps>(
   ({ className, ...props }, ref) => {
-    const { ensName, formattedAddress, address } = useAddressDisplay();
+    const { ensName, formattedAddress, address, isRailgun } = useAddressDisplay();
     const displayText = ensName || formattedAddress;
 
     return (
-      <span ref={ref} className={cn("truncate text-nowrap", className)} title={address} {...props}>
+      <span
+        ref={ref}
+        className={cn("truncate text-nowrap", isRailgun && "font-mono", className)}
+        title={address}
+        {...props}
+      >
         {displayText}
       </span>
     );
@@ -155,4 +173,4 @@ const AddressDisplayLink = React.forwardRef<HTMLButtonElement, AddressDisplayLin
 
 AddressDisplayLink.displayName = "AddressDisplayLink";
 
-export { AddressDisplayRoot, AddressDisplayAvatar, AddressDisplayText, AddressDisplayCopy, AddressDisplayLink };
+export { AddressDisplayAvatar, AddressDisplayCopy, AddressDisplayLink, AddressDisplayRoot, AddressDisplayText };

@@ -64,5 +64,5 @@ const IconCopyButton = React.forwardRef<HTMLButtonElement, IconCopyButtonProps>(
 
 IconCopyButton.displayName = "IconCopyButton";
 
-export { IconCopyButton };
 export type { IconCopyButtonProps };
+export { IconCopyButton };

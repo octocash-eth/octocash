@@ -1,5 +1,6 @@
 import { type Address, formatUnits, getAddress, isAddressEqual, zeroAddress } from "viem";
 import { mainnet } from "viem/chains";
+import { RAILGUN_SUPPORTED_CHAINS } from "~/data/railgun";
 import { chains, transports } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
 import { fetchOdosPrices, odosPriceKey } from "./api/odos";
@@ -18,6 +19,7 @@ import {
 import { getLiFiQuoteForTargetOutput } from "./lifi";
 import { getSwapQuote } from "./odos";
 import { getPublicClient } from "./public-client";
+import { decodeRailgunAddress, getShieldedAmountAfterFee, isRailgunAddress } from "./railgun";
 import { groupTokensByChainAndWallet } from "./tokens";
 import type { DestinationToken, TokenAmount, TransactionStep } from "./types";
 
@@ -181,6 +183,7 @@ function predictIntermediateDestinationOps(
   destinationToken: DestinationToken,
   candidate: Address,
   isCandidateDestination: boolean,
+  isRailgun = false,
 ): OperationType[] {
   const destChainId = destinationToken.chainId;
   const destChainUsdc = USDC_ADDRESSES[destChainId as keyof typeof USDC_ADDRESSES] as Address | undefined;
@@ -201,8 +204,11 @@ function predictIntermediateDestinationOps(
     hasBridges,
     nonNativeSwapTokenCount,
     hasNativeInFinalSwap,
-    !isCandidateDestination,
+    // Railgun destinations never end with a public transfer — the candidate
+    // itself performs the final shield (approve + shield ops below).
+    !isCandidateDestination && !isRailgun,
     destIsNative,
+    isRailgun,
   );
 }
 
@@ -212,9 +218,13 @@ async function resolveIntermediateWallet(
   connectedWallets: readonly Address[],
   gasCtx: GasContext,
   gaps: GasGaps,
+  isRailgun = false,
 ): Promise<Address> {
   const destinationWallet = destinationToken.walletAddress;
-  const isDestinationConnected = connectedWallets.some((wallet) => isAddressEqual(wallet, destinationWallet));
+  // A Railgun destination has no public destination wallet (the UI passes a
+  // zero-address placeholder), so a connected wallet is always chosen below.
+  const isDestinationConnected =
+    !isRailgun && connectedWallets.some((wallet) => isAddressEqual(wallet, destinationWallet));
   const destChainId = destinationToken.chainId;
   const chain = chains[destChainId as keyof typeof chains];
 
@@ -239,7 +249,7 @@ async function resolveIntermediateWallet(
   // (each candidate may need a different op shape — e.g. one holds extra
   // dest-chain source tokens that increase the final-swap batch).
   for (const wallet of searchOrder) {
-    const destOps = predictIntermediateDestinationOps(sourceTokens, destinationToken, wallet, false);
+    const destOps = predictIntermediateDestinationOps(sourceTokens, destinationToken, wallet, false, isRailgun);
     const destGas = await estimateChainGasCosts(destChainId, destOps, gasCtx.maxFeePerGas[destChainId]);
     const balance = await getNativeBalance(chain, wallet, transports?.[destChainId as keyof typeof transports]);
     if (balance >= destGas.totalGasCost) {
@@ -250,7 +260,7 @@ async function resolveIntermediateWallet(
   // No connected wallet has enough — pick the first connected one and record a gap.
   if (searchOrder.length > 0) {
     const wallet = searchOrder[0];
-    const destOps = predictIntermediateDestinationOps(sourceTokens, destinationToken, wallet, false);
+    const destOps = predictIntermediateDestinationOps(sourceTokens, destinationToken, wallet, false, isRailgun);
     const destGas = await estimateChainGasCosts(destChainId, destOps, gasCtx.maxFeePerGas[destChainId]);
     const balance = await getNativeBalance(chain, wallet, transports?.[destChainId as keyof typeof transports]);
     recordGasGap(gaps, destChainId, wallet, destGas.totalGasCost - balance);
@@ -340,6 +350,28 @@ function validateInputs(
 
   if (!SUPPORTED_CHAINS.includes(destinationToken.chainId)) {
     throw new Error(`UnsupportedRouteError: Destination chain ${destinationToken.chainId} is not supported`);
+  }
+
+  if (destinationToken.railgunAddress !== undefined) {
+    if (!isRailgunAddress(destinationToken.railgunAddress)) {
+      throw new Error("PlanningError: Invalid Railgun (0zk) destination address");
+    }
+    if (!RAILGUN_SUPPORTED_CHAINS.includes(destinationToken.chainId)) {
+      throw new Error(
+        `UnsupportedRouteError: Railgun is not deployed on chain ${destinationToken.chainId}. Supported chains: Ethereum, Polygon, Arbitrum.`,
+      );
+    }
+    if (isAddressEqual(destinationToken.token, zeroAddress)) {
+      throw new Error(
+        "PlanningError: Native coins cannot be shielded into Railgun. Choose an ERC20 destination token (e.g. WETH).",
+      );
+    }
+    const decoded = decodeRailgunAddress(destinationToken.railgunAddress);
+    if (decoded.chainId !== undefined && decoded.chainId !== destinationToken.chainId) {
+      throw new Error(
+        `PlanningError: The Railgun address is bound to chain ${decoded.chainId} but the destination chain is ${destinationToken.chainId}`,
+      );
+    }
   }
 
   const missingSourceWallet = sourceTokens.find(
@@ -937,6 +969,7 @@ async function createFinalSwaps(
   gasCtx: GasContext,
   hasBridges: boolean,
   needsFinalTransfer: boolean,
+  needsShield: boolean,
   gaps: GasGaps,
   log: (...args: unknown[]) => void,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
@@ -990,12 +1023,17 @@ async function createFinalSwaps(
     const nonNativeSwapCount = tokensNeedingSwap.filter((t) => !isAddressEqual(t.token, zeroAddress)).length;
     const hasNativeInSwap = tokensNeedingSwap.some((t) => isAddressEqual(t.token, zeroAddress));
 
+    // Only the wallet holding the consolidated token (the intermediate wallet,
+    // i.e. destinationToken.walletAddress here) executes the final shield.
+    const shieldsHere = needsShield && isAddressEqual(walletAddress, destinationToken.walletAddress);
+
     const destOps = estimateDestinationChainOperations(
       hasBridges,
       nonNativeSwapCount,
       hasNativeInSwap,
       needsFinalTransfer,
       destIsNative,
+      shieldsHere,
     );
 
     const gasCost = await estimateChainGasCosts(destChainId, destOps, gasCtx.maxFeePerGas[destChainId]);
@@ -1036,6 +1074,7 @@ async function createFinalSwaps(
             false,
             needsFinalTransfer,
             destIsNative,
+            shieldsHere,
           );
           const remainingGas = await estimateChainGasCosts(
             destChainId,
@@ -1149,6 +1188,63 @@ async function createFinalTransfer(
   );
 
   return { steps, tokens: [transferOutput] };
+}
+
+/**
+ * Appends the final Railgun shield step: deposits the consolidated ERC20 held
+ * by the intermediate wallet into the RailgunSmartWallet, credited to
+ * `railgunAddress`. The output reflects the 0.25% protocol shield fee.
+ * The output token's `walletAddress` stays the public holder — the private
+ * recipient is recorded on the step's `railgunAddress`.
+ */
+function createShieldStep(
+  steps: TransactionStep[],
+  tokens: TokenAmount[],
+  railgunAddress: string,
+  log: (...args: unknown[]) => void,
+): { steps: TransactionStep[]; tokens: TokenAmount[] } {
+  const consolidatedTokens = groupTokensByChainAndWallet(tokens);
+
+  if (consolidatedTokens.length !== 1) {
+    throw new Error("PlanningError: Shield step must have tokens from exactly one wallet and chain");
+  }
+
+  const tokensAtWallet = consolidatedTokens[0];
+  if (tokensAtWallet.length === 0) {
+    throw new Error("PlanningError: Shield step must have at least one token");
+  }
+
+  const tokenAddress = tokensAtWallet[0].token;
+  for (const token of tokensAtWallet) {
+    if (!isAddressEqual(token.token, tokenAddress)) {
+      throw new Error("PlanningError: Shield step must have tokens of the same address");
+    }
+  }
+
+  const stepId = `step-${steps.length + 1}`;
+  const totalAmount = tokensAtWallet.reduce((sum, t) => sum + t.amount, 0n);
+
+  const shieldOutput: TokenAmount = {
+    ...tokensAtWallet[0],
+    amount: getShieldedAmountAfterFee(totalAmount),
+    provenance: stepId,
+  };
+
+  steps.push({
+    id: stepId,
+    type: "shield",
+    status: "pending",
+    chainId: tokensAtWallet[0].chainId,
+    inputTokens: tokensAtWallet as [TokenAmount, ...TokenAmount[]],
+    outputToken: shieldOutput,
+    railgunAddress,
+  });
+
+  log(
+    `🔍 [DEBUG] Added shield step ${stepId} from wallet ${tokensAtWallet[0].walletAddress} to ${railgunAddress}: total=${totalAmount.toString()}, after fee=${shieldOutput.amount.toString()}`,
+  );
+
+  return { steps, tokens: [shieldOutput] };
 }
 
 /**
@@ -1580,6 +1676,11 @@ export async function planConsolidation(
   validateInputs(sourceTokens, destinationToken, connectedWallets, log);
   await assertEoaWallets(sourceTokens, destinationToken, connectedWallets);
 
+  // Railgun (0zk) destination: everything consolidates to an intermediate
+  // connected wallet first, then a final `shield` step deposits the token into
+  // the Railgun contract. There is no public destination wallet.
+  const isRailgun = destinationToken.railgunAddress !== undefined;
+
   // Fast path: when every source is already the destination token on the
   // destination chain, the plan is pure transfers — no swap/bridge/claim is
   // possible. Skip intermediate-wallet resolution, multi-chain gas context, and
@@ -1589,10 +1690,13 @@ export async function planConsolidation(
   // We still defer to the general pipeline when destination is not connected
   // AND there are multiple source wallets: in that case the intermediate-wallet
   // step is what aggregates funds to a single final transfer, which is the
-  // existing UX.
-  const isTransferOnly = sourceTokens.every(
-    (t) => t.chainId === destinationToken.chainId && isAddressEqual(t.token, destinationToken.token),
-  );
+  // existing UX. Railgun destinations always need the general pipeline (the
+  // plan must end with a shield step, never plain transfers).
+  const isTransferOnly =
+    !isRailgun &&
+    sourceTokens.every(
+      (t) => t.chainId === destinationToken.chainId && isAddressEqual(t.token, destinationToken.token),
+    );
   if (isTransferOnly) {
     const sourceWalletSet = new Set(sourceTokens.map((t) => getAddress(t.walletAddress)));
     const destConnected = connectedWallets.some((w) => isAddressEqual(w, destinationToken.walletAddress));
@@ -1616,8 +1720,12 @@ export async function planConsolidation(
     connectedWallets,
     gasCtx,
     gaps,
+    isRailgun,
   );
-  const intermediateToken = { ...destinationToken, walletAddress: intermediateWallet };
+  // The intermediate target is a plain public token spec — drop the railgun
+  // marker so swap/bridge outputs aren't tagged with it.
+  const { railgunAddress, ...publicDestination } = destinationToken;
+  const intermediateToken = { ...publicDestination, walletAddress: intermediateWallet };
 
   // Build consolidation pipeline (gas-adjusted; missing gas is recorded into `gaps`)
   let { steps, tokens } = await processChainWalletSwaps(sourceTokens, intermediateToken, gasCtx, gaps, log);
@@ -1625,7 +1733,7 @@ export async function planConsolidation(
   ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, intermediateToken));
 
   const hasBridges = steps.some((s) => s.type === "bridge");
-  const needsFinalTransfer = !isAddressEqual(intermediateWallet, destinationToken.walletAddress);
+  const needsFinalTransfer = !isRailgun && !isAddressEqual(intermediateWallet, destinationToken.walletAddress);
   ({ steps, tokens } = await createFinalSwaps(
     steps,
     tokens,
@@ -1633,11 +1741,14 @@ export async function planConsolidation(
     gasCtx,
     hasBridges,
     needsFinalTransfer,
+    isRailgun,
     gaps,
     log,
   ));
 
-  if (needsFinalTransfer) {
+  if (isRailgun && railgunAddress) {
+    ({ steps, tokens } = createShieldStep(steps, tokens, railgunAddress, log));
+  } else if (needsFinalTransfer) {
     ({ steps, tokens } = await createFinalTransfer(steps, tokens, destinationToken, log));
   }
 

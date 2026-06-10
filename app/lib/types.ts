@@ -15,7 +15,8 @@ export type TransactionType =
   | "claim" // Claim bridged tokens
   | "transfer" // Simple transfer (same token, same chain)
   | "gas-topup" // Send native token via LI.FI to refuel destination chains
-  | "gas-topup-wait"; // Wait for LI.FI transfer delivery on destination chains
+  | "gas-topup-wait" // Wait for LI.FI transfer delivery on destination chains
+  | "shield"; // Deposit ERC20 into Railgun, credited to a private 0zk address
 
 /**
  * Execution status of a transaction step
@@ -48,8 +49,16 @@ export type SourceToken = TokenAmount;
 
 /**
  * Destination token for consolidation
+ *
+ * When `railgunAddress` is set, the consolidation ends with a `shield` step
+ * that deposits the token into Railgun for that 0zk address. `walletAddress`
+ * then holds the public wallet performing the shield: the UI passes
+ * `zeroAddress` as a placeholder and planning rewrites it to the resolved
+ * intermediate (connected) wallet.
  */
-export type DestinationToken = Omit<TokenAmount, "amount">;
+export type DestinationToken = Omit<TokenAmount, "amount"> & {
+  railgunAddress?: string;
+};
 
 /**
  * Estimated gas cost for a single transaction step.
@@ -96,6 +105,9 @@ export interface TransactionStep {
 
   // Gas top-up specific (only for gas-topup and gas-topup-wait steps)
   gasTopUpDestinations?: { chainId: number; address: Address; amountWei: string }[];
+
+  // Shield specific (only for shield steps): the recipient 0zk address
+  railgunAddress?: string;
 }
 
 // ============================================================================

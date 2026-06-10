@@ -28,7 +28,7 @@ export default function FAQSection() {
         {/* Accordion */}
         <Accordion type="multiple" className="space-y-4">
           {FAQ_ITEMS.map((item, index) => (
-            <AccordionItem key={`item-${index + 1}`} value={`item-${index + 1}`} className="border rounded-xl px-4">
+            <AccordionItem key={item.question} value={`item-${index + 1}`} className="border rounded-xl px-4">
               <AccordionTrigger className="font-grotesque text-2xl sm:text-3xl md:text-4xl font-bold text-primary hover:no-underline leading-tight">
                 {item.question}
               </AccordionTrigger>

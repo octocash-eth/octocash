@@ -16,9 +16,11 @@ import {
 interface TokenCardProps {
   token: TokenAmount;
   label?: string;
+  /** When set, show this private 0zk recipient instead of the public wallet. */
+  railgunAddress?: string;
 }
 
-export function TokenCard({ token, label }: TokenCardProps) {
+export function TokenCard({ token, label, railgunAddress }: TokenCardProps) {
   const { data: tokenData } = useToken({
     address: token.token,
     chainId: token.chainId,
@@ -63,7 +65,7 @@ export function TokenCard({ token, label }: TokenCardProps) {
           <span>{chainName}</span>
         </div>
         <div className="text-muted-foreground">
-          <AddressDisplayRoot address={token.walletAddress} className="gap-1.5">
+          <AddressDisplayRoot address={railgunAddress ?? token.walletAddress} className="gap-1.5">
             <AddressDisplayAvatar className="size-3" />
             <AddressDisplayText />
           </AddressDisplayRoot>

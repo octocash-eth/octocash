@@ -260,6 +260,27 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
         </>
       );
     }
+    case "shield": {
+      const inputToken = step.inputTokens[0];
+      const outputToken = result?.actualOutput ?? step.outputToken;
+      const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+      return (
+        <>
+          <span className="text-foreground">{isPast ? "Shielded" : isExecuting ? "Shielding" : "Shield"}</span>{" "}
+          <TokenAmountInlineFor token={inputToken} amount={totalAmount} />{" "}
+          <span className="text-muted-foreground">→</span> <TokenAmountInlineFor token={outputToken} />{" "}
+          <span className="text-muted-foreground">into</span>{" "}
+          <span className="inline-flex items-center gap-1">
+            <img src="/other-icons/railgun.svg" alt="Railgun" className="size-3 inline-block" /> Railgun
+          </span>{" "}
+          <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />{" "}
+          <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
+            (<AddressInline address={inputToken.walletAddress} /> →{" "}
+            {step.railgunAddress ? <AddressInline address={step.railgunAddress} /> : "Railgun"})
+          </span>
+        </>
+      );
+    }
     case "gas-topup": {
       const inputToken = step.inputTokens[0];
       const destinations = step.gasTopUpDestinations ?? [];

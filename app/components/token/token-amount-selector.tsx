@@ -264,4 +264,4 @@ const TokenAmountSelectorMaxButton = React.forwardRef<HTMLButtonElement, TokenAm
 
 TokenAmountSelectorMaxButton.displayName = "TokenAmountSelectorMaxButton";
 
-export { TokenAmountSelectorRoot, TokenAmountSelectorInput, TokenAmountSelectorSlider, TokenAmountSelectorMaxButton };
+export { TokenAmountSelectorInput, TokenAmountSelectorMaxButton, TokenAmountSelectorRoot, TokenAmountSelectorSlider };

@@ -31,7 +31,8 @@ export type OperationType =
   | "cctp-claim"
   | "transfer-native"
   | "transfer-erc20"
-  | "gas-topup-leg";
+  | "gas-topup-leg"
+  | "shield";
 
 /**
  * Per-operation gas unit budgets used as a fallback whenever live simulation is
@@ -53,6 +54,9 @@ const GAS_BUDGETS: Record<OperationType, bigint> = {
   // generously). Same-chain legs only consume ~21k but using a single conservative
   // budget keeps step gas estimation simple.
   "gas-topup-leg": 300_000n,
+  // Railgun shield(): commitment hashing + merkle-tree insertion on-chain.
+  // Observed single-ERC20 shields run ~350–500k; budget conservatively.
+  shield: 600_000n,
 };
 
 /** Multiplier applied to raw gas cost. 130 = +30%. */
@@ -306,6 +310,7 @@ export function estimateOperationsForChainWallet(
  * @param hasNativeInFinalSwap - Whether native token is among final swap inputs
  * @param needsTransfer - Whether a final transfer to destination wallet is needed
  * @param isNativeTransfer - Whether the final transfer is for a native token
+ * @param needsShield - Whether a final Railgun shield (approve + shield) is needed
  */
 export function estimateDestinationChainOperations(
   hasBridges: boolean,
@@ -313,6 +318,7 @@ export function estimateDestinationChainOperations(
   hasNativeInFinalSwap: boolean,
   needsTransfer: boolean,
   isNativeTransfer: boolean,
+  needsShield = false,
 ): OperationType[] {
   const ops: OperationType[] = [];
 
@@ -336,6 +342,10 @@ export function estimateDestinationChainOperations(
 
   if (needsTransfer) {
     ops.push(isNativeTransfer ? "transfer-native" : "transfer-erc20");
+  }
+
+  if (needsShield) {
+    ops.push("erc20-approval", "shield");
   }
 
   return ops;
@@ -411,9 +421,11 @@ async function simulateOperationGas(
       case "swap-multi":
       case "cctp-claim":
       case "gas-topup-leg":
+      case "shield":
         // Calldata not available at planning time — Odos `/sor/assemble` runs
-        // at execution, CCTP claim needs the attestation message, and the
-        // gas-topup leg's LI.FI `transactionRequest` is quoted at execution.
+        // at execution, CCTP claim needs the attestation message, the
+        // gas-topup leg's LI.FI `transactionRequest` is quoted at execution,
+        // and the shield note requires a wallet signature at execution.
         return null;
 
       case "transfer-native": {
@@ -672,6 +684,8 @@ function getStepOperations(step: TransactionStep): OperationType[] {
     }
     case "gas-topup-wait":
       return [];
+    case "shield":
+      return ["erc20-approval", "shield"];
     default:
       return [];
   }

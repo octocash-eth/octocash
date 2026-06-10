@@ -189,8 +189,8 @@ function Pagination({
 export {
   Pagination,
   PaginationNav,
-  PaginationSize,
   type PaginationNavProps,
   type PaginationProps,
+  PaginationSize,
   type PaginationSizeProps,
 };

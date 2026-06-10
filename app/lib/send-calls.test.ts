@@ -1,4 +1,5 @@
 import type { Account, Address, Chain, Hex, HttpTransport, WalletClient } from "viem";
+import { BaseError, ExecutionRevertedError } from "viem";
 import type { WaitForTransactionReceiptReturnType } from "viem/actions";
 import { beforeEach, describe, expect, type Mock, test, vi } from "vitest";
 import { prepareSendCalls, SendCallsError, switchChain, TransactionNotBroadcastError } from "./send-calls";
@@ -480,7 +481,8 @@ describe("sendCalls", () => {
             "atomic-steps",
           );
 
-          expect(estimateGas).toHaveBeenCalledWith(mockClient, {
+          // Estimation runs against our own public RPC, not the wallet provider.
+          expect(estimateGas).toHaveBeenCalledWith(mockPublicClient, {
             account: "0x0000000000000000000000000000000000000000",
             to: "0x1111111111111111111111111111111111111111",
             data: "0xabcd",
@@ -935,8 +937,9 @@ describe("sendCalls", () => {
             "atomic-multicall",
           );
 
+          // Estimation runs against our own public RPC, not the wallet provider.
           expect(estimateGas).toHaveBeenCalledWith(
-            mockClient,
+            mockPublicClient,
             expect.objectContaining({
               account: "0x3333333333333333333333333333333333333333",
               to: "0xcA11bde05977b3631167028862bE2a173976CA11",
@@ -972,6 +975,27 @@ describe("sendCalls", () => {
 
           const callArgs = vi.mocked(mockClient.sendTransaction).mock.calls[0][0];
           expect(callArgs.gas).toBeUndefined();
+        });
+
+        test("aborts without sending when estimation says the tx would revert", async () => {
+          // viem wraps eth_estimateGas reverts as EstimateGasExecutionError →
+          // ExecutionRevertedError; the send path must abort with the revert
+          // reason instead of submitting a gasless, guaranteed-to-revert tx.
+          const revert = new ExecutionRevertedError({
+            cause: new BaseError("execution reverted"),
+            message: "execution reverted: Slippage Limit Exceeded",
+          });
+          vi.mocked(estimateGas).mockRejectedValueOnce(revert);
+
+          const sendCalls = prepareSendCalls(mockClient, mockWaitForReceipt);
+
+          const calls = [{ to: "0x1111111111111111111111111111111111111111" as Address, data: "0xcalldata1" as Hex }];
+
+          await expect(
+            sendCalls("test-tx", 1, "0x3333333333333333333333333333333333333333" as Address, calls, "atomic-multicall"),
+          ).rejects.toThrow(/Transaction would revert: .*Slippage Limit Exceeded/);
+
+          expect(mockClient.sendTransaction).not.toHaveBeenCalled();
         });
       });
     });

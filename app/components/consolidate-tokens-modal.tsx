@@ -1,5 +1,5 @@
 import * as React from "react";
-import { getAddress, isAddress, parseUnits } from "viem";
+import { getAddress, isAddress, parseUnits, zeroAddress } from "viem";
 import { AnimateHeight } from "~/components/ui/animate-height";
 import { Button } from "~/components/ui/button";
 import {
@@ -24,6 +24,7 @@ import { useFormatFiat } from "~/context/currency-provider";
 import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
 import { USDC } from "~/data/token-contracts";
 import { useConnectedAddresses } from "~/hooks/use-connected-addresses";
+import { isRailgunAddress } from "~/lib/railgun";
 import { formatTokenAmount, getTokenId } from "~/lib/tokens";
 import type { ConsolidationState, DestinationToken, SourceToken, TokenAmount } from "~/lib/types";
 import { CompletionStage } from "./consolidation-stages/completion-stage";
@@ -107,9 +108,10 @@ export function ConsolidateTokensModal({
 
   // Derive destinationToken from form state
   const destinationToken = React.useMemo<DestinationToken | undefined>(() => {
-    if (currentStage !== 3 || !isAddress(destination.walletAddress ?? "") || !destination.chainId) return undefined;
+    const isRailgun = isRailgunAddress(destination.walletAddress);
+    if (currentStage !== 3 || !destination.chainId) return undefined;
+    if (!isRailgun && !isAddress(destination.walletAddress ?? "")) return undefined;
 
-    const sendTo = getAddress(destination.walletAddress ?? "");
     if (sourceTokens.length === 0) return undefined;
     const tokenInfo = destination.tokenInfo;
 
@@ -118,9 +120,12 @@ export function ConsolidateTokensModal({
     return {
       token: getAddress(tokenInfo.address),
       chainId: destination.chainId,
-      walletAddress: sendTo,
+      // For Railgun the public holder is resolved during planning (an
+      // intermediate connected wallet shields); zeroAddress is a placeholder.
+      walletAddress: isRailgun ? zeroAddress : getAddress(destination.walletAddress ?? ""),
       symbol: tokenInfo.symbol,
       decimals: tokenInfo.decimals,
+      ...(isRailgun ? { railgunAddress: destination.walletAddress } : {}),
     };
   }, [currentStage, destination, sourceTokens]);
 
@@ -222,8 +227,9 @@ export function ConsolidateTokensModal({
 
       // Check stage 2 requirements (for stage 3)
       if (stageNumber >= 3) {
-        const hasValidDestination =
-          isAddress(destination.walletAddress ?? "") && destination.chainId && destination.tokenInfo !== undefined;
+        const hasValidWallet =
+          isAddress(destination.walletAddress ?? "") || isRailgunAddress(destination.walletAddress);
+        const hasValidDestination = hasValidWallet && destination.chainId && destination.tokenInfo !== undefined;
         if (!hasValidDestination) return false;
       }
 

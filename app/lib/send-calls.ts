@@ -1,5 +1,5 @@
 import type { Account, Address, Call, Chain, Client, Hex, HttpTransport, WalletClient } from "viem";
-import { BaseError, encodeFunctionData, parseAbi } from "viem";
+import { BaseError, ExecutionRevertedError, encodeFunctionData, parseAbi } from "viem";
 import { estimateGas, getTransactionCount, waitForTransactionReceipt } from "viem/actions";
 import { chains } from "~/data/supported-chains";
 import { fetchFastFees } from "./gas-estimation";
@@ -279,24 +279,55 @@ const estimateAndSendTransaction = async (
   let maxPriorityFeePerGas: bigint | undefined;
 
   try {
-    const estimatedGas = await estimateGas(client, {
+    // Estimate against our own public RPC, not the wallet's provider. Wallet
+    // providers (MetaMask) wrap estimation reverts in opaque "Internal
+    // JSON-RPC error" responses, hiding the revert reason we need below.
+    const estimatedGas = await estimateGas(getPublicClient(params.chain.id), {
       account: params.account,
       to: params.to,
       data: params.data,
       value: params.value,
     });
     gas = (estimatedGas * 120n) / 100n;
-  } catch {
+    console.log(
+      `🔍 [GAS] chain=${params.chain.id} estimateGas=${estimatedGas} gas units, buffered(×1.2)=${gas} gas units`,
+    );
+  } catch (err) {
+    // If the node says the tx would revert, sending it is guaranteed to burn
+    // gas for nothing — worse, sending without a `gas` field makes MetaMask
+    // fall back to 35% of the block gas limit when its own estimation also
+    // reverts (on Arbitrum that's 35% × 2^50 gas ⇒ a "suggested fee" of
+    // thousands of ETH). Abort with the decoded revert reason instead.
+    const reverted = err instanceof BaseError ? err.walk((e) => e instanceof ExecutionRevertedError) : undefined;
+    if (reverted) {
+      const reason = (reverted as ExecutionRevertedError).details || (reverted as ExecutionRevertedError).shortMessage;
+      throw new SendCallsError(`Transaction would revert: ${reason}`, { cause: err });
+    }
+    // Transient RPC failure (rate limit, network) — proceed without an
+    // explicit gas limit and let the wallet estimate.
     gas = undefined;
+    console.warn(`🔍 [GAS] chain=${params.chain.id} estimateGas failed (non-revert) — deferring to wallet`, err);
   }
 
   try {
     const fees = await fetchFastFees(params.chain.id);
     maxFeePerGas = fees.maxFeePerGas;
     maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
-  } catch {
+    console.log(
+      `🔍 [GAS] chain=${params.chain.id} maxFeePerGas=${maxFeePerGas} wei, maxPriorityFeePerGas=${maxPriorityFeePerGas ?? "n/a"} wei`,
+    );
+  } catch (err) {
     // Fall back to wallet/RPC defaults
+    console.warn(`🔍 [GAS] chain=${params.chain.id} fetchFastFees FAILED — falling back to wallet/RPC defaults`, err);
   }
+
+  console.log(
+    `🔍 [GAS] chain=${params.chain.id} to=${params.to} value=${params.value ?? 0n} wei | gas needed: ${
+      gas !== undefined && maxFeePerGas !== undefined
+        ? `${gas * maxFeePerGas} wei max (${gas} gas × ${maxFeePerGas} wei/gas)`
+        : `unknown (gas=${gas ?? "undefined"}, maxFeePerGas=${maxFeePerGas ?? "undefined"})`
+    }`,
+  );
 
   // Replacement bid: take the larger of last-attempt × 2 and current-fast × 2
   // so we both outbid our pending tx (mempool replacement rule) and stay above

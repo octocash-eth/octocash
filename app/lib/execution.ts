@@ -2,6 +2,7 @@ import type { Account, Address, Chain, Hex, HttpTransport, WalletClient } from "
 import { type Call, encodeFunctionData, getAddress, isAddressEqual, parseAbi, zeroAddress } from "viem";
 import { estimateGas, waitForTransactionReceipt } from "viem/actions";
 import { tokenMessenger } from "~/data/cctp-contracts";
+import { BPS_DENOMINATOR, RAILGUN_PROXY, RAILGUN_SHIELD_FEE_BPS } from "~/data/railgun";
 import { chains, transports } from "~/data/supported-chains";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import { createTransactionError } from "./errors";
@@ -534,6 +535,27 @@ async function tryReconcileFromChain(
         },
       };
     }
+    case "shield": {
+      // Same defensive discriminator as "bridge": the recorded hash must point
+      // at the RailgunSmartWallet shield call, not the preceding ERC20 approve.
+      const expectedTo = RAILGUN_PROXY[step.chainId];
+      const receiptTo = (receipt as { to?: Address | null }).to;
+      if (expectedTo && receiptTo && !isAddressEqual(receiptTo, expectedTo)) {
+        return { kind: "reverted" };
+      }
+      const total = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+      const amount = total - (total * RAILGUN_SHIELD_FEE_BPS) / BPS_DENOMINATOR;
+      return {
+        kind: "success",
+        result: {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          transactionHash: hash,
+          actualOutput: { ...step.outputToken, amount, provenance: step.id },
+        },
+      };
+    }
     default:
       return {
         kind: "success",
@@ -701,6 +723,9 @@ export function estimateRemainingChainOps(currentStep: TransactionStep, state: C
         }
         break;
       }
+      case "shield":
+        ops.push("erc20-approval", "shield");
+        break;
     }
   }
 
@@ -1068,6 +1093,58 @@ async function executeStep(
       };
     }
 
+    case "shield": {
+      // Deposit the consolidated ERC20 into Railgun for the 0zk recipient.
+      const railgunAddress = step.railgunAddress ?? state.destinationToken.railgunAddress;
+      if (!railgunAddress) {
+        throw new Error("Shield step is missing the Railgun (0zk) destination address");
+      }
+
+      const nonZeroTokens = filterZeroAmounts(step.inputTokens, step.id, "shield");
+
+      // All inputs must be the same ERC20 held by the same wallet on this chain.
+      const first = nonZeroTokens[0];
+      for (const token of nonZeroTokens) {
+        if (
+          !isAddressEqual(token.token, first.token) ||
+          token.chainId !== first.chainId ||
+          !isAddressEqual(token.walletAddress, first.walletAddress)
+        ) {
+          throw new Error(`Cannot combine heterogeneous input tokens for shield step ${step.id}`);
+        }
+      }
+      if (isAddressEqual(first.token, zeroAddress)) {
+        throw new Error("Native coins cannot be shielded into Railgun");
+      }
+
+      await validateInputBalances(step, state);
+
+      const totalAmount = nonZeroTokens.reduce((sum, t) => sum + t.amount, 0n);
+      const combinedInput = { ...first, amount: totalAmount };
+
+      // Lazy import keeps the shield crypto (noble/poseidon) out of the main chunk.
+      const { executeRailgunShield } = await import("./railgun-shield");
+      const [transactionHash, shieldedAmount] = await executeRailgunShield(
+        combinedInput,
+        railgunAddress,
+        walletClient,
+        sendCalls,
+        step.retryHints,
+      );
+
+      return {
+        stepId: step.id,
+        status: "success",
+        chainId: step.chainId,
+        actualOutput: {
+          ...step.outputToken,
+          amount: shieldedAmount,
+          provenance: step.id,
+        },
+        transactionHash,
+      };
+    }
+
     case "gas-topup-wait": {
       const transfers = state.metadata?.lifiTransfers;
 
@@ -1241,6 +1318,14 @@ async function calculateStepOutput(
       return {
         ...step.outputToken,
         amount: totalAmount,
+      };
+    }
+    case "shield": {
+      // Shield outputs sum of inputs minus the 0.25% Railgun protocol fee.
+      const totalAmount = updatedInputs.reduce((sum, t) => sum + t.amount, 0n);
+      return {
+        ...step.outputToken,
+        amount: totalAmount - (totalAmount * RAILGUN_SHIELD_FEE_BPS) / BPS_DENOMINATOR,
       };
     }
     case "attestation":

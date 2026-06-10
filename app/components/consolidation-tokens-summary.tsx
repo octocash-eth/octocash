@@ -7,6 +7,8 @@ import type { ConsolidationState, DestinationToken, TokenAmount, TransactionStep
  * Check if a token matches the destination (same token address, chain, and wallet)
  */
 function isTokenAtDestination(token: TokenAmount, destination: DestinationToken): boolean {
+  // A Railgun destination is private — no public token is ever "at" it.
+  if (destination.railgunAddress !== undefined) return false;
   return (
     isAddressEqual(token.token, destination.token) &&
     token.chainId === destination.chainId &&
@@ -27,6 +29,17 @@ interface ConsolidationTokensSummaryProps {
   state: ConsolidationState;
 }
 
+function getTokenSummaryKey(token: TokenAmount, label?: string, railgunAddress?: string) {
+  return [
+    token.walletAddress,
+    token.chainId,
+    token.token,
+    token.amount.toString(),
+    label ?? "",
+    railgunAddress ?? "",
+  ].join(":");
+}
+
 export function ConsolidationTokensSummary({ state }: ConsolidationTokensSummaryProps) {
   // Get final tokens (always includes destination token first)
   const finalTokens = getFinalTokens(state);
@@ -41,8 +54,8 @@ export function ConsolidationTokensSummary({ state }: ConsolidationTokensSummary
         <h4 className="text-sm font-medium mb-3 text-muted-foreground">Source Tokens</h4>
         <ScrollArea className="max-h-[400px] w-full">
           <div className="space-y-2 pr-3">
-            {sourceTokensWithStatus.map(({ token, label }, idx) => (
-              <TokenCard key={`${token.token}-${token.chainId}-${idx}`} token={token} label={label} />
+            {sourceTokensWithStatus.map(({ token, label }) => (
+              <TokenCard key={getTokenSummaryKey(token, label)} token={token} label={label} />
             ))}
           </div>
         </ScrollArea>
@@ -55,8 +68,13 @@ export function ConsolidationTokensSummary({ state }: ConsolidationTokensSummary
         </h4>
         <ScrollArea className="max-h-[400px] w-full">
           <div className="space-y-2 pr-3">
-            {finalTokens.map(({ token, label }, idx) => (
-              <TokenCard key={`${token.token}-${token.chainId}-${idx}`} token={token} label={label} />
+            {finalTokens.map(({ token, label, railgunAddress }) => (
+              <TokenCard
+                key={getTokenSummaryKey(token, label, railgunAddress)}
+                token={token}
+                label={label}
+                railgunAddress={railgunAddress}
+              />
             ))}
           </div>
         </ScrollArea>
@@ -96,7 +114,9 @@ function getSourceTokensWithStatus(state: ConsolidationState): Array<{ token: To
  * Always returns the destination token first (even with 0 amount if never reached)
  * For partial: includes other successful final step outputs marked as "Unintended"
  */
-function getFinalTokens(state: ConsolidationState): Array<{ token: TokenAmount; label?: string }> {
+function getFinalTokens(
+  state: ConsolidationState,
+): Array<{ token: TokenAmount; label?: string; railgunAddress?: string }> {
   const { destinationToken } = state;
   const successfulSteps = state.plan.filter(
     (step) =>
@@ -106,6 +126,29 @@ function getFinalTokens(state: ConsolidationState): Array<{ token: TokenAmount; 
       step.type !== "gas-topup-wait",
   );
   const finalSteps = findFinalSteps(successfulSteps);
+
+  // Railgun destination: the final balance is whatever the shield step(s)
+  // credited to the private 0zk address (already net of the 0.25% fee).
+  if (destinationToken.railgunAddress !== undefined) {
+    const shieldedAmount = successfulSteps
+      .filter((step) => step.type === "shield")
+      .reduce((sum, step) => sum + (state.results[step.id]?.actualOutput?.amount ?? step.outputToken.amount), 0n);
+
+    const finalToken = {
+      token: { ...destinationToken, amount: shieldedAmount },
+      label: "Shielded",
+      railgunAddress: destinationToken.railgunAddress,
+    };
+
+    if (state.status === "completed") return [finalToken];
+
+    // Partial: anything that reached the public intermediate wallet but was
+    // never shielded is still sitting there.
+    const strandedTokens = finalSteps
+      .filter((step) => step.type !== "shield")
+      .map((step) => ({ token: step.outputToken, label: "Not shielded" as const }));
+    return [finalToken, ...strandedTokens];
+  }
 
   if (state.status === "completed") {
     // Sum source tokens already at destination
