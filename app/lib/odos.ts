@@ -91,7 +91,6 @@ function dedupeOdosInputs(inputTokens: TokenAmount[]): { tokenAddress: Address; 
 async function fetchSwapQuote(
   inputTokens: TokenAmount[],
   outputToken: Omit<TokenAmount, "amount">,
-  simple: boolean = false,
 ): Promise<OdosQuoteResponse> {
   const quoteBody = {
     chainId: outputToken.chainId,
@@ -108,7 +107,7 @@ async function fetchSwapQuote(
     referralFeeRecipient: OCTOCASH_FEE_RECIPIENT,
     disableRFQs: true,
     compact: false,
-    simple,
+    simple: true,
   };
   const quote = await fetchJson<OdosQuoteResponse>(odosQuoteUrl(), quoteBody);
   return quote;
@@ -252,7 +251,7 @@ export async function getSwapQuote(
   }
 
   try {
-    const quote = await fetchSwapQuote(inputTokens, outputToken, true);
+    const quote = await fetchSwapQuote(inputTokens, outputToken);
     // `outAmounts` is already net of the referral fee (Odos deducts it server
     // side when `referralFee` is set), so it's used as-is.
     const outputAmount = quote.outAmounts?.[0] ? BigInt(quote.outAmounts[0]) : 0n;
