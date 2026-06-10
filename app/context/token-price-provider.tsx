@@ -66,6 +66,13 @@ function useRegistry(): TokenPriceRegistry {
 export function TokenPriceProvider({ children }: { children: React.ReactNode }) {
   const accumulatedPricesRef = React.useRef<Map<PriceKey, number>>(new Map());
   const refcountsRef = React.useRef<Map<PriceKey, number>>(new Map());
+  /**
+   * Timestamp of the last fetch that covered ALL registered tokens. Used to
+   * avoid hammering the Odos pricing API: every registration change makes a
+   * new query key, but within {@link STALE_MS} of a full fetch we only ask
+   * for tokens that don't have an accumulated price yet (often none).
+   */
+  const lastFullFetchAtRef = React.useRef(0);
 
   const [registeredTokens, setRegisteredTokens] = React.useState<ReadonlyArray<TokenIdentity>>([]);
 
@@ -117,7 +124,22 @@ export function TokenPriceProvider({ children }: { children: React.ReactNode }) 
   const query = useQuery({
     queryKey: ["odos-prices", signature],
     queryFn: async ({ signal }) => {
-      const prices = await fetchOdosPrices(registeredTokens, signal);
+      // A signature change (token registered/unregistered) lands here even
+      // when almost every price is already known. Within the stale window of
+      // the last full fetch, restrict the request to tokens we have no price
+      // for — usually one token (one GET) or none (no network at all). Full
+      // fetches still happen on the polling interval to keep prices fresh.
+      const now = Date.now();
+      const fullRefresh = now - lastFullFetchAtRef.current >= STALE_MS;
+      const targets = fullRefresh
+        ? registeredTokens
+        : registeredTokens.filter(
+            (t) => !accumulatedPricesRef.current.has(odosPriceKey(t.chainId, t.token as Address)),
+          );
+      if (fullRefresh) lastFullFetchAtRef.current = now;
+      if (targets.length === 0) return new Map<PriceKey, number>();
+
+      const prices = await fetchOdosPrices(targets, signal);
       // Accumulate so previously-known prices survive even when a later
       // response omits some tokens (e.g. partial chain failure).
       for (const [key, price] of prices) {

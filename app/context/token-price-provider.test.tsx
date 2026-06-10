@@ -185,6 +185,75 @@ describe("TokenPriceProvider", () => {
     expect(result.current.price).toBe(1);
   });
 
+  test("registering an extra token only fetches the missing token, not all chains", async () => {
+    mockedFetch.mockResolvedValue(new Map([[key(CHAIN, USDC), 1]]));
+    const { Wrapper } = makeWrapper();
+
+    const { result, rerender } = renderHook(
+      ({ tokens }: { tokens: Array<{ chainId: number; token: Address }> }) => {
+        useRegisterPrices(tokens);
+        return usePriceMap();
+      },
+      { wrapper: Wrapper, initialProps: { tokens: [{ chainId: CHAIN, token: USDC }] } },
+    );
+
+    await waitFor(() => expect(result.current.priceFor({ chainId: CHAIN, token: USDC })).toBe(1));
+
+    // A new consumer adds WETH while the USDC price is still fresh.
+    mockedFetch.mockResolvedValue(new Map([[key(CHAIN, WETH), 2500]]));
+    rerender({
+      tokens: [
+        { chainId: CHAIN, token: USDC },
+        { chainId: CHAIN, token: WETH },
+      ],
+    });
+
+    await waitFor(() => expect(result.current.priceFor({ chainId: CHAIN, token: WETH })).toBe(2500));
+
+    // The follow-up fetch must only ask about the token we had no price for.
+    const lastArgs = mockedFetch.mock.calls.at(-1)?.[0] ?? [];
+    expect(lastArgs).toEqual([{ chainId: CHAIN, token: WETH }]);
+    // And the previously fetched price is still served from the accumulator.
+    expect(result.current.priceFor({ chainId: CHAIN, token: USDC })).toBe(1);
+  });
+
+  test("unregistering a token does not trigger a network refetch of the rest", async () => {
+    mockedFetch.mockResolvedValue(
+      new Map([
+        [key(CHAIN, USDC), 1],
+        [key(CHAIN, WETH), 2500],
+      ]),
+    );
+    const { Wrapper } = makeWrapper();
+
+    const { result, rerender } = renderHook(
+      ({ tokens }: { tokens: Array<{ chainId: number; token: Address }> }) => {
+        useRegisterPrices(tokens);
+        return usePriceMap();
+      },
+      {
+        wrapper: Wrapper,
+        initialProps: {
+          tokens: [
+            { chainId: CHAIN, token: USDC },
+            { chainId: CHAIN, token: WETH },
+          ],
+        },
+      },
+    );
+
+    await waitFor(() => expect(result.current.priceFor({ chainId: CHAIN, token: USDC })).toBe(1));
+    const callsBefore = mockedFetch.mock.calls.length;
+
+    // Dropping WETH changes the signature, but every remaining token already
+    // has a fresh price — no network call should happen.
+    rerender({ tokens: [{ chainId: CHAIN, token: USDC }] });
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(mockedFetch.mock.calls.length).toBe(callsBefore);
+    expect(result.current.priceFor({ chainId: CHAIN, token: USDC })).toBe(1);
+  });
+
   test("previously-known prices survive a refetch that omits them", async () => {
     // First call returns USDC=1, second call omits USDC entirely.
     mockedFetch.mockResolvedValueOnce(new Map([[key(CHAIN, USDC), 1]])).mockResolvedValueOnce(new Map());
