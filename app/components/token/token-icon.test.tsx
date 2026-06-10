@@ -311,12 +311,10 @@ describe("TokenIcon automatic asset variant", () => {
   async function renderedSrc(width: number) {
     setRenderedWidth(width);
     const { container } = render(<TokenIcon token="USDC" iconUrl={ICON_URL} />);
-    let img: HTMLImageElement | null = null;
     await waitFor(() => {
-      img = container.querySelector("img");
-      expect(img).toBeInTheDocument();
+      expect(container.querySelector("img")).toBeInTheDocument();
     });
-    return img?.getAttribute("src");
+    return container.querySelector("img")?.getAttribute("src");
   }
 
   test("keeps the default (thumb) url for small icons", async () => {

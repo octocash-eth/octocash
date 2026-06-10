@@ -77,8 +77,11 @@ export function decodeRailgunAddress(address: string): RailgunAddressData {
   return { masterPublicKey, viewingPublicKey, chainId };
 }
 
+/** A private Railgun `0zk...` address. */
+export type RailgunAddress = `${typeof RAILGUN_ADDRESS_PREFIX}${string}`;
+
 /** True when `value` is a well-formed Railgun `0zk...` address. */
-export function isRailgunAddress(value: string | undefined | null): value is string {
+export function isRailgunAddress(value: string | undefined | null): value is RailgunAddress {
   if (!value?.startsWith(RAILGUN_ADDRESS_PREFIX)) return false;
   try {
     decodeRailgunAddress(value);
