@@ -265,6 +265,105 @@ describe("planConsolidation", () => {
     expect(swapSteps[1].inputTokens.length).toBe(2); // Second batch should have 2 tokens
   });
 
+  test("split fallback - a token that poisons a multi-input quote is isolated, not fatal", async () => {
+    // Odos can deterministically fail a multi-input quote (HTTP 500 / errorCode
+    // 2999) on certain token combinations even though every token routes alone.
+    // The planner must split the batch and still produce a working plan that
+    // includes the "poison" token in its own swap step.
+    const POISON = "0x00000000000000000000000000000000000000ff" as Address;
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: "0x0000000000000000000000000000000000000a01" as Address,
+        amount: 1_000000n,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "A",
+        decimals: 18,
+      },
+      {
+        token: "0x0000000000000000000000000000000000000a02" as Address,
+        amount: 1_000000n,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "B",
+        decimals: 18,
+      },
+      { token: POISON, amount: 1_000000n, chainId: 1, walletAddress: WALLET, symbol: "POISON", decimals: 18 },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    // Reject any multi-token quote that contains POISON; everything else (incl.
+    // POISON on its own) resolves.
+    vi.mocked(getSwapQuote).mockImplementation(async (input) => {
+      const tokens = Array.isArray(input) ? input : [input];
+      if (tokens.length > 1 && tokens.some((t) => t.token === POISON)) {
+        throw new Error("ExternalAPIError: Request failed (500): Error getting quote, please try again");
+      }
+      return { token: WBTC_ADDRESS, amount: 8000n, chainId: 1, walletAddress: WALLET, symbol: "WBTC", decimals: 8 };
+    });
+
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+    const swapSteps = result.filter((s: TransactionStep) => s.type === "swap");
+
+    // All three tokens are consolidated, with POISON isolated into its own step.
+    const swappedTokens = swapSteps.flatMap((s) => s.inputTokens.map((t) => t.token));
+    expect(swappedTokens).toContain(POISON);
+    expect(swappedTokens).toHaveLength(3);
+    const poisonStep = swapSteps.find((s) => s.inputTokens.some((t) => t.token === POISON));
+    expect(poisonStep?.inputTokens).toHaveLength(1);
+  });
+
+  test("split fallback - a genuinely unroutable token (4016) is skipped, not fatal", async () => {
+    const UNROUTABLE = "0x00000000000000000000000000000000000000aa" as Address;
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: "0x0000000000000000000000000000000000000b01" as Address,
+        amount: 1_000000n,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "A",
+        decimals: 18,
+      },
+      { token: UNROUTABLE, amount: 1_000000n, chainId: 1, walletAddress: WALLET, symbol: "NOPE", decimals: 18 },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    // Odos returns HTTP 400 / errorCode 4016 for the unroutable token (whether
+    // batched or alone); the routable token quotes fine.
+    vi.mocked(getSwapQuote).mockImplementation(async (input) => {
+      const tokens = Array.isArray(input) ? input : [input];
+      if (tokens.some((t) => t.token === UNROUTABLE)) {
+        throw new Error(
+          `ExternalAPIError: Request failed (400): {"detail":"Routing unavailable for token [${UNROUTABLE}]","errorCode":4016}`,
+        );
+      }
+      return { token: WBTC_ADDRESS, amount: 8000n, chainId: 1, walletAddress: WALLET, symbol: "WBTC", decimals: 8 };
+    });
+
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+    const swapSteps = result.filter((s: TransactionStep) => s.type === "swap");
+    const swappedTokens = swapSteps.flatMap((s) => s.inputTokens.map((t) => t.token));
+
+    // Routable token is consolidated; the 4016 token is dropped rather than
+    // aborting the whole plan.
+    expect(swappedTokens).not.toContain(UNROUTABLE);
+    expect(swappedTokens).toContain("0x0000000000000000000000000000000000000b01");
+  });
+
   test("invalid input - empty sourceTokens should throw PlanningError", async () => {
     const sourceTokens: TokenAmount[] = [];
 

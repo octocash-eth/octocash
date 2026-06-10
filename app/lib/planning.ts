@@ -356,16 +356,18 @@ function validateInputs(
 /**
  * Creates swap steps from a list of tokens to a target token
  *
- * Batches tokens (max 6 per batch due to Odos limitation) and creates swap steps.
- * Each swap step will depend on the provided dependencies.
+ * Tokens are split into batches of up to 6 (Odos's per-quote input cap) and
+ * each batch becomes one multi-input swap step. Because Odos can fail to quote
+ * certain *combinations* of inputs even when every token routes individually,
+ * batches that fail fall back to splitting (see `quoteBatchWithSplitFallback`)
+ * rather than aborting the whole plan.
  *
  * @param tokensToSwap - Tokens to swap to target (must be different tokens)
  * @param targetToken - Target token specification (without amount)
  * @param steps - Existing steps array to append to
  * @param log - Logging function for debug output
- * @returns Array of output tokens from the swaps
- *
- * @throws {Error} ExternalAPIError if any swap quote fails
+ * @returns Array of output tokens from the swaps (excludes any token that is
+ *   unroutable to `targetToken` even on its own — those are skipped, not fatal)
  */
 async function createSwapSteps(
   tokensToSwap: TokenAmount[],
@@ -379,37 +381,102 @@ async function createSwapSteps(
     return outputTokens;
   }
 
-  const batches = batchTokens(tokensToSwap, 6); // Odos limits to 6 tokens per step
+  const batches = batchTokens(tokensToSwap, 6); // Odos caps inputs at 6 per quote
 
   for (const batch of batches) {
-    try {
-      const quote = await getSwapQuote(batch, targetToken);
-      const stepId = `step-${steps.length + 1}`;
-
-      const outputTokenWithProvenance = {
-        ...quote,
-        provenance: stepId, // Mark this token as coming from this swap step
-      };
-
-      steps.push({
-        id: stepId,
-        type: "swap",
-        status: "pending",
-        chainId: targetToken.chainId,
-        inputTokens: batch as [TokenAmount, ...TokenAmount[]],
-        outputToken: outputTokenWithProvenance,
-        quotedAt: Date.now(),
-      });
-
-      outputTokens.push(outputTokenWithProvenance);
-
-      log(`🔍 [DEBUG] Added swap step ${stepId} for ${batch.length} tokens -> ${targetToken.symbol}`);
-    } catch (error) {
-      throw new Error(`ExternalAPIError: ${error instanceof Error ? error.message : "Swap quote failed"}`);
-    }
+    await quoteBatchWithSplitFallback(batch, targetToken, steps, outputTokens, log);
   }
 
   return outputTokens;
+}
+
+/**
+ * Quote a batch into a single swap step, recovering from Odos's combination
+ * failures by splitting.
+ *
+ * Odos can return a generic "Error getting quote" (errorCode 2999) for a
+ * multi-input quote even though each token routes fine in isolation — one
+ * problematic token poisons the whole batch, and the failure is deterministic
+ * (retries and higher slippage don't help). Rather than fail the entire
+ * consolidation plan, on failure we split the batch in half and retry each
+ * half, recursing down to singletons. A token that still fails alone is
+ * genuinely unroutable to `targetToken`; it is skipped (and logged) so the
+ * rest of the wallet can still be consolidated.
+ *
+ * Successful sub-batches are appended to `steps` and their outputs to
+ * `outputTokens` (both mutated in place).
+ */
+async function quoteBatchWithSplitFallback(
+  batch: TokenAmount[],
+  targetToken: Omit<TokenAmount, "amount">,
+  steps: TransactionStep[],
+  outputTokens: TokenAmount[],
+  log: (...args: unknown[]) => void,
+): Promise<void> {
+  if (batch.length === 0) return;
+
+  try {
+    const quote = await getSwapQuote(batch, targetToken);
+    const stepId = `step-${steps.length + 1}`;
+
+    const outputTokenWithProvenance = {
+      ...quote,
+      provenance: stepId, // Mark this token as coming from this swap step
+    };
+
+    steps.push({
+      id: stepId,
+      type: "swap",
+      status: "pending",
+      chainId: targetToken.chainId,
+      inputTokens: batch as [TokenAmount, ...TokenAmount[]],
+      outputToken: outputTokenWithProvenance,
+      quotedAt: Date.now(),
+    });
+
+    outputTokens.push(outputTokenWithProvenance);
+
+    log(`🔍 [DEBUG] Added swap step ${stepId} for ${batch.length} tokens -> ${targetToken.symbol}`);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "quote failed";
+
+    if (batch.length === 1) {
+      // A single token that Odos explicitly can't route (HTTP 400 / errorCode
+      // 4016 "Routing unavailable") is skipped so the rest of the wallet still
+      // consolidates. Any other failure (e.g. the HTTP 500 / 2999 the combo
+      // problem surfaces as, network errors, outages) is propagated so the
+      // plan fails loudly and stays retryable rather than silently dropping
+      // funds on a transient hiccup.
+      if (isUnroutableTokenError(error)) {
+        log(
+          `⚠️ [DEBUG] Skipping unroutable token ${batch[0].symbol ?? batch[0].token} -> ${targetToken.symbol}: ${reason}`,
+        );
+        return;
+      }
+      throw new Error(`ExternalAPIError: ${reason}`);
+    }
+
+    // Multi-input quotes can fail on specific token combinations even when each
+    // token routes alone, so split and retry the halves. If this is actually a
+    // transient outage, the recursion bottoms out at a singleton that rethrows.
+    const mid = Math.ceil(batch.length / 2);
+    log(
+      `🔁 [DEBUG] Swap quote failed for ${batch.length} tokens -> ${targetToken.symbol} (${reason}); splitting ${mid}/${batch.length - mid} and retrying.`,
+    );
+    await quoteBatchWithSplitFallback(batch.slice(0, mid), targetToken, steps, outputTokens, log);
+    await quoteBatchWithSplitFallback(batch.slice(mid), targetToken, steps, outputTokens, log);
+  }
+}
+
+/**
+ * Whether an Odos quote error means the token genuinely has no route to the
+ * target (HTTP 400 / `errorCode 4016` "Routing unavailable for token ..."), as
+ * opposed to a transient/server failure (e.g. HTTP 500 / `errorCode 2999`).
+ * Only the former is safe to skip; the latter must propagate.
+ */
+function isUnroutableTokenError(error: unknown): boolean {
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return msg.includes("routing unavailable") || msg.includes("4016");
 }
 
 /**
