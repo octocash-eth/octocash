@@ -22,7 +22,7 @@ export default function TermsOfService() {
       <main className="flex-1 px-4 sm:px-6 lg:px-8 py-12 md:py-20">
         <article className="prose prose-lg dark:prose-invert mx-auto max-w-3xl">
           <h1>Terms of Service</h1>
-          <p className="text-muted-foreground">Last updated: May 18, 2026</p>
+          <p className="text-muted-foreground">Last updated: June 16, 2026</p>
 
           <p>
             These Terms of Service (&quot;Terms&quot;) govern your access to and use of the OctoCash website and
@@ -50,6 +50,12 @@ export default function TermsOfService() {
             not hold sufficient native gas to execute its share of the consolidation, the Service may route a small
             native-token top-up to that wallet through LI.FI, a bridge aggregator. LI.FI in turn routes the top-up
             through fast underlying bridges such as Across, Relay, and Gas.zip.
+          </p>
+          <p>
+            You may also optionally route consolidated funds to a private Railgun address by shielding an ERC20 token
+            into the Railgun privacy protocol on supported chains (currently Ethereum, Polygon, and Arbitrum). The
+            Railgun integration is a <strong>beta feature</strong> and is provided on an experimental basis; you must
+            acknowledge this before using it.
           </p>
           <p>
             The Service acts solely as a coordination interface. We do not hold, control, or take custody of your
@@ -114,6 +120,10 @@ export default function TermsOfService() {
               networks;
             </li>
             <li>
+              <strong>Railgun</strong> — a privacy protocol used, at your option, to shield consolidated tokens into a
+              private (0zk) address;
+            </li>
+            <li>
               <strong>LI.FI</strong> — bridge aggregator used to route cross-chain native gas top-ups when a source or
               destination wallet lacks gas; LI.FI in turn relies on third-party bridges including Across, Relay, and
               Gas.zip;
@@ -141,6 +151,10 @@ export default function TermsOfService() {
             </li>
             <li>
               <strong>Bridge fees</strong> — 0.01% for USDC bridges (0.14% on Linea), charged by the bridge protocol;
+            </li>
+            <li>
+              <strong>Shield fee</strong> — 0.25% for shielding into Railgun, charged by the Railgun protocol, applied
+              only when you consolidate to a private Railgun (0zk) destination;
             </li>
             <li>
               <strong>Gas top-up bridge fees</strong> — when a source or destination wallet lacks native gas, an
@@ -185,6 +199,12 @@ export default function TermsOfService() {
             <li>
               <strong>Network congestion</strong> — high network usage may result in delayed transactions, increased gas
               fees, or failed transactions.
+            </li>
+            <li>
+              <strong>Beta features</strong> — certain features, including the Railgun shielding integration, are
+              provided on an experimental, beta basis and on an &quot;as is&quot; basis. They may contain bugs or behave
+              unexpectedly. If you choose to use them, you do so entirely at your own risk and bear the full risk of any
+              resulting loss.
             </li>
           </ul>
           <p>

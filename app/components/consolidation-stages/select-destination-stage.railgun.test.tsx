@@ -141,4 +141,16 @@ describe("destination stage with a 0zk address on Arbitrum", () => {
 
     expect(await screen.findByText("Low privacy pool")).toBeInTheDocument();
   });
+
+  test("beta-acknowledgment checkbox is shown for a 0zk destination", () => {
+    renderStage({ walletAddress: ZK_ADDRESS, chainId: ARBITRUM });
+
+    expect(screen.getByLabelText(/beta and that I use it at my own risk/i)).toBeInTheDocument();
+  });
+
+  test("beta-acknowledgment checkbox is hidden for a public 0x destination", () => {
+    renderStage({ walletAddress: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8", chainId: ARBITRUM });
+
+    expect(screen.queryByLabelText(/beta and that I use it at my own risk/i)).not.toBeInTheDocument();
+  });
 });

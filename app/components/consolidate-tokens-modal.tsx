@@ -59,6 +59,7 @@ export function ConsolidateTokensModal({
   onComplete,
 }: ConsolidateTokensModalProps) {
   const [destination, setDestination] = React.useState<DestinationSelection>(EMPTY_DESTINATION);
+  const [railgunBetaAccepted, setRailgunBetaAccepted] = React.useState(false);
   const [open, setOpen] = React.useState(false);
   const [currentStage, setCurrentStage] = React.useState(1);
   const [planId, setPlanId] = React.useState("");
@@ -170,6 +171,7 @@ export function ConsolidateTokensModal({
       setCompletedState(null);
       setTokenAmounts({});
       setPlanId("");
+      setRailgunBetaAccepted(false);
     }
   }, [open]);
 
@@ -191,6 +193,7 @@ export function ConsolidateTokensModal({
     setCompletedState(null);
     setTokenAmounts({});
     setPlanId("");
+    setRailgunBetaAccepted(false);
   }, [connectedAddressesKey, isExecuting]);
 
   // Navigate to a stage, generating a fresh planId when entering stage 3.
@@ -231,11 +234,14 @@ export function ConsolidateTokensModal({
           isAddress(destination.walletAddress ?? "") || isRailgunAddress(destination.walletAddress);
         const hasValidDestination = hasValidWallet && destination.chainId && destination.tokenInfo !== undefined;
         if (!hasValidDestination) return false;
+
+        // A Railgun (0zk) destination requires acknowledging the beta-risk disclaimer.
+        if (isRailgunAddress(destination.walletAddress) && !railgunBetaAccepted) return false;
       }
 
       return true;
     },
-    [currentStage, consolidatedTokens, destination, isExecuting],
+    [currentStage, consolidatedTokens, destination, isExecuting, railgunBetaAccepted],
   );
 
   const handleNext = React.useCallback(() => {
@@ -361,7 +367,12 @@ export function ConsolidateTokensModal({
                 </StepperContent>
 
                 <StepperContent value={2}>
-                  <SelectDestinationStage value={destination} onChange={setDestination} />
+                  <SelectDestinationStage
+                    value={destination}
+                    onChange={setDestination}
+                    betaAccepted={railgunBetaAccepted}
+                    onBetaAcceptedChange={setRailgunBetaAccepted}
+                  />
                   <div className="pt-3 sm:pt-4 flex gap-2">
                     <Button onClick={handleBack} variant="outline" className="flex-1">
                       Back

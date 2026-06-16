@@ -420,6 +420,7 @@ describe("structured-data utils", () => {
         "Are there fees when consolidating?",
         "Is it safe?",
         "Can I choose where my tokens end up?",
+        "Can I consolidate privately?",
         "Who operates OctoCash?",
       ];
 

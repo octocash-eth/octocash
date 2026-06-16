@@ -4,6 +4,7 @@ import { useAccount } from "wagmi";
 import { AddressSelector } from "~/components/address";
 import { RailgunPoolWarning } from "~/components/railgun/railgun-pool-warning";
 import { formatTokenValue, getDefaultTokenOptions, type TokenData, TokenSelector } from "~/components/token";
+import { Checkbox } from "~/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { getRailgunTokenOptions, RAILGUN_SUPPORTED_CHAINS } from "~/data/railgun";
 import { supportedChains } from "~/data/supported-chains";
@@ -24,10 +25,19 @@ export interface DestinationSelection {
 interface SelectDestinationStageProps {
   value: DestinationSelection;
   onChange: (value: DestinationSelection) => void;
+  /** Whether the user has acknowledged the Railgun beta risk (only relevant for 0zk destinations). */
+  betaAccepted?: boolean;
+  onBetaAcceptedChange?: (accepted: boolean) => void;
 }
 
-export function SelectDestinationStage({ value, onChange }: SelectDestinationStageProps) {
+export function SelectDestinationStage({
+  value,
+  onChange,
+  betaAccepted = false,
+  onBetaAcceptedChange,
+}: SelectDestinationStageProps) {
   const _destinationChainId = useId();
+  const _railgunBetaId = useId();
   const { addresses = [] as Address[] } = useAccount();
 
   const isRailgun = isRailgunAddress(value.walletAddress);
@@ -146,6 +156,20 @@ export function SelectDestinationStage({ value, onChange }: SelectDestinationSta
           decimals={value.tokenInfo.decimals}
           chainName={selectedChainName}
         />
+      )}
+
+      {isRailgun && (
+        <div className="flex items-start gap-3 rounded-lg border border-border/70 bg-muted/40 p-3">
+          <Checkbox
+            id={_railgunBetaId}
+            checked={betaAccepted}
+            onCheckedChange={(checked) => onBetaAcceptedChange?.(checked === true)}
+            className="mt-0.5"
+          />
+          <label htmlFor={_railgunBetaId} className="text-sm leading-relaxed cursor-pointer">
+            I understand the Railgun integration is in beta and that I use it at my own risk.
+          </label>
+        </div>
       )}
     </div>
   );

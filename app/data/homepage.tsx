@@ -82,7 +82,7 @@ export const FAQ_ITEMS = [
   {
     question: "Are there fees when consolidating?",
     answer:
-      "Yes. On top of gas fees, you'll pay: 0.04% for stablecoin swaps, 0.16% for volatile asset swaps, and 0.01% for USDC bridges (0.14% on Linea). These fees go to the protocols (Odos and CCTP), with a small portion supporting Octo. All costs are shown upfront.",
+      "Yes. On top of gas fees, you'll pay: 0.04% for stablecoin swaps, 0.16% for volatile asset swaps, 0.01% for USDC bridges (0.14% on Linea), and 0.25% when shielding into Railgun (charged by the Railgun protocol). These fees go to the protocols (Odos, CCTP, and Railgun), with a small portion supporting Octo. All costs are shown upfront.",
   },
   {
     question: "Is it safe?",
@@ -92,7 +92,12 @@ export const FAQ_ITEMS = [
   {
     question: "Can I choose where my tokens end up?",
     answer:
-      "Yes! You can choose which chain and wallet address to consolidate your tokens to. Octo gives you full control over the destination.",
+      "Yes! You can choose which chain and wallet address to consolidate your tokens to. You can even send to a private Railgun (0zk) address. Octo gives you full control over the destination.",
+  },
+  {
+    question: "Can I consolidate privately?",
+    answer:
+      "Yes. You can consolidate into a private Railgun (0zk) address, which shields your tokens inside Railgun's privacy pool. It's available on Ethereum, Polygon, and Arbitrum, and works with any ERC20 — though WETH, USDC, and WBTC are suggested for the best privacy since they have the largest pools (native coins like ETH can't be shielded). Railgun charges a 0.25% shield fee, and it stays fully non-custodial. This integration is currently in beta.",
   },
   {
     question: "Who operates OctoCash?",

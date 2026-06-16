@@ -22,7 +22,7 @@ export default function PrivacyPolicy() {
       <main className="flex-1 px-4 sm:px-6 lg:px-8 py-12 md:py-20">
         <article className="prose prose-lg dark:prose-invert mx-auto max-w-3xl">
           <h1>Privacy Policy</h1>
-          <p className="text-muted-foreground">Last updated: May 18, 2026</p>
+          <p className="text-muted-foreground">Last updated: June 16, 2026</p>
 
           <p>
             This Privacy Policy describes how OtoCo WY LLC - Octocash - Series 435, a Wyoming limited liability company
@@ -103,6 +103,11 @@ export default function PrivacyPolicy() {
               networks. Receives transaction hashes and chain identifiers to facilitate cross-chain transfers.
             </li>
             <li>
+              <strong>Railgun</strong> — a privacy protocol used, at your option, to shield consolidated tokens into a
+              private (0zk) address. When you choose a Railgun destination, your wallet address, the token address, and
+              the amount are submitted on-chain to the Railgun smart contract to execute the shield.
+            </li>
+            <li>
               <strong>LI.FI</strong> (LI.FI GmbH) — bridge aggregator used to route cross-chain native gas top-ups when
               a source or destination wallet lacks gas. Receives your wallet address, source and destination chain IDs,
               native token amounts, source-chain transaction hashes (for status polling), and IP address. LI.FI may
@@ -169,6 +174,11 @@ export default function PrivacyPolicy() {
           <p>
             You acknowledge that the inherent transparency of blockchain technology means that your transaction history
             is permanently available to anyone who can access the relevant blockchain.
+          </p>
+          <p>
+            If you shield tokens into a private Railgun (0zk) address, the shield deposit itself is a public on-chain
+            transaction (including the depositing wallet address, token, and amount), while the resulting shielded
+            balance is held privately within the Railgun protocol.
           </p>
 
           <h2>7. Security</h2>
