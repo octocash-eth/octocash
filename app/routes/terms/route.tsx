@@ -42,8 +42,8 @@ export default function TermsOfService() {
           <p>
             OctoCash is a non-custodial, cross-chain token consolidation interface. The Service allows users to view
             token balances across multiple blockchain networks and consolidate them into a single wallet address on a
-            chosen destination chain. The Service coordinates token swaps through Odos (a decentralized exchange
-            aggregator) and cross-chain bridges through Circle&apos;s Cross-Chain Transfer Protocol v2 (CCTPv2).
+            chosen destination chain. The Service coordinates token swaps through Delora (a token routing and swap
+            protocol) and cross-chain bridges through Circle&apos;s Cross-Chain Transfer Protocol v2 (CCTPv2).
           </p>
           <p>
             When any wallet involved in the consolidation — whether on a source chain or the destination chain — does
@@ -113,7 +113,7 @@ export default function TermsOfService() {
               <strong>Zerion</strong> — portfolio data provider used to retrieve token balances and positions;
             </li>
             <li>
-              <strong>Odos</strong> — a decentralized exchange aggregator used for token swaps;
+              <strong>Delora</strong> — a token routing and swap protocol used for token swaps;
             </li>
             <li>
               <strong>Circle CCTP (Cross-Chain Transfer Protocol)</strong> — used for bridging USDC across blockchain

@@ -6,13 +6,13 @@ import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } fro
 // Mock dependencies BEFORE imports
 // Keep `deriveSwapOutputAmount` real so the verify-before-retry reconcile path
 // computes the actual fallback amount instead of an auto-mock undefined.
-vi.mock("./odos", async () => {
-  const actual = await vi.importActual<typeof import("./odos")>("./odos");
+vi.mock("./delora", async () => {
+  const actual = await vi.importActual<typeof import("./delora")>("./delora");
   return {
     ...actual,
-    executeOdosSwap: vi.fn(),
+    executeDeloraSwap: vi.fn(),
     getSwapQuote: vi.fn(),
-    buildOdosCalls: vi.fn(),
+    buildDeloraCalls: vi.fn(),
   };
 });
 vi.mock("./cctp");
@@ -49,6 +49,7 @@ vi.mock("./gas", () => ({
 
 import { estimateGas, waitForTransactionReceipt } from "viem/actions";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
+import { executeDeloraSwap, getSwapQuote } from "./delora";
 import {
   estimateRemainingChainOps,
   executeConsolidationPlan,
@@ -59,7 +60,6 @@ import {
 import { getNativeBalance } from "./gas";
 import { estimateOperationsForChainWallet, type OperationType } from "./gas-estimation";
 import { getLiFiQuoteForTargetOutput, pollLiFiTransferStatus } from "./lifi";
-import { executeOdosSwap, getSwapQuote } from "./odos";
 import { getPublicClient } from "./public-client";
 import { prepareSendCalls } from "./send-calls";
 
@@ -116,7 +116,7 @@ describe("executeConsolidationPlan", () => {
     });
 
     // Default execution mocks
-    vi.mocked(executeOdosSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap123" });
+    vi.mocked(executeDeloraSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap123" });
     vi.mocked(executeCCTPBurn).mockResolvedValue(["0xburn", 1]);
     vi.mocked(retrieveAttestations).mockResolvedValue([
       {
@@ -204,7 +204,7 @@ describe("executeConsolidationPlan", () => {
 
   test("preserves transactionHash on failed step when error is a SendCallsError", async () => {
     // Replicates the real-world bug: the swap broadcast succeeded but the
-    // executor (e.g. log parsing in executeOdosSwap) threw afterwards.
+    // executor (e.g. log parsing in executeDeloraSwap) threw afterwards.
     // We need the failed StepResult and the failed step to keep the hash
     // so the UI shows a tx link and the verify-before-retry path can run.
     const { SendCallsError } = await import("./send-calls");
@@ -220,7 +220,7 @@ describe("executeConsolidationPlan", () => {
 
     mockState.plan = [swapStep];
 
-    vi.mocked(executeOdosSwap).mockRejectedValueOnce(
+    vi.mocked(executeDeloraSwap).mockRejectedValueOnce(
       new SendCallsError("No output token amount found", { transactionHash: "0xpostbroadcast" }),
     );
 
@@ -248,7 +248,7 @@ describe("executeConsolidationPlan", () => {
 
     mockState.plan = [swapStep];
 
-    vi.mocked(executeOdosSwap).mockRejectedValueOnce(
+    vi.mocked(executeDeloraSwap).mockRejectedValueOnce(
       new TransactionNotBroadcastError("0xstalebroadcast", {
         nonce: 42,
         maxFeePerGas: 10000000000n,
@@ -284,7 +284,7 @@ describe("executeConsolidationPlan", () => {
 
     mockState.plan = [swapStep];
 
-    vi.mocked(executeOdosSwap).mockRejectedValueOnce(
+    vi.mocked(executeDeloraSwap).mockRejectedValueOnce(
       new SendCallsError("swap step 0 reverted", {
         transactionHash: "0xreverted",
         nonce: 7,
@@ -327,7 +327,7 @@ describe("executeConsolidationPlan", () => {
     expect(finalState.plan[0].retryHints).toBeUndefined();
   });
 
-  test("passes step.retryHints through to executeOdosSwap", async () => {
+  test("passes step.retryHints through to executeDeloraSwap", async () => {
     // The retry path is wired end-to-end: hints stored on the step must be
     // forwarded to sendCalls (via the helper) so the wallet sees the same
     // nonce and the doubled fee bid.
@@ -349,7 +349,7 @@ describe("executeConsolidationPlan", () => {
 
     await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
 
-    expect(executeOdosSwap).toHaveBeenCalledWith(expect.any(Array), expect.any(Object), expect.any(Function), {
+    expect(executeDeloraSwap).toHaveBeenCalledWith(expect.any(Array), expect.any(Object), expect.any(Function), {
       nonce: 42,
       maxFeePerGas: 10000000000n,
       maxPriorityFeePerGas: 500000000n,
@@ -359,7 +359,7 @@ describe("executeConsolidationPlan", () => {
   test("reconciles a failed step in place when the chain confirms its prior tx succeeded", async () => {
     // Simulates a retry of a previously-failed swap that *did* land on-chain.
     // The verify-before-retry check should mark the step as success using the
-    // existing hash and never re-broadcast (executeOdosSwap must not be called).
+    // existing hash and never re-broadcast (executeDeloraSwap must not be called).
     const swapStep: TransactionStep = {
       id: "swap-1",
       type: "swap",
@@ -386,7 +386,7 @@ describe("executeConsolidationPlan", () => {
     // RPC returned empty logs (flaky scenario): we still mark success and fall
     // back to the quoted output amount rather than re-broadcasting.
     expect(finalState.results["swap-1"].actualOutput?.amount).toBe(1000000n);
-    expect(executeOdosSwap).not.toHaveBeenCalled();
+    expect(executeDeloraSwap).not.toHaveBeenCalled();
   });
 
   test("reconciles a swap as success even when the receipt has no logs (flaky RPC)", async () => {
@@ -417,7 +417,7 @@ describe("executeConsolidationPlan", () => {
     expect(finalState.results["swap-1"].status).toBe("success");
     expect(finalState.results["swap-1"].transactionHash).toBe("0xnologs");
     expect(finalState.results["swap-1"].actualOutput?.amount).toBe(1000000n);
-    expect(executeOdosSwap).not.toHaveBeenCalled();
+    expect(executeDeloraSwap).not.toHaveBeenCalled();
   });
 
   test("falls through to normal execution when stored hash is reverted on-chain", async () => {
@@ -441,9 +441,9 @@ describe("executeConsolidationPlan", () => {
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
 
-    // Normal execution path runs: executeOdosSwap is invoked, success with the
+    // Normal execution path runs: executeDeloraSwap is invoked, success with the
     // mocked default hash 0xswap123.
-    expect(executeOdosSwap).toHaveBeenCalled();
+    expect(executeDeloraSwap).toHaveBeenCalled();
     expect(finalState.results["swap-1"].status).toBe("success");
     expect(finalState.results["swap-1"].transactionHash).toBe("0xswap123");
   });
@@ -475,10 +475,10 @@ describe("executeConsolidationPlan", () => {
       // biome-ignore lint/suspicious/noExplicitAny: minimal stub for verify-before-retry
     } as any);
 
-    // Capture whatever retryHints get passed to executeOdosSwap so we can assert
+    // Capture whatever retryHints get passed to executeDeloraSwap so we can assert
     // they were cleared before the broadcast.
     const swapRetryHintsSeen: unknown[] = [];
-    vi.mocked(executeOdosSwap).mockImplementationOnce(async (_inputs, _output, _sendCalls, retryHints) => {
+    vi.mocked(executeDeloraSwap).mockImplementationOnce(async (_inputs, _output, _sendCalls, retryHints) => {
       swapRetryHintsSeen.push(retryHints);
       return { amount: 1000000n, transactionHash: "0xfresh" };
     });
@@ -487,7 +487,7 @@ describe("executeConsolidationPlan", () => {
 
     expect(finalState.results["swap-1"].status).toBe("success");
     expect(finalState.results["swap-1"].transactionHash).toBe("0xfresh");
-    // executeOdosSwap saw `undefined` for retryHints — fresh nonce on next broadcast.
+    // executeDeloraSwap saw `undefined` for retryHints — fresh nonce on next broadcast.
     expect(swapRetryHintsSeen[0]).toBeUndefined();
   });
 
@@ -519,7 +519,7 @@ describe("executeConsolidationPlan", () => {
     } as any);
 
     const swapRetryHintsSeen: unknown[] = [];
-    vi.mocked(executeOdosSwap).mockImplementationOnce(async (_inputs, _output, _sendCalls, retryHints) => {
+    vi.mocked(executeDeloraSwap).mockImplementationOnce(async (_inputs, _output, _sendCalls, retryHints) => {
       swapRetryHintsSeen.push(retryHints);
       return { amount: 1000000n, transactionHash: "0xreplaced" };
     });
@@ -558,7 +558,7 @@ describe("executeConsolidationPlan", () => {
     } as any);
 
     const swapRetryHintsSeen: unknown[] = [];
-    vi.mocked(executeOdosSwap).mockImplementationOnce(async (_inputs, _output, _sendCalls, retryHints) => {
+    vi.mocked(executeDeloraSwap).mockImplementationOnce(async (_inputs, _output, _sendCalls, retryHints) => {
       swapRetryHintsSeen.push(retryHints);
       return { amount: 1000000n, transactionHash: "0xrebroadcast" };
     });
@@ -616,7 +616,7 @@ describe("executeConsolidationPlan", () => {
     expect(finalState.results["swap-1"].status).toBe("success");
     expect(finalState.results["swap-1"].transactionHash).toBe("0xrate-limited");
     // No re-broadcast.
-    expect(executeOdosSwap).not.toHaveBeenCalled();
+    expect(executeDeloraSwap).not.toHaveBeenCalled();
   });
 
   test("nonce consumed by an unrelated tx pauses execution with a diagnostic", async () => {
@@ -656,7 +656,7 @@ describe("executeConsolidationPlan", () => {
     expect(details).toBeInstanceOf(Error);
     expect((details as Error).message).toMatch(/nonce was consumed/i);
     expect(finalState.plan[0].retryHints).toBeUndefined();
-    expect(executeOdosSwap).not.toHaveBeenCalled();
+    expect(executeDeloraSwap).not.toHaveBeenCalled();
   });
 
   test("bridge retry does not falsely reconcile from an approve receipt", async () => {
@@ -779,7 +779,7 @@ describe("executeConsolidationPlan", () => {
     mockState.plan = [step1, step2];
 
     // Step-1 returns different actual amount (0.98 USDC instead of 1 USDC)
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 980000n, transactionHash: "0xswap123" }); // 0.98 USDC
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 980000n, transactionHash: "0xswap123" }); // 0.98 USDC
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
 
@@ -818,7 +818,7 @@ describe("executeConsolidationPlan", () => {
     vi.mocked(getSwapQuote).mockResolvedValueOnce(step1.outputToken);
 
     // Mock swap 1: WETH -> USDC (actual: 3100 USDC, estimated: 3000)
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 3100000000n, // 3100 USDC (better than estimated)
       transactionHash: "0xswap1",
     });
@@ -827,7 +827,7 @@ describe("executeConsolidationPlan", () => {
     vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(DAI_ADDRESS, 3100000000000000000000n, 1)); // 3100 DAI
 
     // Mock swap 2: USDC -> DAI
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 3098000000000000000000n, // 3098 DAI (slightly less due to slippage)
       transactionHash: "0xswap2",
     });
@@ -903,13 +903,13 @@ describe("executeConsolidationPlan", () => {
     mockState.plan = [step1, step2, step3];
 
     // Mock swap 1 with better output
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 2100000000n, // 2100 USDC (estimated 2000)
       transactionHash: "0xswap1",
     });
 
     // Mock swap 2 with worse output
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 950000000n, // 950 USDC (estimated 1000)
       transactionHash: "0xswap2",
     });
@@ -918,7 +918,7 @@ describe("executeConsolidationPlan", () => {
     vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(WBTC_ADDRESS, 10200000n, 1)); // Updated estimate
 
     // Mock swap 3
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 10150000n,
       transactionHash: "0xswap3",
     });
@@ -979,7 +979,7 @@ describe("executeConsolidationPlan", () => {
     mockState.plan = [step1, step2];
 
     // Step 1 succeeds with different amount
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 980000n,
       transactionHash: "0xswap1",
     });
@@ -1084,7 +1084,7 @@ describe("executeConsolidationPlan", () => {
     mockState.plan = [swap, bridge];
 
     // The swap fails on its first (and only) attempt.
-    vi.mocked(executeOdosSwap).mockRejectedValueOnce(new Error("Swap failed: insufficient liquidity"));
+    vi.mocked(executeDeloraSwap).mockRejectedValueOnce(new Error("Swap failed: insufficient liquidity"));
 
     // Capture what the bridge actually burns so we can assert it only moved the
     // independently-held USDC (not the missing swap output).
@@ -1412,7 +1412,7 @@ describe("executeConsolidationPlan", () => {
     mockState.plan = [step1, step2];
 
     // First swap succeeds
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 600000n, // Actual output differs
       transactionHash: "0xswap1",
     });
@@ -1423,7 +1423,7 @@ describe("executeConsolidationPlan", () => {
       .mockResolvedValueOnce(makeToken(USDC_ADDRESS, 250000n, 1)); // But step2 still executes
 
     // Second swap succeeds despite quote failure
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 300000n,
       transactionHash: "0xswap2",
     });
@@ -1471,7 +1471,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       const ot = outputToken as TokenAmount;
       return { ...ot, amount: ot.amount ?? 0n };
     });
-    vi.mocked(executeOdosSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap" });
+    vi.mocked(executeDeloraSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap" });
     vi.mocked(executeCCTPBurn).mockResolvedValue(["0xburn", 1]);
     vi.mocked(retrieveAttestations).mockResolvedValue([
       {
@@ -1533,7 +1533,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
     };
 
     // Step 1 swap execution
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 2500000n,
       transactionHash: "0xswap1",
     });
@@ -1542,7 +1542,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
     vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(DAI_ADDRESS, 2500000n, 10));
 
     // Step 4 swap execution (uses the recalculated input)
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 2500000n,
       transactionHash: "0xswap4",
     });
@@ -1590,7 +1590,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
     };
 
     // Step 1 completes with 2.5 USDC instead of 2 USDC
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 2500000n,
       transactionHash: "0xswap1",
     });
@@ -1643,7 +1643,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
     };
 
     // Step 1 completes with 2.3 USDC
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 2300000n,
       transactionHash: "0xswap1",
     });
@@ -1690,7 +1690,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
     };
 
     // Step 1 completes with different amount
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 2500000n,
       transactionHash: "0xswap1",
     });
@@ -1785,7 +1785,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       updatedAt: Date.now(),
     };
 
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 2100000n,
       transactionHash: "0xswap1",
     });
@@ -1832,7 +1832,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       updatedAt: Date.now(),
     };
 
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 2500000n,
       transactionHash: "0xswap1",
     });
@@ -1890,7 +1890,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       updatedAt: Date.now(),
     };
 
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 1200000n,
       transactionHash: "0xswap1",
     });
@@ -1959,7 +1959,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
     };
 
     // Mock swap1 to produce actual amount 105 USDC (instead of 100)
-    vi.mocked(executeOdosSwap)
+    vi.mocked(executeDeloraSwap)
       .mockResolvedValueOnce({ amount: 105000000n, transactionHash: "0xswap1" })
       .mockResolvedValueOnce({ amount: 195000000n, transactionHash: "0xswap2" }); // swap2 produces 195 USDC
 
@@ -2059,7 +2059,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
     };
 
     // Mock swap1 to produce actual amount 784.5 USDC
-    vi.mocked(executeOdosSwap)
+    vi.mocked(executeDeloraSwap)
       .mockResolvedValueOnce({ amount: 784500000n, transactionHash: "0xswap1" })
       .mockResolvedValueOnce({ amount: 200500000n, transactionHash: "0xswap2" });
 
@@ -2121,7 +2121,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
       updatedAt: Date.now(),
     };
 
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({
       amount: 1400000n,
       transactionHash: "0xswap1",
     });
@@ -2131,8 +2131,8 @@ describe("recalculatePlan - comprehensive coverage", () => {
     expect(finalState.status).toBe("completed");
     expect(finalState.results["step-1"].status).toBe("success");
 
-    // Verify that executeOdosSwap was called with only non-zero tokens
-    expect(executeOdosSwap).toHaveBeenCalledWith(
+    // Verify that executeDeloraSwap was called with only non-zero tokens
+    expect(executeDeloraSwap).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ token: WETH_ADDRESS, amount: 1000000n }),
         expect.objectContaining({ token: DAI_ADDRESS, amount: 500000n }),
@@ -2143,7 +2143,7 @@ describe("recalculatePlan - comprehensive coverage", () => {
     );
 
     // Verify zero-amount token was filtered out
-    const callArgs = vi.mocked(executeOdosSwap).mock.calls[0][0];
+    const callArgs = vi.mocked(executeDeloraSwap).mock.calls[0][0];
     expect(callArgs).toHaveLength(2); // Only 2 tokens, not 3
     expect(callArgs.every((t: TokenAmount) => t.amount > 0n)).toBe(true);
   });
@@ -2181,8 +2181,8 @@ describe("recalculatePlan - comprehensive coverage", () => {
     expect(errorDetails instanceof Error).toBe(true);
     expect((errorDetails as Error).message).toContain("Cannot execute swap with zero input amounts");
 
-    // Verify executeOdosSwap was never called
-    expect(executeOdosSwap).not.toHaveBeenCalled();
+    // Verify executeDeloraSwap was never called
+    expect(executeDeloraSwap).not.toHaveBeenCalled();
   });
 
   test("bridge with some zero-amount tokens - should filter them out and execute", async () => {
@@ -2386,7 +2386,7 @@ describe("Additional edge cases for complete coverage", () => {
       const ot = outputToken as TokenAmount;
       return { ...ot, amount: ot.amount ?? 0n };
     });
-    vi.mocked(executeOdosSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap" });
+    vi.mocked(executeDeloraSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap" });
     vi.mocked(executeCCTPBurn).mockResolvedValue(["0xburn", 1]);
     vi.mocked(retrieveAttestations).mockResolvedValue([
       {
@@ -2690,7 +2690,7 @@ describe("Additional edge cases for complete coverage", () => {
     vi.mocked(executeCCTPBurn).mockResolvedValueOnce(["0xbridge", 1]);
 
     // Execute step 1 should NOT be called again (already successful)
-    vi.mocked(executeOdosSwap).mockClear();
+    vi.mocked(executeDeloraSwap).mockClear();
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
@@ -2698,7 +2698,7 @@ describe("Additional edge cases for complete coverage", () => {
     expect(finalState.results["step-1"].status).toBe("success");
     expect(finalState.results["step-2"].status).toBe("success");
     // Verify step 1 was NOT re-executed
-    expect(executeOdosSwap).not.toHaveBeenCalled();
+    expect(executeDeloraSwap).not.toHaveBeenCalled();
   });
 
   test("execution skips already failed steps", async () => {
@@ -2744,7 +2744,7 @@ describe("Additional edge cases for complete coverage", () => {
     expect(finalState.results["step-1"].status).toBe("failed");
     expect(finalState.results["step-2"].status).toBe("success");
     // Verify step 1 was NOT re-executed
-    expect(executeOdosSwap).toHaveBeenCalledTimes(1); // Only step 2
+    expect(executeDeloraSwap).toHaveBeenCalledTimes(1); // Only step 2
   });
 
   test("swap quote is refreshed on paused retry when quote is stale", async () => {
@@ -2766,7 +2766,7 @@ describe("Additional edge cases for complete coverage", () => {
     });
 
     vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 850000n, 1));
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 850000n, transactionHash: "0xswap" });
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 850000n, transactionHash: "0xswap" });
 
     const { finalValue: finalState, values: states } = await consumeGenerator(
       executeConsolidationPlan(state, mockWalletClient),
@@ -2804,7 +2804,7 @@ describe("Additional edge cases for complete coverage", () => {
     });
 
     vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 820000n, 1));
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 820000n, transactionHash: "0xswap" });
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 820000n, transactionHash: "0xswap" });
 
     const { finalValue: finalState, values: states } = await consumeGenerator(
       executeConsolidationPlan(state, mockWalletClient),
@@ -2840,7 +2840,7 @@ describe("Additional edge cases for complete coverage", () => {
     });
 
     vi.mocked(getSwapQuote).mockClear();
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 900000n, transactionHash: "0xswap" });
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 900000n, transactionHash: "0xswap" });
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
@@ -2869,8 +2869,8 @@ describe("Additional edge cases for complete coverage", () => {
     });
 
     vi.mocked(getSwapQuote).mockClear();
-    vi.mocked(getSwapQuote).mockRejectedValueOnce(new Error("odos down"));
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 900000n, transactionHash: "0xswap" });
+    vi.mocked(getSwapQuote).mockRejectedValueOnce(new Error("delora down"));
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 900000n, transactionHash: "0xswap" });
 
     const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
@@ -2909,7 +2909,7 @@ describe("Additional edge cases for complete coverage", () => {
     });
 
     vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 750000n, 1));
-    vi.mocked(executeOdosSwap).mockResolvedValueOnce({ amount: 750000n, transactionHash: "0xswap" });
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 750000n, transactionHash: "0xswap" });
 
     const { finalValue: finalState, values: states } = await consumeGenerator(
       executeConsolidationPlan(state, mockWalletClient),

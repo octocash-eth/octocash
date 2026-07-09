@@ -187,7 +187,7 @@ export async function fetchZerionTokenBalances(addresses: string[]): Promise<Tok
 
             // Drop dust against Zerion's own price — this is a conservative
             // pre-filter to keep the response small. Live USD values are
-            // sourced from the Odos-backed price context downstream; we
+            // sourced from the Delora-backed price context downstream; we
             // don't propagate Zerion's price onto the returned token.
             const zerionPrice = attributes.price ?? 0;
             const zerionUsd = Number(formatUnits(amount, decimals)) * zerionPrice;

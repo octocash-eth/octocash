@@ -313,12 +313,12 @@ describe("Section Components - Integration tests", () => {
       render(<FeaturesSection />);
       expect(screen.getByText(FEATURES_CONTENT.trustedTech.title)).toBeInTheDocument();
       expect(screen.getByText(/Circle's CCTPv2/)).toBeInTheDocument();
-      expect(screen.getByText(/Odos/)).toBeInTheDocument();
+      expect(screen.getByText(/Delora/)).toBeInTheDocument();
     });
 
     test("renders trusted tech logos for light and dark modes", () => {
       render(<FeaturesSection />);
-      const logos = screen.getAllByAltText("Circle CCTP and Odos logos");
+      const logos = screen.getAllByAltText("Circle CCTP and Delora logos");
       expect(logos).toHaveLength(2); // One for light, one for dark
     });
 

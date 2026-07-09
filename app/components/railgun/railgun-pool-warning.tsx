@@ -21,7 +21,7 @@ interface RailgunPoolTvl {
 
 /**
  * USD value of `token` shielded in the Railgun pool on `chainId`
- * (`balanceOf(proxy)` x live Odos price).
+ * (`balanceOf(proxy)` x live Delora price).
  */
 export function useRailgunPoolTvl(
   chainId: number | undefined,

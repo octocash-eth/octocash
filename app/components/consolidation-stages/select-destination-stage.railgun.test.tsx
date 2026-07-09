@@ -2,7 +2,7 @@
  * Reproduction of the consolidate-modal destination step with a Railgun 0zk
  * destination: real SelectDestinationStage + real TokenSelector + real
  * RailgunPoolWarning + real price/currency providers. Only the network edges
- * are mocked (pool balanceOf, Odos prices, CoinGecko rates).
+ * are mocked (pool balanceOf, Delora prices, CoinGecko rates).
  *
  * Live data (2026-06-10): the Arbitrum Railgun WBTC pool holds ~1.09 WBTC
  * (~$67.5k), well below LOW_PRIVACY_TVL_USD — the warning MUST appear.
@@ -41,9 +41,9 @@ vi.mock("~/lib/railgun", async () => {
   return { ...actual, getRailgunPoolBalance: vi.fn() };
 });
 
-vi.mock("~/lib/api/odos", async () => {
-  const actual = await vi.importActual<typeof import("~/lib/api/odos")>("~/lib/api/odos");
-  return { ...actual, fetchOdosPrices: vi.fn() };
+vi.mock("~/lib/api/delora", async () => {
+  const actual = await vi.importActual<typeof import("~/lib/api/delora")>("~/lib/api/delora");
+  return { ...actual, fetchDeloraPrices: vi.fn() };
 });
 
 vi.mock("~/lib/api/coingecko", async () => {
@@ -52,11 +52,11 @@ vi.mock("~/lib/api/coingecko", async () => {
 });
 
 const { getRailgunPoolBalance, isRailgunAddress } = await import("~/lib/railgun");
-const { fetchOdosPrices, odosPriceKey } = await import("~/lib/api/odos");
+const { fetchDeloraPrices, deloraPriceKey } = await import("~/lib/api/delora");
 const { fetchCoinGeckoExchangeRates } = await import("~/lib/api/coingecko");
 
 const mockedBalance = vi.mocked(getRailgunPoolBalance);
-const mockedPrices = vi.mocked(fetchOdosPrices);
+const mockedPrices = vi.mocked(fetchDeloraPrices);
 const mockedRates = vi.mocked(fetchCoinGeckoExchangeRates);
 
 const ARBITRUM = 42161;
@@ -110,7 +110,7 @@ beforeEach(() => {
   mockedBalance.mockReset();
   mockedBalance.mockResolvedValue(WBTC_POOL_BALANCE);
   mockedPrices.mockReset();
-  mockedPrices.mockResolvedValue(new Map([[odosPriceKey(ARBITRUM, WBTC_ARBITRUM), WBTC_PRICE]]));
+  mockedPrices.mockResolvedValue(new Map([[deloraPriceKey(ARBITRUM, WBTC_ARBITRUM), WBTC_PRICE]]));
   mockedRates.mockReset();
   mockedRates.mockResolvedValue({ USD: 1 });
 });

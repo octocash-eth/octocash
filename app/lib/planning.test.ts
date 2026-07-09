@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { TokenAmount, TransactionStep } from "./types";
 
 // Mock external dependencies BEFORE imports
-vi.mock("./odos");
+vi.mock("./delora");
 vi.mock("./cctp");
 vi.mock("./public-client", () => ({
   getPublicClient: vi.fn(() => ({
@@ -15,13 +15,13 @@ vi.mock("./gas", () => ({
   getNativeBalance: vi.fn().mockResolvedValue(1000000000000000000n), // 1 ETH
   findRichestSource: vi.fn().mockResolvedValue(null),
 }));
-vi.mock("./api/odos", () => ({
+vi.mock("./api/delora", () => ({
   // Default: no native USD prices known. createGasTopUpSteps falls back to
   // raw-balance tie-break, which preserves pre-USD-sort behavior in tests
   // that don't care about pricing. Tests that exercise USD-aware ordering
   // override this per-test.
-  fetchOdosPrices: vi.fn().mockResolvedValue(new Map()),
-  odosPriceKey: (chainId: number, address: string) => `${chainId}:${address.toLowerCase()}`,
+  fetchDeloraPrices: vi.fn().mockResolvedValue(new Map()),
+  deloraPriceKey: (chainId: number, address: string) => `${chainId}:${address.toLowerCase()}`,
 }));
 vi.mock("./lifi", () => ({
   getLiFiQuoteForTargetOutput: vi.fn(),
@@ -43,7 +43,7 @@ vi.mock("./gas-estimation", () => ({
 }));
 
 import { getBridgeFee } from "./cctp";
-import { getSwapQuote } from "./odos";
+import { getSwapQuote } from "./delora";
 import { planConsolidation } from "./planning";
 import { getPublicClient } from "./public-client";
 
@@ -228,7 +228,7 @@ describe("planConsolidation", () => {
     expect(types).toContain("swap");
   });
 
-  test("batching - more than 6 tokens should create multiple batches", async () => {
+  test("per-token steps - each unique token address gets its own swap step", async () => {
     // Create 8 tokens on the same chain
     const sourceTokens: TokenAmount[] = Array.from({ length: 8 }, (_, i) => ({
       token: `0x${i.toString().padStart(40, "0")}` as Address,
@@ -258,23 +258,22 @@ describe("planConsolidation", () => {
 
     const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
 
-    // Check if tokens are split into multiple batches (max 6 per batch)
+    // Delora quotes are single-input: one swap step per token address.
     const swapSteps = result.filter((s: TransactionStep) => s.type === "swap");
-    expect(swapSteps.length).toBe(2); // Should be 2 swap steps (6 + 2 tokens)
-    expect(swapSteps[0].inputTokens.length).toBe(6); // First batch should have 6 tokens
-    expect(swapSteps[1].inputTokens.length).toBe(2); // Second batch should have 2 tokens
+    expect(swapSteps.length).toBe(8);
+    for (const step of swapSteps) {
+      expect(step.inputTokens.length).toBe(1);
+    }
   });
 
-  test("split fallback - a token that poisons a multi-input quote is isolated, not fatal", async () => {
-    // Odos can deterministically fail a multi-input quote (HTTP 500 / errorCode
-    // 2999) on certain token combinations even though every token routes alone.
-    // The planner must split the batch and still produce a working plan that
-    // includes the "poison" token in its own swap step.
-    const POISON = "0x00000000000000000000000000000000000000ff" as Address;
+  test("per-token steps - same-address entries with different provenance share one step", async () => {
+    const TOKEN_A = "0x0000000000000000000000000000000000000a01" as Address;
     const sourceTokens: TokenAmount[] = [
+      { token: TOKEN_A, amount: 1_000000n, chainId: 1, walletAddress: WALLET, symbol: "A", decimals: 18 },
+      // Same address, EIP-55 checksum casing variation and a different amount.
       {
-        token: "0x0000000000000000000000000000000000000a01" as Address,
-        amount: 1_000000n,
+        token: "0x0000000000000000000000000000000000000A01" as Address,
+        amount: 2_000000n,
         chainId: 1,
         walletAddress: WALLET,
         symbol: "A",
@@ -288,7 +287,6 @@ describe("planConsolidation", () => {
         symbol: "B",
         decimals: 18,
       },
-      { token: POISON, amount: 1_000000n, chainId: 1, walletAddress: WALLET, symbol: "POISON", decimals: 18 },
     ];
 
     const destinationToken = {
@@ -299,28 +297,25 @@ describe("planConsolidation", () => {
       decimals: 8,
     };
 
-    // Reject any multi-token quote that contains POISON; everything else (incl.
-    // POISON on its own) resolves.
-    vi.mocked(getSwapQuote).mockImplementation(async (input) => {
-      const tokens = Array.isArray(input) ? input : [input];
-      if (tokens.length > 1 && tokens.some((t) => t.token === POISON)) {
-        throw new Error("ExternalAPIError: Request failed (500): Error getting quote, please try again");
-      }
-      return { token: WBTC_ADDRESS, amount: 8000n, chainId: 1, walletAddress: WALLET, symbol: "WBTC", decimals: 8 };
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: WBTC_ADDRESS,
+      amount: 8000n,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
     });
 
     const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
     const swapSteps = result.filter((s: TransactionStep) => s.type === "swap");
 
-    // All three tokens are consolidated, with POISON isolated into its own step.
-    const swappedTokens = swapSteps.flatMap((s) => s.inputTokens.map((t) => t.token));
-    expect(swappedTokens).toContain(POISON);
-    expect(swappedTokens).toHaveLength(3);
-    const poisonStep = swapSteps.find((s) => s.inputTokens.some((t) => t.token === POISON));
-    expect(poisonStep?.inputTokens).toHaveLength(1);
+    // Two steps: one for the merged A entries, one for B.
+    expect(swapSteps.length).toBe(2);
+    const aStep = swapSteps.find((s) => s.inputTokens[0].token.toLowerCase() === TOKEN_A.toLowerCase());
+    expect(aStep?.inputTokens).toHaveLength(2);
   });
 
-  test("split fallback - a genuinely unroutable token (4016) is skipped, not fatal", async () => {
+  test("unroutable token (no adapters available) is skipped, not fatal", async () => {
     const UNROUTABLE = "0x00000000000000000000000000000000000000aa" as Address;
     const sourceTokens: TokenAmount[] = [
       {
@@ -342,14 +337,12 @@ describe("planConsolidation", () => {
       decimals: 8,
     };
 
-    // Odos returns HTTP 400 / errorCode 4016 for the unroutable token (whether
-    // batched or alone); the routable token quotes fine.
+    // Delora reports "no route" as HTTP 500 / code UNKNOWN with this message
+    // (verified live); the routable token quotes fine.
     vi.mocked(getSwapQuote).mockImplementation(async (input) => {
       const tokens = Array.isArray(input) ? input : [input];
       if (tokens.some((t) => t.token === UNROUTABLE)) {
-        throw new Error(
-          `ExternalAPIError: Request failed (400): {"detail":"Routing unavailable for token [${UNROUTABLE}]","errorCode":4016}`,
-        );
+        throw new Error("ExternalAPIError: Request failed (500): UNKNOWN: No adapters available for this request");
       }
       return { token: WBTC_ADDRESS, amount: 8000n, chainId: 1, walletAddress: WALLET, symbol: "WBTC", decimals: 8 };
     });
@@ -358,10 +351,31 @@ describe("planConsolidation", () => {
     const swapSteps = result.filter((s: TransactionStep) => s.type === "swap");
     const swappedTokens = swapSteps.flatMap((s) => s.inputTokens.map((t) => t.token));
 
-    // Routable token is consolidated; the 4016 token is dropped rather than
-    // aborting the whole plan.
+    // Routable token is consolidated; the unroutable token is dropped rather
+    // than aborting the whole plan.
     expect(swappedTokens).not.toContain(UNROUTABLE);
     expect(swappedTokens).toContain("0x0000000000000000000000000000000000000b01");
+  });
+
+  test("transient quote failure aborts the plan instead of dropping the token", async () => {
+    const FLAKY = "0x00000000000000000000000000000000000000bb" as Address;
+    const sourceTokens: TokenAmount[] = [
+      { token: FLAKY, amount: 1_000000n, chainId: 1, walletAddress: WALLET, symbol: "FLAKY", decimals: 18 },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    // A plain 5xx (outage, not the deterministic no-route message) must
+    // propagate so the plan fails loudly and stays retryable.
+    vi.mocked(getSwapQuote).mockRejectedValue(new Error("ExternalAPIError: Request failed (503): Service Unavailable"));
+
+    await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow("ExternalAPIError");
   });
 
   test("invalid input - empty sourceTokens should throw PlanningError", async () => {
@@ -444,7 +458,10 @@ describe("planConsolidation", () => {
       decimals: 18,
     };
 
-    vi.mocked(getSwapQuote).mockRejectedValue(new Error("API unavailable"));
+    // The real getSwapQuote wraps API failures with this prefix (delora.ts);
+    // planning propagates it unchanged so the executor's auto-retry
+    // classification still sees it.
+    vi.mocked(getSwapQuote).mockRejectedValue(new Error("ExternalAPIError: API unavailable"));
 
     await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow("ExternalAPIError");
   });
@@ -1158,8 +1175,8 @@ describe("planConsolidation", () => {
     expect(transferStep?.outputToken.provenance).toBe(transferStep?.id);
   });
 
-  test("provenance tracking - batched swaps should each have unique provenance", async () => {
-    // Create 8 tokens on the same chain to trigger batching
+  test("provenance tracking - per-token swaps should each have unique provenance", async () => {
+    // Create 8 tokens on the same chain, one swap step each
     const sourceTokens: TokenAmount[] = Array.from({ length: 8 }, (_, i) => ({
       token: `0x${i.toString().padStart(40, "0")}` as Address,
       amount: 1000000n,
@@ -1190,13 +1207,14 @@ describe("planConsolidation", () => {
 
     const swapSteps = result.filter((s) => s.type === "swap");
 
-    // Should have 2 swap steps due to batching
-    expect(swapSteps).toHaveLength(2);
+    // One swap step per token
+    expect(swapSteps).toHaveLength(8);
 
     // Each swap should have unique provenance
-    expect(swapSteps[0].outputToken.provenance).toBe(swapSteps[0].id);
-    expect(swapSteps[1].outputToken.provenance).toBe(swapSteps[1].id);
-    expect(swapSteps[0].id).not.toBe(swapSteps[1].id);
+    for (const step of swapSteps) {
+      expect(step.outputToken.provenance).toBe(step.id);
+    }
+    expect(new Set(swapSteps.map((s) => s.id)).size).toBe(swapSteps.length);
   });
 
   test("transfer step - destination token at wrong wallet should create transfer step", async () => {
@@ -2662,7 +2680,7 @@ describe("planConsolidation", () => {
       // off Polygon and fall through to mainnet on failure. With USD-aware
       // sorting, Optimism wins.
       const { getNativeBalance, findRichestSource } = await import("./gas");
-      const { fetchOdosPrices } = await import("./api/odos");
+      const { fetchDeloraPrices } = await import("./api/delora");
       const { getLiFiQuoteForTargetOutput } = await import("./lifi");
       const { estimateChainGasCosts } = await import("./gas-estimation");
 
@@ -2673,7 +2691,7 @@ describe("planConsolidation", () => {
         if (chain.id === 137) return 100_000_000_000_000_000_000n; // 100 POL
         return 0n;
       });
-      vi.mocked(fetchOdosPrices).mockResolvedValue(
+      vi.mocked(fetchDeloraPrices).mockResolvedValue(
         new Map([
           [`10:${"0x0000000000000000000000000000000000000000"}`, 2000], // ETH = $2000
           [`137:${"0x0000000000000000000000000000000000000000"}`, 0.2], // POL = $0.20
@@ -2715,7 +2733,7 @@ describe("planConsolidation", () => {
       // Optimism (10) wins on USD value despite Polygon's bigger raw-wei balance.
       expect(topup?.chainId).toBe(10);
 
-      vi.mocked(fetchOdosPrices).mockResolvedValue(new Map());
+      vi.mocked(fetchDeloraPrices).mockResolvedValue(new Map());
       vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
       vi.mocked(estimateChainGasCosts).mockResolvedValue({
         totalGasCost: 100_000_000_000_000n,

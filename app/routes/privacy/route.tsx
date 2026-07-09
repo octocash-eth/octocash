@@ -95,7 +95,7 @@ export default function PrivacyPolicy() {
           <h3>DeFi protocols</h3>
           <ul>
             <li>
-              <strong>Odos</strong> — a decentralized exchange aggregator used for token swaps. Receives wallet
+              <strong>Delora</strong> — a token routing and swap protocol used for token swaps. Receives wallet
               addresses, token addresses, and amounts to generate and execute swap quotes;
             </li>
             <li>

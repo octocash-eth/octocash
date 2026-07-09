@@ -42,24 +42,44 @@ export default function FeaturesSection() {
                 {FEATURES_CONTENT.trustedTech.description}
               </CardDescription>
             </div>
-            <img
-              src="/decorations/trusted-tech-light.svg"
-              alt="Circle CCTP and Odos logos"
-              width={716}
-              height={107}
-              className="w-full max-w-2xl h-auto dark:hidden"
-              loading="lazy"
-              decoding="async"
-            />
-            <img
-              src="/decorations/trusted-tech-dark.svg"
-              alt="Circle CCTP and Odos logos"
-              width={716}
-              height={107}
-              className="w-full max-w-2xl h-auto hidden dark:block"
-              loading="lazy"
-              decoding="async"
-            />
+            <div className="flex flex-wrap items-center justify-center gap-x-12 gap-y-6">
+              <img
+                src="/other-icons/circle-light.webp"
+                alt=""
+                width={800}
+                height={205}
+                className="h-14 w-auto dark:hidden"
+                loading="lazy"
+                decoding="async"
+              />
+              <img
+                src="/other-icons/circle-dark.webp"
+                alt=""
+                width={800}
+                height={205}
+                className="h-14 w-auto hidden dark:block"
+                loading="lazy"
+                decoding="async"
+              />
+              <img
+                src="/other-icons/delora-light.webp"
+                alt=""
+                width={781}
+                height={205}
+                className="h-14 w-auto dark:hidden"
+                loading="lazy"
+                decoding="async"
+              />
+              <img
+                src="/other-icons/delora-dark.webp"
+                alt=""
+                width={781}
+                height={205}
+                className="h-14 w-auto hidden dark:block"
+                loading="lazy"
+                decoding="async"
+              />
+            </div>
           </CardContent>
         </Card>
       </div>

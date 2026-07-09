@@ -55,8 +55,10 @@ export function TransactionPlanExecutor({
   }
 
   // Show error if planning failed. Auto-retry only for transient external API
-  // failures (Odos 5xx) — other errors render statically so we never loop on
-  // unrecoverable conditions like UnsupportedRouteError.
+  // failures (Delora 5xx / network) — other errors render statically so we
+  // never loop on unrecoverable conditions like UnsupportedRouteError or
+  // Delora rate limiting (thrown as `RateLimitError:`, deliberately without
+  // the `ExternalAPIError:` prefix, so retrying waits for the user).
   if (planError) {
     const classified = createTransactionError(new Error(planError));
     const autoRetry = classified.code === ERROR_CODES.EXTERNAL_API_ERROR;

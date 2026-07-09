@@ -6,9 +6,9 @@ import { ConsolidateTokensModal } from "~/components/consolidate-tokens-modal";
 import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
 import { chains } from "~/data/supported-chains";
 import {
-  checkOdosRoutableToUsdc,
+  checkDeloraRoutableToUsdc,
+  fetchDeloraTokensForChain,
   fetchExtraTokenBalances,
-  fetchOdosTokensForChain,
   fetchZerionTokenBalances,
 } from "~/lib/api";
 import { MAX_SOURCE_TOKENS } from "~/lib/planning";
@@ -60,31 +60,31 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     staleTime: 30_000, // 30 seconds
   });
 
-  // Per-chain Odos `/token` catalog fetches. These run alongside `zerionQuery`
+  // Per-chain Delora `/v1/tokens` catalog fetches. These run alongside `zerionQuery`
   // (no gating) so the catalog is usually ready by the time the filter runs.
   // The catalog is global (independent of `addresses`), so the cache key omits
   // them and is shared across users.
-  const odosTokenListQueries = useQueries({
+  const deloraTokenListQueries = useQueries({
     queries: SUPPORTED_CHAIN_IDS.map((chainId) => ({
-      queryKey: ["odos-token-list", chainId],
-      queryFn: ({ signal }: { signal: AbortSignal }) => fetchOdosTokensForChain(chainId, signal),
+      queryKey: ["delora-token-list", chainId],
+      queryFn: ({ signal }: { signal: AbortSignal }) => fetchDeloraTokensForChain(chainId, signal),
       staleTime: 10 * 60_000, // catalog is stable, refresh sparingly
     })),
   });
 
   // Index per-chain so the row filter is O(1) per token.
-  const odosByChain = React.useMemo(() => {
-    const m = new Map<number, (typeof odosTokenListQueries)[number]>();
+  const deloraByChain = React.useMemo(() => {
+    const m = new Map<number, (typeof deloraTokenListQueries)[number]>();
     SUPPORTED_CHAIN_IDS.forEach((id, i) => {
-      m.set(id, odosTokenListQueries[i]);
+      m.set(id, deloraTokenListQueries[i]);
     });
     return m;
-  }, [odosTokenListQueries]);
+  }, [deloraTokenListQueries]);
 
   // Register every fetched token (visible *and* not-yet-admitted) with the
   // shared price context. Hidden candidates need a live price to drive the
-  // routability probe, so we can't wait until after `isOdosAllowed` filters
-  // the list. Odos's pricing endpoint accepts many addresses per request,
+  // routability probe, so we can't wait until after `isDeloraAllowed` filters
+  // the list. Delora's pricing endpoint accepts many addresses per request,
   // so the cost of priceing the long tail is small.
   const allFetchedTokens = React.useMemo<TokenAmount[]>(
     () => [...(zerionQuery.data ?? []), ...(extraQuery.data ?? [])],
@@ -93,7 +93,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
   useRegisterPrices(allFetchedTokens);
   const { priceFor, isPending: isPriceLoading } = usePriceMap();
 
-  // USD value via the live Odos price. Returns 0 when no price is known yet
+  // USD value via the live Delora price. Returns 0 when no price is known yet
   // (token not yet priced or the chain's pricing call hasn't returned).
   const liveUsd = React.useCallback(
     (t: TokenAmount): number => {
@@ -104,19 +104,19 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     [priceFor],
   );
 
-  // Tokens that the per-chain Odos `/token` catalog definitively does not
+  // Tokens that the per-chain Delora `/v1/tokens` catalog definitively does not
   // know about, deduped by `${chainId}:${token}`. The catalog is conservative
   // — many legitimately routable tokens are missing — so we probe each of
-  // these against Odos's `/sor/quote/v3` endpoint (the same one planning
+  // these against Delora's `/v1/quotes` endpoint (the same one planning
   // uses) and re-admit anything that comes back with a real USDC route.
   //
-  // We only consider tokens with a live Odos price and a USD value above
+  // We only consider tokens with a live Delora price and a USD value above
   // the existing dust threshold ($0.01), to keep this off the hot path for
   // the long tail of priceless / dusty hidden tokens.
   const hiddenCandidates = React.useMemo<TokenAmount[]>(() => {
     const seen = new Map<string, TokenAmount>();
     for (const t of allFetchedTokens) {
-      const q = odosByChain.get(t.chainId);
+      const q = deloraByChain.get(t.chainId);
       if (!q?.isSuccess || q.data === undefined) continue;
       if (q.data.has(t.token.toLowerCase())) continue;
       if (priceFor(t) === undefined) continue;
@@ -125,12 +125,12 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
       if (!seen.has(key)) seen.set(key, t);
     }
     return Array.from(seen.values());
-  }, [allFetchedTokens, odosByChain, priceFor, liveUsd]);
+  }, [allFetchedTokens, deloraByChain, priceFor, liveUsd]);
 
   // Probe each hidden candidate. We gate on `zerionQuery.isSuccess` so the
   // initial table render — driven by catalog-known tokens — paints before
   // any of these network requests fire. As probes resolve, `routableSet`
-  // grows and `isOdosAllowed` flips for the affected tokens, which causes
+  // grows and `isDeloraAllowed` flips for the affected tokens, which causes
   // the `tokens` memo to fold them back into the visible table reactively.
   const routabilityQueries = useQueries({
     queries: hiddenCandidates.map((t) => {
@@ -138,9 +138,9 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
       // resolved live price, so this is non-undefined.
       const price = priceFor(t) as number;
       return {
-        queryKey: ["odos-routable-usdc", t.chainId, t.token.toLowerCase()],
+        queryKey: ["delora-routable-usdc", t.chainId, t.token.toLowerCase()],
         queryFn: ({ signal }: { signal: AbortSignal }) =>
-          checkOdosRoutableToUsdc(
+          checkDeloraRoutableToUsdc(
             {
               chainId: t.chainId,
               token: t.token,
@@ -167,21 +167,21 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
   }, [hiddenCandidates, routabilityQueries]);
 
   // Per-chain gate + fail-open: a token on chain N is hidden until that
-  // chain's Odos catalog resolves (success or error). On success we keep
-  // only addresses present in the catalog *plus* any token a deferred Odos
+  // chain's Delora catalog resolves (success or error). On success we keep
+  // only addresses present in the catalog *plus* any token a deferred Delora
   // quote probe confirmed is still routable to USDC; on error we keep
-  // everything so a transient Odos blip doesn't nuke the user's balance
+  // everything so a transient Delora blip doesn't nuke the user's balance
   // view.
-  const isOdosAllowed = React.useCallback(
+  const isDeloraAllowed = React.useCallback(
     (token: TokenAmount): boolean => {
       if (routableSet.has(`${token.chainId}:${token.token.toLowerCase()}`)) return true;
-      const q = odosByChain.get(token.chainId);
+      const q = deloraByChain.get(token.chainId);
       if (!q) return false; // chain not in our supported set
       if (q.isPending) return false; // per-chain gate: still loading
       if (q.isError) return true; // fail-open on chain-level failure
       return q.data?.has(token.token.toLowerCase()) ?? false;
     },
-    [odosByChain, routableSet],
+    [deloraByChain, routableSet],
   );
 
   // Dev-aid: surface tokens that we've definitively dropped *and* the
@@ -202,7 +202,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     }
 
     const stuck = allFetchedTokens.filter((token) => {
-      const q = odosByChain.get(token.chainId);
+      const q = deloraByChain.get(token.chainId);
       if (!q?.isSuccess || q.data === undefined) return false;
       if (q.data.has(token.token.toLowerCase())) return false;
       const status = probeStatus.get(`${token.chainId}:${token.token.toLowerCase()}`);
@@ -237,14 +237,14 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
         amountUsd: liveUsd(t),
       })),
     );
-  }, [allFetchedTokens, odosByChain, hiddenCandidates, routabilityQueries, liveUsd]);
+  }, [allFetchedTokens, deloraByChain, hiddenCandidates, routabilityQueries, liveUsd]);
 
   // Combine tokens: Zerion first, then extra tokens (deduplicated). Both
-  // streams are passed through `isOdosAllowed` so non-routable tokens never
+  // streams are passed through `isDeloraAllowed` so non-routable tokens never
   // reach the table, then we sort by the same live `priceFor` the value
   // column uses so the default order matches the displayed USD values.
   const tokens = React.useMemo(() => {
-    const zerionTokens = (zerionQuery.data ?? []).filter(isOdosAllowed);
+    const zerionTokens = (zerionQuery.data ?? []).filter(isDeloraAllowed);
 
     // Hold extras back until their query has succeeded, so Zerion data
     // renders first before extra tokens are folded in.
@@ -252,31 +252,31 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
       ? [
           ...zerionTokens,
           ...(extraQuery.data ?? [])
-            .filter(isOdosAllowed)
+            .filter(isDeloraAllowed)
             .filter((extra) => !zerionTokens.some((zerion) => isSameToken(zerion, extra))),
         ]
       : zerionTokens;
 
     return merged.sort((a, b) => liveUsd(b) - liveUsd(a));
-  }, [zerionQuery.data, extraQuery.data, extraQuery.isSuccess, isOdosAllowed, liveUsd]);
+  }, [zerionQuery.data, extraQuery.data, extraQuery.isSuccess, isDeloraAllowed, liveUsd]);
 
   // Rebuild columns when `priceFor` changes so the value column's `sortingFn`
   // (which closes over `priceFor`) sees fresh prices and the table re-sorts.
   const columns = React.useMemo(() => buildColumns(priceFor), [priceFor]);
 
   const isLoading = zerionQuery.isLoading;
-  const isOdosFetching = odosTokenListQueries.some((q) => q.isFetching);
-  const isRefreshing = zerionQuery.isFetching || extraQuery.isFetching || isOdosFetching;
+  const isDeloraFetching = deloraTokenListQueries.some((q) => q.isFetching);
+  const isRefreshing = zerionQuery.isFetching || extraQuery.isFetching || isDeloraFetching;
   const error = zerionQuery.error?.message ?? extraQuery.error?.message ?? null;
 
   const handleRefresh = React.useCallback(() => {
     setRowSelection({});
     zerionQuery.refetch();
     extraQuery.refetch();
-    odosTokenListQueries.forEach((q) => {
+    deloraTokenListQueries.forEach((q) => {
       q.refetch();
     });
-  }, [zerionQuery.refetch, extraQuery.refetch, odosTokenListQueries]);
+  }, [zerionQuery.refetch, extraQuery.refetch, deloraTokenListQueries]);
 
   const zerionApiKeyMissing = !import.meta.env.VITE_ZERION_API_KEY;
 

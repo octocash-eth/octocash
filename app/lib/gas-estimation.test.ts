@@ -25,7 +25,7 @@ const makeMockClient = () => ({
   }),
   // estimateGas defaults to throwing so step-level simulation always falls
   // back to GAS_BUDGETS — keeps the existing per-op gasUnits assertions
-  // (e.g. `swap-multi = 800_000n`) stable. Tests that exercise the simulated
+  // (e.g. `swap = 500_000n`) stable. Tests that exercise the simulated
   // path override this with `mockResolvedValueOnce`.
   estimateGas: vi.fn().mockRejectedValue(new Error("revert")),
   getGasPrice: vi.fn().mockResolvedValue(5_000_000_000n),
@@ -183,7 +183,8 @@ describe("gas-estimation", () => {
       const ops = estimateOperationsForChainWallet(tokens, 1, 8453, USDC);
 
       expect(ops).toContain("erc20-approval");
-      expect(ops).toContain("swap-multi");
+      // One single-input swap per token (WETH + native).
+      expect(ops.filter((op) => op === "swap")).toHaveLength(2);
       expect(ops).toContain("cctp-approval");
       expect(ops).toContain("cctp-burn");
     });
@@ -298,15 +299,17 @@ describe("gas-estimation", () => {
     });
 
     test("preserves precision for large gas costs (static fallback path)", async () => {
-      // 20 inputs ⇒ swap step has 20 erc20-approvals + 1 swap-multi
-      // = 20 * 65k + 800k = 1_300k + 800k = 2_100k static. With simulation
-      // reverting (default mock) we get exactly 2.1M units.
-      const inputTokens = Array.from({ length: 20 }, () => baseToken()) as [TokenAmount, ...TokenAmount[]];
+      // 20 distinct inputs ⇒ swap step has 20 erc20-approvals + 20 swaps
+      // = 20 * (65k + 500k) = 11_300k static. With simulation reverting
+      // (default mock) we get exactly 11.3M units.
+      const inputTokens = Array.from({ length: 20 }, (_, i) =>
+        baseToken({ token: `0x${(i + 1).toString(16).padStart(40, "0")}` as Address }),
+      ) as [TokenAmount, ...TokenAmount[]];
       const bigSwap: TransactionStep = { ...swapStep, inputTokens };
       const estimate = await buildStepGasEstimate(bigSwap, 100_000_000_000n, "ETH");
-      // 2_100_000 * 100 gwei * 1.3 = 273_000_000_000_000_000 wei (0.273 ETH)
-      expect(estimate.gasUnits).toBe(2_100_000n);
-      expect(estimate.gasCostWei).toBe(273_000_000_000_000_000n);
+      // 11_300_000 * 100 gwei * 1.3 = 1_469_000_000_000_000_000 wei (1.469 ETH)
+      expect(estimate.gasUnits).toBe(11_300_000n);
+      expect(estimate.gasCostWei).toBe(1_469_000_000_000_000_000n);
     });
   });
 
@@ -418,8 +421,8 @@ describe("gas-estimation", () => {
       await attachGasEstimates(steps, ctx);
 
       expect(steps[0].estimatedGas?.gasCostWei).toBeGreaterThan(0n);
-      // swap-multi (2 inputs) + 1 erc20-approval = 800k + 65k = 865k units
-      expect(steps[0].estimatedGas?.gasUnits).toBe(865_000n);
+      // Two per-token swaps (USDC + native) + 1 erc20-approval = 1000k + 65k
+      expect(steps[0].estimatedGas?.gasUnits).toBe(1_065_000n);
       // bridge = cctp-approval + cctp-burn = 65k + 200k = 265k
       expect(steps[1].estimatedGas?.gasUnits).toBe(265_000n);
       // claim = cctp-claim = 300k

@@ -48,8 +48,8 @@ export const FEATURES_CONTENT = {
     title: "Octo's Secret Ingredients",
     description: (
       <>
-        Behind the magic: <strong>Circle's CCTPv2</strong> handles the bridges, <strong>Odos</strong> powers the swaps.
-        Both proven protocols trusted by the industry.
+        Behind the magic: <strong>Circle's CCTPv2</strong> handles the bridges, <strong>Delora</strong> powers the
+        swaps. Both proven protocols trusted by the industry.
       </>
     ),
   },
@@ -82,12 +82,12 @@ export const FAQ_ITEMS = [
   {
     question: "Are there fees when consolidating?",
     answer:
-      "Yes. On top of gas fees, you'll pay: 0.04% for stablecoin swaps, 0.16% for volatile asset swaps, 0.01% for USDC bridges (0.14% on Linea), and 0.25% when shielding into Railgun (charged by the Railgun protocol). These fees go to the protocols (Odos, CCTP, and Railgun), with a small portion supporting Octo. All costs are shown upfront.",
+      "Yes. On top of gas fees, you'll pay: 0.1% on token swaps (plus each route's own costs, shown in the quote), 0.01% for USDC bridges (0.14% on Linea), and 0.25% when shielding into Railgun (charged by the Railgun protocol). These fees go to the protocols (Delora, CCTP, and Railgun), with a small portion supporting Octo. All costs are shown upfront.",
   },
   {
     question: "Is it safe?",
     answer:
-      "Octo is non-custodial — we never hold or control your funds. All interactions happen directly between your wallet and established protocols like Circle's CCTP and Odos. We coordinate the consolidation; the protocols handle your assets.",
+      "Octo is non-custodial — we never hold or control your funds. All interactions happen directly between your wallet and established protocols like Circle's CCTP and Delora. We coordinate the consolidation; the protocols handle your assets.",
   },
   {
     question: "Can I choose where my tokens end up?",

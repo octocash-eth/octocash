@@ -11,7 +11,7 @@ Octocash is a simple app that gathers your crypto scattered across multiple chai
 
 1. **Per-chain, per-wallet (off destination chain): swap to USDC**
    - For every chain and wallet that is not the destination chain:
-     - Swap all tokens to USDC using Odos, except USDC itself.
+     - Swap all tokens to USDC using Delora, except USDC itself.
    - NOTE: Balances already on the destination chain are skipped here; they’ll be handled in step 3.
 
 2. **Bridge to the destination chain**
@@ -19,7 +19,7 @@ Octocash is a simple app that gathers your crypto scattered across multiple chai
    - If the desired token is USDC, bridge directly to the destination wallet.
 
 3. **On the destination chain: finalize and collect**
-   - For each wallet on the destination chain, swap remaining tokens (including the bridged USDC) to the desired token using Odos and send to the destination wallet.
+   - For each wallet on the destination chain, swap remaining tokens (including the bridged USDC) to the desired token using Delora and send to the destination wallet.
    - If all or part of the balance was already in the desired token on the destination chain but sits in a different wallet, perform a simple transfer (no swap).
 
 ### In short

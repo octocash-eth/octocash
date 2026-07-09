@@ -3,7 +3,7 @@
  *
  * Provides USD->fiat conversion rates derived from CoinGecko's BTC-denominated
  * `/exchange_rates` endpoint. Used by `CurrencyProvider` to convert the USD
- * numbers we already get from Odos/Zerion into the user's selected currency at
+ * numbers we already get from Delora/Zerion into the user's selected currency at
  * the display layer (price providers stay USD-internal).
  *
  * Why BTC-denominated? CoinGecko doesn't expose a direct USD->X endpoint, but

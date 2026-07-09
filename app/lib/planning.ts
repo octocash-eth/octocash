@@ -3,8 +3,9 @@ import { mainnet } from "viem/chains";
 import { RAILGUN_SUPPORTED_CHAINS } from "~/data/railgun";
 import { chains, transports } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
-import { fetchOdosPrices, odosPriceKey } from "./api/odos";
+import { deloraPriceKey, fetchDeloraPrices } from "./api/delora";
 import { getBridgeFee } from "./cctp";
+import { getSwapQuote } from "./delora";
 import { getNativeBalance } from "./gas";
 import {
   attachGasEstimates,
@@ -17,7 +18,6 @@ import {
   type OperationType,
 } from "./gas-estimation";
 import { getLiFiQuoteForTargetOutput } from "./lifi";
-import { getSwapQuote } from "./odos";
 import { getPublicClient } from "./public-client";
 import { decodeRailgunAddress, getShieldedAmountAfterFee, isRailgunAddress } from "./railgun";
 import { groupTokensByChainAndWallet } from "./tokens";
@@ -274,26 +274,6 @@ async function resolveIntermediateWallet(
 }
 
 /**
- * Batches tokens into groups of maximum size for efficient processing
- *
- * @param tokens - Array of tokens to split into batches
- * @param maxBatchSize - Maximum number of tokens per batch
- * @returns Array of token batches, each containing up to maxBatchSize tokens
- *
- * @example
- * const tokens = [token1, token2, token3, token4, token5];
- * const batches = batchTokens(tokens, 2);
- * // Returns: [[token1, token2], [token3, token4], [token5]]
- */
-function batchTokens(tokens: TokenAmount[], maxBatchSize: number): TokenAmount[][] {
-  const batches: TokenAmount[][] = [];
-  for (let i = 0; i < tokens.length; i += maxBatchSize) {
-    batches.push(tokens.slice(i, i + maxBatchSize));
-  }
-  return batches;
-}
-
-/**
  * Validates that all input parameters meet the requirements for planning
  *
  * Checks include:
@@ -388,18 +368,20 @@ function validateInputs(
 /**
  * Creates swap steps from a list of tokens to a target token
  *
- * Tokens are split into batches of up to 6 (Odos's per-quote input cap) and
- * each batch becomes one multi-input swap step. Because Odos can fail to quote
- * certain *combinations* of inputs even when every token routes individually,
- * batches that fail fall back to splitting (see `quoteBatchWithSplitFallback`)
- * rather than aborting the whole plan.
+ * Delora quotes are single-input, so tokens are grouped by on-chain token
+ * address and each group becomes one swap step (one quote request, one
+ * approval+swap pair at execution). A group can contain multiple
+ * `TokenAmount`s for the same address (different `provenance`, e.g. the
+ * user's pre-existing USDC plus a CCTP claim output) — those legitimately
+ * share a step. A token that Delora can't route to `targetToken` is skipped
+ * (and logged) so the rest of the wallet can still be consolidated.
  *
  * @param tokensToSwap - Tokens to swap to target (must be different tokens)
  * @param targetToken - Target token specification (without amount)
  * @param steps - Existing steps array to append to
  * @param log - Logging function for debug output
  * @returns Array of output tokens from the swaps (excludes any token that is
- *   unroutable to `targetToken` even on its own — those are skipped, not fatal)
+ *   unroutable to `targetToken` — those are skipped, not fatal)
  */
 async function createSwapSteps(
   tokensToSwap: TokenAmount[],
@@ -413,102 +395,77 @@ async function createSwapSteps(
     return outputTokens;
   }
 
-  const batches = batchTokens(tokensToSwap, 6); // Odos caps inputs at 6 per quote
+  // Group same-address entries (EIP-55 normalised) into a single step.
+  const groups = new Map<Address, TokenAmount[]>();
+  for (const token of tokensToSwap) {
+    const key = getAddress(token.token);
+    const group = groups.get(key);
+    if (group === undefined) {
+      groups.set(key, [token]);
+    } else {
+      group.push(token);
+    }
+  }
 
-  for (const batch of batches) {
-    await quoteBatchWithSplitFallback(batch, targetToken, steps, outputTokens, log);
+  for (const group of groups.values()) {
+    try {
+      const quote = await getSwapQuote(group, targetToken);
+      const stepId = `step-${steps.length + 1}`;
+
+      const outputTokenWithProvenance = {
+        ...quote,
+        provenance: stepId, // Mark this token as coming from this swap step
+      };
+
+      steps.push({
+        id: stepId,
+        type: "swap",
+        status: "pending",
+        chainId: targetToken.chainId,
+        inputTokens: group as [TokenAmount, ...TokenAmount[]],
+        outputToken: outputTokenWithProvenance,
+        quotedAt: Date.now(),
+      });
+
+      outputTokens.push(outputTokenWithProvenance);
+
+      log(`🔍 [DEBUG] Added swap step ${stepId} for ${group[0].symbol ?? group[0].token} -> ${targetToken.symbol}`);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "quote failed";
+
+      // A token that Delora explicitly can't route is skipped so the rest of
+      // the wallet still consolidates. Any other failure (network errors,
+      // outages, rate limiting) is propagated so the plan fails loudly and
+      // stays retryable rather than silently dropping funds on a transient
+      // hiccup.
+      if (isUnroutableTokenError(error)) {
+        log(
+          `⚠️ [DEBUG] Skipping unroutable token ${group[0].symbol ?? group[0].token} -> ${targetToken.symbol}: ${reason}`,
+        );
+        continue;
+      }
+      throw error;
+    }
   }
 
   return outputTokens;
 }
 
 /**
- * Quote a batch into a single swap step, recovering from Odos's combination
- * failures by splitting.
+ * Whether a Delora quote error means the token genuinely has no route to the
+ * target, as opposed to a transient/server failure. Only the former is safe
+ * to skip; the latter must propagate.
  *
- * Odos can return a generic "Error getting quote" (errorCode 2999) for a
- * multi-input quote even though each token routes fine in isolation — one
- * problematic token poisons the whole batch, and the failure is deterministic
- * (retries and higher slippage don't help). Rather than fail the entire
- * consolidation plan, on failure we split the batch in half and retry each
- * half, recursing down to singletons. A token that still fails alone is
- * genuinely unroutable to `targetToken`; it is skipped (and logged) so the
- * rest of the wallet can still be consolidated.
- *
- * Successful sub-batches are appended to `steps` and their outputs to
- * `outputTokens` (both mutated in place).
- */
-async function quoteBatchWithSplitFallback(
-  batch: TokenAmount[],
-  targetToken: Omit<TokenAmount, "amount">,
-  steps: TransactionStep[],
-  outputTokens: TokenAmount[],
-  log: (...args: unknown[]) => void,
-): Promise<void> {
-  if (batch.length === 0) return;
-
-  try {
-    const quote = await getSwapQuote(batch, targetToken);
-    const stepId = `step-${steps.length + 1}`;
-
-    const outputTokenWithProvenance = {
-      ...quote,
-      provenance: stepId, // Mark this token as coming from this swap step
-    };
-
-    steps.push({
-      id: stepId,
-      type: "swap",
-      status: "pending",
-      chainId: targetToken.chainId,
-      inputTokens: batch as [TokenAmount, ...TokenAmount[]],
-      outputToken: outputTokenWithProvenance,
-      quotedAt: Date.now(),
-    });
-
-    outputTokens.push(outputTokenWithProvenance);
-
-    log(`🔍 [DEBUG] Added swap step ${stepId} for ${batch.length} tokens -> ${targetToken.symbol}`);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : "quote failed";
-
-    if (batch.length === 1) {
-      // A single token that Odos explicitly can't route (HTTP 400 / errorCode
-      // 4016 "Routing unavailable") is skipped so the rest of the wallet still
-      // consolidates. Any other failure (e.g. the HTTP 500 / 2999 the combo
-      // problem surfaces as, network errors, outages) is propagated so the
-      // plan fails loudly and stays retryable rather than silently dropping
-      // funds on a transient hiccup.
-      if (isUnroutableTokenError(error)) {
-        log(
-          `⚠️ [DEBUG] Skipping unroutable token ${batch[0].symbol ?? batch[0].token} -> ${targetToken.symbol}: ${reason}`,
-        );
-        return;
-      }
-      throw new Error(`ExternalAPIError: ${reason}`);
-    }
-
-    // Multi-input quotes can fail on specific token combinations even when each
-    // token routes alone, so split and retry the halves. If this is actually a
-    // transient outage, the recursion bottoms out at a singleton that rethrows.
-    const mid = Math.ceil(batch.length / 2);
-    log(
-      `🔁 [DEBUG] Swap quote failed for ${batch.length} tokens -> ${targetToken.symbol} (${reason}); splitting ${mid}/${batch.length - mid} and retrying.`,
-    );
-    await quoteBatchWithSplitFallback(batch.slice(0, mid), targetToken, steps, outputTokens, log);
-    await quoteBatchWithSplitFallback(batch.slice(mid), targetToken, steps, outputTokens, log);
-  }
-}
-
-/**
- * Whether an Odos quote error means the token genuinely has no route to the
- * target (HTTP 400 / `errorCode 4016` "Routing unavailable for token ..."), as
- * opposed to a transient/server failure (e.g. HTTP 500 / `errorCode 2999`).
- * Only the former is safe to skip; the latter must propagate.
+ * Delora reports "no route" as HTTP 500 with `code: "UNKNOWN"` and message
+ * "No adapters available for this request" (verified live), so the HTTP
+ * status can't discriminate — we match on the message/code text embedded in
+ * the error instead. `NO_AVAILABLE_QUOTES` is the documented code for the
+ * same condition. If Delora ever rewords these, unroutable tokens will fail
+ * plans loudly instead of being silently dropped — the safe direction.
  */
 function isUnroutableTokenError(error: unknown): boolean {
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  return msg.includes("routing unavailable") || msg.includes("4016");
+  return msg.includes("no adapters available") || msg.includes("no_available_quotes");
 }
 
 /**
@@ -950,7 +907,7 @@ function createAttestationAndClaimSteps(
  * - USDC that was already on the destination chain
  * - USDC that was bridged and claimed from other chains
  *
- * Batches USDC into groups of up to 6 tokens (Odos limitation) if needed.
+ * Same-address USDC entries (pre-existing + claimed) share one swap step.
  * The final swaps depend on claim steps (if any bridges exist).
  *
  * @param steps - All steps created so far (swaps, bridges, attestation, claim)
@@ -1297,7 +1254,7 @@ async function createGasTopUpSteps(
   // across chains is wrong because natives have wildly different prices and
   // decimals: e.g. 5 POL (5e18 wei ≈ $1) would otherwise outrank 0.5 ETH
   // (5e17 wei ≈ $1500). Mainnet pairs sort to the bottom regardless, because
-  // bridging gas *out of* L1 is expensive. When Odos has no price for a chain
+  // bridging gas *out of* L1 is expensive. When Delora has no price for a chain
   // (or the fetch fails), that pair gets `usd = 0` and tie-breaks by raw
   // balance, matching the previous behavior so the sort never makes things
   // worse.
@@ -1316,11 +1273,11 @@ async function createGasTopUpSteps(
   ).filter(<T>(x: T | null): x is T => x !== null);
 
   const uniqueChains = [...new Set(fallbackBalances.map((b) => b.chainId))];
-  const priceMap = await fetchOdosPrices(uniqueChains.map((chainId) => ({ chainId, token: zeroAddress })));
+  const priceMap = await fetchDeloraPrices(uniqueChains.map((chainId) => ({ chainId, token: zeroAddress })));
 
   const sortedFallbacks = fallbackBalances
     .map((b) => {
-      const priceUsd = priceMap.get(odosPriceKey(b.chainId, zeroAddress)) ?? 0;
+      const priceUsd = priceMap.get(deloraPriceKey(b.chainId, zeroAddress)) ?? 0;
       const usd = priceUsd * Number(formatUnits(b.balance, b.chain.nativeCurrency.decimals));
       return { ...b, usd, isMainnet: b.chainId === mainnet.id };
     })

@@ -1,11 +1,11 @@
 // Re-export Zerion API functions and types
 
-// Re-export Odos API functions and types
+// Re-export Delora API functions and types
 export {
-  checkOdosRoutableToUsdc,
+  checkDeloraRoutableToUsdc,
   EXTRA_TOKENS,
+  fetchDeloraTokensForChain,
   fetchExtraTokenBalances,
-  fetchOdosTokensForChain,
   type RoutabilityProbe,
-} from "./odos";
+} from "./delora";
 export { fetchZerionTokenBalances } from "./zerion";

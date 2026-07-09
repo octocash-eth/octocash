@@ -12,15 +12,15 @@ import {
 } from "../test-helpers";
 
 // Mock external dependencies BEFORE imports
-vi.mock("../../app/lib/odos");
+vi.mock("../../app/lib/delora");
 vi.mock("../../app/lib/cctp");
 vi.mock("../../app/lib/lifi");
 vi.mock("../../app/lib/gas", () => ({
   getNativeBalance: vi.fn(),
 }));
-vi.mock("../../app/lib/api/odos", () => ({
-  fetchOdosPrices: vi.fn().mockResolvedValue(new Map()),
-  odosPriceKey: (chainId: number, address: string) => `${chainId}:${address.toLowerCase()}`,
+vi.mock("../../app/lib/api/delora", () => ({
+  fetchDeloraPrices: vi.fn().mockResolvedValue(new Map()),
+  deloraPriceKey: (chainId: number, address: string) => `${chainId}:${address.toLowerCase()}`,
 }));
 // The executor's `validateInputBalances` preflight (and planning's EIP-7702
 // delegation probe) read on-chain state via the public client. This suite
@@ -60,7 +60,7 @@ import { executeConsolidationPlan } from "../../app/lib/execution";
 import { getNativeBalance } from "../../app/lib/gas";
 import { estimateChainGasCosts } from "../../app/lib/gas-estimation";
 import { getLiFiQuoteForTargetOutput, pollLiFiTransferStatus } from "../../app/lib/lifi";
-import { executeOdosSwap, getSwapQuote } from "../../app/lib/odos";
+import { executeDeloraSwap, getSwapQuote } from "../../app/lib/delora";
 import { planConsolidation } from "../../app/lib/planning";
 
 const LIFI_DIAMOND = "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE" as Address;
@@ -113,7 +113,7 @@ describe("Gas Top-Up Integration: plan then execute", () => {
       addChain: vi.fn(),
     } as unknown as WalletClient<HttpTransport, Chain, Account>;
 
-    // --- Odos mocks (planning + execution) ---
+    // --- Delora mocks (planning + execution) ---
     vi.mocked(getSwapQuote).mockImplementation(async (input, outputToken) => {
       const inputArray = Array.isArray(input) ? input : [input];
       const totalAmount = inputArray.reduce((sum, t) => sum + t.amount, 0n);
@@ -127,7 +127,7 @@ describe("Gas Top-Up Integration: plan then execute", () => {
       };
     });
 
-    vi.mocked(executeOdosSwap).mockImplementation(async (tokensIn) => {
+    vi.mocked(executeDeloraSwap).mockImplementation(async (tokensIn) => {
       const totalAmount = tokensIn.reduce((sum, t) => sum + t.amount, 0n);
       return {
         amount: totalAmount / 2n,

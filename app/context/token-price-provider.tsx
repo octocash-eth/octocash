@@ -1,15 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import type { Address } from "viem";
-import { fetchOdosPrices, type OdosPriceKey, odosPriceKey } from "~/lib/api/odos";
+import { type DeloraPriceKey, deloraPriceKey, fetchDeloraPrices } from "~/lib/api/delora";
 import type { TokenAmount } from "~/lib/types";
 
-/** Polling cadence for refreshing Odos prices (2 minutes). */
+/** Polling cadence for refreshing Delora prices (2 minutes). */
 const REFRESH_MS = 120_000;
 /** Stale time, mirrors the wallet table's existing 30s freshness window. */
 const STALE_MS = 30_000;
 
-type PriceKey = OdosPriceKey;
+type PriceKey = DeloraPriceKey;
 type TokenIdentity = Pick<TokenAmount, "chainId" | "token">;
 
 interface TokenPriceRegistry {
@@ -51,7 +51,7 @@ function useRegistry(): TokenPriceRegistry {
 }
 
 /**
- * Provider that centralises Odos token prices. Components anywhere in the
+ * Provider that centralises Delora token prices. Components anywhere in the
  * tree can call `usePrice(chainId, token)` to subscribe to a single token's
  * price, or `useRegisterPrices(tokens)` to subscribe to many at once.
  *
@@ -68,7 +68,7 @@ export function TokenPriceProvider({ children }: { children: React.ReactNode }) 
   const refcountsRef = React.useRef<Map<PriceKey, number>>(new Map());
   /**
    * Timestamp of the last fetch that covered ALL registered tokens. Used to
-   * avoid hammering the Odos pricing API: every registration change makes a
+   * avoid hammering the Delora pricing API: every registration change makes a
    * new query key, but within {@link STALE_MS} of a full fetch we only ask
    * for tokens that don't have an accumulated price yet (often none).
    */
@@ -81,7 +81,7 @@ export function TokenPriceProvider({ children }: { children: React.ReactNode }) 
 
     const added: TokenIdentity[] = [];
     for (const t of tokens) {
-      const key = odosPriceKey(t.chainId, t.token as Address);
+      const key = deloraPriceKey(t.chainId, t.token as Address);
       const current = refcountsRef.current.get(key) ?? 0;
       refcountsRef.current.set(key, current + 1);
       if (current === 0) added.push({ chainId: t.chainId, token: t.token });
@@ -93,7 +93,7 @@ export function TokenPriceProvider({ children }: { children: React.ReactNode }) 
     return () => {
       const removedKeys = new Set<PriceKey>();
       for (const t of tokens) {
-        const key = odosPriceKey(t.chainId, t.token as Address);
+        const key = deloraPriceKey(t.chainId, t.token as Address);
         const current = refcountsRef.current.get(key);
         if (current === undefined) continue;
         if (current <= 1) {
@@ -105,7 +105,7 @@ export function TokenPriceProvider({ children }: { children: React.ReactNode }) 
       }
       if (removedKeys.size > 0) {
         setRegisteredTokens((prev) =>
-          prev.filter((t) => !removedKeys.has(odosPriceKey(t.chainId, t.token as Address))),
+          prev.filter((t) => !removedKeys.has(deloraPriceKey(t.chainId, t.token as Address))),
         );
       }
     };
@@ -115,14 +115,14 @@ export function TokenPriceProvider({ children }: { children: React.ReactNode }) 
   const signature = React.useMemo(
     () =>
       registeredTokens
-        .map((t) => odosPriceKey(t.chainId, t.token as Address))
+        .map((t) => deloraPriceKey(t.chainId, t.token as Address))
         .sort()
         .join("|"),
     [registeredTokens],
   );
 
   const query = useQuery({
-    queryKey: ["odos-prices", signature],
+    queryKey: ["delora-prices", signature],
     queryFn: async ({ signal }) => {
       // A signature change (token registered/unregistered) lands here even
       // when almost every price is already known. Within the stale window of
@@ -134,12 +134,12 @@ export function TokenPriceProvider({ children }: { children: React.ReactNode }) 
       const targets = fullRefresh
         ? registeredTokens
         : registeredTokens.filter(
-            (t) => !accumulatedPricesRef.current.has(odosPriceKey(t.chainId, t.token as Address)),
+            (t) => !accumulatedPricesRef.current.has(deloraPriceKey(t.chainId, t.token as Address)),
           );
       if (fullRefresh) lastFullFetchAtRef.current = now;
       if (targets.length === 0) return new Map<PriceKey, number>();
 
-      const prices = await fetchOdosPrices(targets, signal);
+      const prices = await fetchDeloraPrices(targets, signal);
       // Accumulate so previously-known prices survive even when a later
       // response omits some tokens (e.g. partial chain failure).
       for (const [key, price] of prices) {
@@ -151,13 +151,13 @@ export function TokenPriceProvider({ children }: { children: React.ReactNode }) 
     staleTime: STALE_MS,
     refetchInterval: REFRESH_MS,
     // Pause polling while the tab is hidden — same UX as the previous
-    // hand-rolled `useOdosPrices` visibility listener, but built-in.
+    // hand-rolled `useDeloraPrices` visibility listener, but built-in.
     refetchIntervalInBackground: false,
   });
 
   const registry = React.useMemo<TokenPriceRegistry>(
     () => ({
-      priceFor: (token) => accumulatedPricesRef.current.get(odosPriceKey(token.chainId, token.token as Address)),
+      priceFor: (token) => accumulatedPricesRef.current.get(deloraPriceKey(token.chainId, token.token as Address)),
       registerTokens,
     }),
     [registerTokens],
@@ -207,7 +207,7 @@ export function usePrice(
 export function useRegisterPrices(tokens: ReadonlyArray<TokenIdentity>): void {
   const registry = useRegistry();
   const signature = React.useMemo(
-    () => tokens.map((t) => odosPriceKey(t.chainId, t.token as Address)).join("|"),
+    () => tokens.map((t) => deloraPriceKey(t.chainId, t.token as Address)).join("|"),
     [tokens],
   );
 

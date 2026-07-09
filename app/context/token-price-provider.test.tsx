@@ -5,19 +5,19 @@ import type { Address } from "viem";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { TokenPriceProvider, usePrice, usePriceMap, useRegisterPrices } from "./token-price-provider";
 
-// Mock the Odos API so we control what prices come back. The provider relies
-// on `fetchOdosPrices` returning a Map<OdosPriceKey, number> keyed by
+// Mock the Delora API so we control what prices come back. The provider relies
+// on `fetchDeloraPrices` returning a Map<DeloraPriceKey, number> keyed by
 // `${chainId}:${lowercase address}`.
-vi.mock("~/lib/api/odos", async () => {
-  const actual = await vi.importActual<typeof import("~/lib/api/odos")>("~/lib/api/odos");
+vi.mock("~/lib/api/delora", async () => {
+  const actual = await vi.importActual<typeof import("~/lib/api/delora")>("~/lib/api/delora");
   return {
     ...actual,
-    fetchOdosPrices: vi.fn(),
+    fetchDeloraPrices: vi.fn(),
   };
 });
 
-const { fetchOdosPrices } = await import("~/lib/api/odos");
-const mockedFetch = vi.mocked(fetchOdosPrices);
+const { fetchDeloraPrices } = await import("~/lib/api/delora");
+const mockedFetch = vi.mocked(fetchDeloraPrices);
 
 const USDC = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" as Address;
 const WETH = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2" as Address;
@@ -164,7 +164,7 @@ describe("TokenPriceProvider", () => {
   });
 
   test("isPending is true while the first fetch is in flight, false after it resolves", async () => {
-    type PriceMap = Awaited<ReturnType<typeof fetchOdosPrices>>;
+    type PriceMap = Awaited<ReturnType<typeof fetchDeloraPrices>>;
     let resolveFetch!: (value: PriceMap) => void;
     mockedFetch.mockImplementation(
       () =>
@@ -265,7 +265,7 @@ describe("TokenPriceProvider", () => {
 
     // Force a refetch on the same query; the accumulator should preserve the
     // earlier USDC price even though the second response is empty.
-    await queryClient.refetchQueries({ queryKey: ["odos-prices"] });
+    await queryClient.refetchQueries({ queryKey: ["delora-prices"] });
 
     expect(result.current.price).toBe(1);
   });

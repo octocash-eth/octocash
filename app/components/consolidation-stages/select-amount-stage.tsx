@@ -41,9 +41,7 @@ export function SelectAmountStage({ tokens, onAmountsChange }: SelectAmountStage
   });
 
   // Make sure the shared price context is tracking every token visible here.
-  // Native coins (zeroAddress) are handled by `fetchOdosPrices`, which
-  // substitutes Odos's `0xeeee…ee` sentinel only at request time and maps
-  // the response back to `zeroAddress` before storing.
+  // Native coins (zeroAddress) are priced directly by Delora's `/v1/prices`.
   useRegisterPrices(tokens);
   const { priceFor } = usePriceMap();
   const formatFiat = useFormatFiat();

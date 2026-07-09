@@ -17,12 +17,12 @@ vi.mock("~/lib/railgun", async () => {
   };
 });
 
-// Mock the Odos price API that feeds <TokenPriceProvider>.
-vi.mock("~/lib/api/odos", async () => {
-  const actual = await vi.importActual<typeof import("~/lib/api/odos")>("~/lib/api/odos");
+// Mock the Delora price API that feeds <TokenPriceProvider>.
+vi.mock("~/lib/api/delora", async () => {
+  const actual = await vi.importActual<typeof import("~/lib/api/delora")>("~/lib/api/delora");
   return {
     ...actual,
-    fetchOdosPrices: vi.fn(),
+    fetchDeloraPrices: vi.fn(),
   };
 });
 
@@ -36,11 +36,11 @@ vi.mock("~/lib/api/coingecko", async () => {
 });
 
 const { getRailgunPoolBalance } = await import("~/lib/railgun");
-const { fetchOdosPrices, odosPriceKey } = await import("~/lib/api/odos");
+const { fetchDeloraPrices, deloraPriceKey } = await import("~/lib/api/delora");
 const { fetchCoinGeckoExchangeRates } = await import("~/lib/api/coingecko");
 
 const mockedBalance = vi.mocked(getRailgunPoolBalance);
-const mockedPrices = vi.mocked(fetchOdosPrices);
+const mockedPrices = vi.mocked(fetchDeloraPrices);
 const mockedRates = vi.mocked(fetchCoinGeckoExchangeRates);
 
 const MAINNET = 1;
@@ -69,9 +69,9 @@ function makeWrapper() {
   return { Wrapper, queryClient };
 }
 
-/** Mock a WETH price response keyed the way fetchOdosPrices really keys it. */
+/** Mock a WETH price response keyed the way fetchDeloraPrices really keys it. */
 function mockWethPrice(price = WETH_PRICE) {
-  mockedPrices.mockResolvedValue(new Map([[odosPriceKey(MAINNET, WETH_MAINNET), price]]));
+  mockedPrices.mockResolvedValue(new Map([[deloraPriceKey(MAINNET, WETH_MAINNET), price]]));
 }
 
 beforeEach(() => {
@@ -83,7 +83,7 @@ beforeEach(() => {
 });
 
 describe("useRailgunPoolTvl", () => {
-  test("combines pool balance and Odos price into a USD TVL", async () => {
+  test("combines pool balance and Delora price into a USD TVL", async () => {
     // 100 WETH x $2500 = $250k.
     mockedBalance.mockResolvedValue(parseUnits("100", WETH_DECIMALS));
     mockWethPrice();

@@ -131,11 +131,11 @@ export function ConsolidateTokensModal({
   }, [currentStage, destination, sourceTokens]);
 
   // Register every selected token with the shared price context so its USD
-  // value reflects the live Odos price.
+  // value reflects the live Delora price.
   useRegisterPrices(consolidatedTokens);
   const { priceFor } = usePriceMap();
 
-  // Calculate actual total value based on selected amounts using live Odos
+  // Calculate actual total value based on selected amounts using live Delora
   // prices from the context.
   const actualTotalToConsolidate = React.useMemo(() => {
     return consolidatedTokens.reduce((total, token) => {

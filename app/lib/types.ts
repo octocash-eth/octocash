@@ -9,7 +9,7 @@ import type { Attestation } from "./cctp";
  * Type of transaction operation in the consolidation plan
  */
 export type TransactionType =
-  | "swap" // Token swap using Odos
+  | "swap" // Token swap using Delora
   | "bridge" // USDC bridge using CCTP
   | "attestation" // Wait for bridge attestation(s)
   | "claim" // Claim bridged tokens

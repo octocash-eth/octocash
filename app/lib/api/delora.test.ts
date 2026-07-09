@@ -4,17 +4,23 @@ import { WALLET } from "../../../test/test-helpers";
 import { USDC } from "../../data/token-contracts";
 import { isSameToken } from "../tokens";
 import {
-  checkOdosRoutableToUsdc,
+  checkDeloraRoutableToUsdc,
+  deloraPriceKey,
   EXTRA_TOKENS,
+  fetchDeloraPrices,
+  fetchDeloraTokensForChain,
   fetchExtraTokenBalances,
-  fetchOdosPrices,
-  fetchOdosTokensForChain,
-  odosPriceKey,
-} from "./odos";
-import { odosBaseUrl } from "./odos-client";
+} from "./delora";
 
 // biome-ignore lint/suspicious/noExplicitAny: Test mocks require any types for flexibility
 type MockContract = any;
+
+/** Delora `/v1/prices` response for the given (chainId, token, price) rows. */
+function pricesResponse(rows: Array<[number, string, string]>) {
+  return {
+    prices: rows.map(([chainId, token, priceUSD]) => ({ chainId, token, priceUSD })),
+  };
+}
 
 /**
  * Helper to create a multicall mock that returns balances and metadata
@@ -114,7 +120,7 @@ vi.mock("../public-client", () => ({
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
-describe("odos", () => {
+describe("delora", () => {
   beforeEach(() => {
     vi.resetAllMocks();
   });
@@ -168,7 +174,7 @@ describe("odos", () => {
       expect(result).toHaveLength(0);
     });
 
-    test("fetches token with non-zero balance and price from Odos", async () => {
+    test("fetches token with non-zero balance and price from Delora", async () => {
       const { getPublicClient } = await import("../public-client");
       const sUSDS_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
 
@@ -186,16 +192,10 @@ describe("odos", () => {
         return { multicall: createMulticallMock() } as never;
       });
 
-      // Mock Odos pricing API response
+      // Mock Delora pricing API response
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () =>
-          Promise.resolve({
-            currencyId: "USD",
-            tokenPrices: {
-              "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD": 1.05,
-            },
-          }),
+        json: () => Promise.resolve(pricesResponse([[1, sUSDS_ADDRESS, "1.05"]])),
       });
 
       const result = await fetchExtraTokenBalances([WALLET]);
@@ -230,28 +230,16 @@ describe("odos", () => {
         return { multicall: createMulticallMock({ balances, metadata }) } as never;
       });
 
-      // Mock Odos pricing for chain 1
+      // One batched Delora pricing call covers both chains.
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () =>
-          Promise.resolve({
-            currencyId: "USD",
-            tokenPrices: {
-              "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD": 1.0,
-            },
-          }),
-      });
-
-      // Mock Odos pricing for chain 10
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            currencyId: "USD",
-            tokenPrices: {
-              "0x1111111111111111111111111111111111111111": 2.0,
-            },
-          }),
+          Promise.resolve(
+            pricesResponse([
+              [1, TOKEN1_ADDRESS, "1.0"],
+              [10, TOKEN2_ADDRESS, "2.0"],
+            ]),
+          ),
       });
 
       const result = await fetchExtraTokenBalances([WALLET]);
@@ -280,13 +268,7 @@ describe("odos", () => {
       // Very low price (0.001 tokens * $0.001 = $0.000001 < $0.01)
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () =>
-          Promise.resolve({
-            currencyId: "USD",
-            tokenPrices: {
-              "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD": 0.001,
-            },
-          }),
+        json: () => Promise.resolve(pricesResponse([[1, TOKEN_ADDRESS, "0.001"]])),
       });
 
       const result = await fetchExtraTokenBalances([WALLET]);
@@ -295,7 +277,7 @@ describe("odos", () => {
       expect(result).toHaveLength(0);
     });
 
-    test("handles Odos API errors gracefully", async () => {
+    test("handles Delora API errors gracefully", async () => {
       const { getPublicClient } = await import("../public-client");
       const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
 
@@ -313,7 +295,7 @@ describe("odos", () => {
         return { multicall: vi.fn().mockResolvedValue([]) } as never;
       });
 
-      // Mock Odos API failure
+      // Mock Delora API failure
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 500,
@@ -430,7 +412,7 @@ describe("odos", () => {
       expect(result).toHaveLength(0);
     });
 
-    test("handles Odos API returning null price", async () => {
+    test("handles Delora omitting a token's price from the response", async () => {
       const { getPublicClient } = await import("../public-client");
       const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
 
@@ -448,16 +430,10 @@ describe("odos", () => {
         return { multicall: vi.fn().mockResolvedValue([]) } as never;
       });
 
-      // Odos returns null price
+      // Delora has no price for the token: empty prices array.
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () =>
-          Promise.resolve({
-            currencyId: "USD",
-            tokenPrices: {
-              "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD": null,
-            },
-          }),
+        json: () => Promise.resolve(pricesResponse([])),
       });
 
       const result = await fetchExtraTokenBalances([WALLET]);
@@ -466,7 +442,7 @@ describe("odos", () => {
       expect(result).toHaveLength(0);
     });
 
-    test("handles case-insensitive token address matching in Odos response", async () => {
+    test("handles case-insensitive token address matching in Delora response", async () => {
       const { getPublicClient } = await import("../public-client");
       const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
 
@@ -484,16 +460,10 @@ describe("odos", () => {
         return { multicall: vi.fn().mockResolvedValue([]) } as never;
       });
 
-      // Odos returns lowercase address
+      // Delora echoes the checksum-cased address
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () =>
-          Promise.resolve({
-            currencyId: "USD",
-            tokenPrices: {
-              [TOKEN_ADDRESS.toLowerCase()]: 1.0,
-            },
-          }),
+        json: () => Promise.resolve(pricesResponse([[1, "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD", "1.0"]])),
       });
 
       const result = await fetchExtraTokenBalances([WALLET]);
@@ -526,13 +496,7 @@ describe("odos", () => {
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () =>
-          Promise.resolve({
-            currencyId: "USD",
-            tokenPrices: {
-              "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD": 1.0,
-            },
-          }),
+        json: () => Promise.resolve(pricesResponse([[1, TOKEN_ADDRESS, "1.0"]])),
       });
 
       const result = await fetchExtraTokenBalances([WALLET, WALLET2]);
@@ -543,7 +507,7 @@ describe("odos", () => {
       expect(wallets.size).toBeGreaterThan(0);
     });
 
-    test("deduplicates Odos API calls for same token on same chain", async () => {
+    test("issues a single batched pricing request regardless of wallet count", async () => {
       const { getPublicClient } = await import("../public-client");
       const WALLET2 = "0x2222222222222222222222222222222222222222" as Address;
       const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
@@ -562,26 +526,21 @@ describe("odos", () => {
         return { multicall: vi.fn().mockResolvedValue([]) } as never;
       });
 
-      mockFetch.mockResolvedValueOnce({
+      mockFetch.mockResolvedValue({
         ok: true,
-        json: () =>
-          Promise.resolve({
-            currencyId: "USD",
-            tokenPrices: {
-              "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD": 1.0,
-            },
-          }),
+        json: () => Promise.resolve(pricesResponse([[1, TOKEN_ADDRESS, "1.0"]])),
       });
 
       await fetchExtraTokenBalances([WALLET, WALLET2]);
 
-      // Should only call Odos API once per chain, not once per wallet
-      const odosCalls = mockFetch.mock.calls.filter(
-        (call: unknown[]) => typeof call[0] === "string" && call[0].includes("api.odos.xyz"),
+      const priceCalls = mockFetch.mock.calls.filter(
+        (call: unknown[]) => typeof call[0] === "string" && call[0].includes("/v1/prices"),
       );
-
-      // Should be called once for chain 1 (not twice despite two wallets)
-      expect(odosCalls.length).toBeLessThanOrEqual(EXTRA_TOKENS.filter((t) => t.chainId === 1).length);
+      expect(priceCalls).toHaveLength(1);
+      // The same (chainId, token) pair appears once despite two wallets.
+      const tokensParam = new URL(priceCalls[0][0] as string).searchParams.get("tokens") ?? "";
+      const occurrences = tokensParam.split(",").filter((p) => p === `1:${TOKEN_ADDRESS}`);
+      expect(occurrences).toHaveLength(1);
     });
 
     test("can be used with isSameToken for deduplication", async () => {
@@ -604,13 +563,7 @@ describe("odos", () => {
 
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () =>
-          Promise.resolve({
-            currencyId: "USD",
-            tokenPrices: {
-              "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD": 1.0,
-            },
-          }),
+        json: () => Promise.resolve(pricesResponse([[1, TOKEN_ADDRESS, "1.0"]])),
       });
 
       const result = await fetchExtraTokenBalances([WALLET]);
@@ -621,7 +574,7 @@ describe("odos", () => {
       }
     });
 
-    test("handles fetch rejection in Odos API call", async () => {
+    test("handles fetch rejection in Delora API call", async () => {
       const { getPublicClient } = await import("../public-client");
       const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
 
@@ -663,211 +616,137 @@ describe("odos", () => {
     });
   });
 
-  describe("fetchOdosPrices", () => {
+  describe("fetchDeloraPrices", () => {
     const ADDR_1 = "0x1111111111111111111111111111111111111111" as Address;
     const ADDR_2 = "0x2222222222222222222222222222222222222222" as Address;
-    // Mainnet WETH — what we substitute zeroAddress with on chain 1.
-    const WETH_MAINNET = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
-    const ODOS_NATIVE = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
     test("returns empty map when no tokens are passed", async () => {
-      const result = await fetchOdosPrices([]);
+      const result = await fetchDeloraPrices([]);
       expect(result.size).toBe(0);
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    test("groups tokens by chain and issues one request per chain", async () => {
-      mockFetch.mockImplementation((url: string) => {
-        const chainPath = new URL(url).pathname.split("/").pop();
-        if (chainPath === "1") {
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({ currencyId: "USD", tokenPrices: { [ADDR_1]: 2.5 } }),
-          });
-        }
-        if (chainPath === "10") {
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({ currencyId: "USD", tokenPrices: { [ADDR_2]: 7.0 } }),
-          });
-        }
-        throw new Error(`Unexpected URL: ${url}`);
+    test("batches tokens across chains into a single request", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve(
+            pricesResponse([
+              [1, ADDR_1, "2.5"],
+              [10, ADDR_2, "7.0"],
+            ]),
+          ),
       });
 
-      const result = await fetchOdosPrices([
+      const result = await fetchDeloraPrices([
         { chainId: 1, token: ADDR_1 },
         { chainId: 10, token: ADDR_2 },
       ]);
 
-      expect(result.get(odosPriceKey(1, ADDR_1))).toBe(2.5);
-      expect(result.get(odosPriceKey(10, ADDR_2))).toBe(7.0);
-      // One fetch per chain
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(result.get(deloraPriceKey(1, ADDR_1))).toBe(2.5);
+      expect(result.get(deloraPriceKey(10, ADDR_2))).toBe(7.0);
+      // ONE fetch for both chains
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const tokensParam = new URL(mockFetch.mock.calls[0][0] as string).searchParams.get("tokens");
+      expect(tokensParam).toBe(`1:${ADDR_1},10:${ADDR_2}`);
     });
 
-    test("dedupes addresses within a chain", async () => {
+    test("dedupes (chainId, address) pairs in the request", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ currencyId: "USD", tokenPrices: { [ADDR_1]: 1.23 } }),
+        json: () => Promise.resolve(pricesResponse([[1, ADDR_1, "1.23"]])),
       });
 
-      await fetchOdosPrices([
+      await fetchDeloraPrices([
         { chainId: 1, token: ADDR_1 },
         { chainId: 1, token: ADDR_1 },
         { chainId: 1, token: ADDR_1 },
       ]);
 
-      const fetchedUrl = mockFetch.mock.calls[0][0] as string;
-      const params = new URL(fetchedUrl).searchParams.getAll("token_addresses");
-      expect(params).toHaveLength(1);
+      const tokensParam = new URL(mockFetch.mock.calls[0][0] as string).searchParams.get("tokens") ?? "";
+      expect(tokensParam.split(",")).toHaveLength(1);
     });
 
     test("returns prices keyed by lowercase address", async () => {
       const UPPER = "0xAaaaAaaaAaAaAaaaAAAAAAaaAAaaaaAAaaAaAaAa" as Address;
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () =>
-          Promise.resolve({
-            currencyId: "USD",
-            // Odos returns mixed case
-            tokenPrices: { [UPPER]: 9.99 },
-          }),
+        // Delora echoes mixed case
+        json: () => Promise.resolve(pricesResponse([[1, UPPER, "9.99"]])),
       });
 
-      const result = await fetchOdosPrices([{ chainId: 1, token: UPPER }]);
+      const result = await fetchDeloraPrices([{ chainId: 1, token: UPPER }]);
 
-      expect(result.get(odosPriceKey(1, UPPER))).toBe(9.99);
+      expect(result.get(deloraPriceKey(1, UPPER))).toBe(9.99);
       // Key must always be lowercase
       expect([...result.keys()][0]).toBe(`1:${UPPER.toLowerCase()}`);
     });
 
-    test("handles null prices gracefully (omits them from the map)", async () => {
+    test("omits entries whose priceUSD is not a finite number", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () =>
-          Promise.resolve({
-            currencyId: "USD",
-            tokenPrices: { [ADDR_1]: null, [ADDR_2]: 4.2 },
-          }),
+          Promise.resolve(
+            pricesResponse([
+              [1, ADDR_1, "not-a-number"],
+              [1, ADDR_2, "4.2"],
+            ]),
+          ),
       });
 
-      const result = await fetchOdosPrices([
+      const result = await fetchDeloraPrices([
         { chainId: 1, token: ADDR_1 },
         { chainId: 1, token: ADDR_2 },
       ]);
 
-      expect(result.has(odosPriceKey(1, ADDR_1))).toBe(false);
-      expect(result.get(odosPriceKey(1, ADDR_2))).toBe(4.2);
+      expect(result.has(deloraPriceKey(1, ADDR_1))).toBe(false);
+      expect(result.get(deloraPriceKey(1, ADDR_2))).toBe(4.2);
     });
 
-    test("isolates per-chain failures: one chain failing does not poison others", async () => {
-      mockFetch.mockImplementation((url: string) => {
-        const chainPath = new URL(url).pathname.split("/").pop();
-        if (chainPath === "1") {
-          return Promise.resolve({ ok: false, status: 500 });
-        }
-        if (chainPath === "10") {
-          return Promise.resolve({
-            ok: true,
-            json: () => Promise.resolve({ currencyId: "USD", tokenPrices: { [ADDR_2]: 3.14 } }),
-          });
-        }
-        return Promise.reject(new Error(`Unexpected URL: ${url}`));
-      });
+    test("returns empty map on non-2xx response", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
 
-      const result = await fetchOdosPrices([
-        { chainId: 1, token: ADDR_1 },
-        { chainId: 10, token: ADDR_2 },
-      ]);
+      const result = await fetchDeloraPrices([{ chainId: 1, token: ADDR_1 }]);
 
-      expect(result.has(odosPriceKey(1, ADDR_1))).toBe(false);
-      expect(result.get(odosPriceKey(10, ADDR_2))).toBe(3.14);
-    });
-
-    test("network error on a chain is swallowed; other chains still return", async () => {
-      mockFetch.mockImplementation((url: string) => {
-        const chainPath = new URL(url).pathname.split("/").pop();
-        if (chainPath === "1") {
-          return Promise.reject(new Error("Network error"));
-        }
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ currencyId: "USD", tokenPrices: { [ADDR_2]: 1.0 } }),
-        });
-      });
-
-      const result = await fetchOdosPrices([
-        { chainId: 1, token: ADDR_1 },
-        { chainId: 10, token: ADDR_2 },
-      ]);
-
-      expect(result.get(odosPriceKey(10, ADDR_2))).toBe(1.0);
-    });
-
-    test("substitutes wrapped-native (WETH) for zeroAddress in the request but keys back with zeroAddress", async () => {
-      let capturedUrl = "";
-      mockFetch.mockImplementation((url: string) => {
-        capturedUrl = url;
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              currencyId: "USD",
-              // Odos returns the WETH price; the sentinel price (if any) is
-              // deliberately wrong here so the test fails loudly if we ever
-              // regress to using it.
-              tokenPrices: { [WETH_MAINNET]: 2286.97, [ODOS_NATIVE]: 9_999_999 },
-            }),
-        });
-      });
-
-      const result = await fetchOdosPrices([{ chainId: 1, token: zeroAddress }]);
-
-      // The request must use WETH, not the sentinel.
-      const params = new URL(capturedUrl).searchParams.getAll("token_addresses");
-      expect(params).toHaveLength(1);
-      expect(params[0].toLowerCase()).toBe(WETH_MAINNET);
-      // The result must be keyed back with zeroAddress AND must be the WETH price.
-      expect(result.get(odosPriceKey(1, zeroAddress))).toBe(2286.97);
-    });
-
-    test("dedupes the request when a caller asks for both native and wrapped-native, and populates both keys", async () => {
-      let capturedUrl = "";
-      mockFetch.mockImplementation((url: string) => {
-        capturedUrl = url;
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              currencyId: "USD",
-              tokenPrices: { [WETH_MAINNET]: 2300.0 },
-            }),
-        });
-      });
-
-      const result = await fetchOdosPrices([
-        { chainId: 1, token: zeroAddress },
-        { chainId: 1, token: WETH_MAINNET as Address },
-      ]);
-
-      // Only one address sent to Odos despite two registered tokens.
-      const params = new URL(capturedUrl).searchParams.getAll("token_addresses");
-      expect(params).toHaveLength(1);
-      expect(params[0].toLowerCase()).toBe(WETH_MAINNET);
-
-      // Both keys resolve to the WETH price.
-      expect(result.get(odosPriceKey(1, zeroAddress))).toBe(2300.0);
-      expect(result.get(odosPriceKey(1, WETH_MAINNET as Address))).toBe(2300.0);
-    });
-
-    test("skips native pricing on a chain we haven't mapped (no wrapped-native sentinel fallback)", async () => {
-      // Chain 999 is intentionally unmapped in `wrappedNative`. The only token
-      // we ask for is native on that chain — so we expect no request to fire
-      // and no price to come back.
-      const result = await fetchOdosPrices([{ chainId: 999, token: zeroAddress }]);
-
-      expect(mockFetch).not.toHaveBeenCalled();
       expect(result.size).toBe(0);
+    });
+
+    test("swallows network errors and returns empty map", async () => {
+      mockFetch.mockRejectedValueOnce(new Error("Network error"));
+
+      const result = await fetchDeloraPrices([{ chainId: 1, token: ADDR_1 }]);
+
+      expect(result.size).toBe(0);
+    });
+
+    test("requests native tokens with zeroAddress directly (no substitution)", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(pricesResponse([[1, zeroAddress, "2286.97"]])),
+      });
+
+      const result = await fetchDeloraPrices([{ chainId: 1, token: zeroAddress }]);
+
+      const tokensParam = new URL(mockFetch.mock.calls[0][0] as string).searchParams.get("tokens");
+      expect(tokensParam).toBe(`1:${zeroAddress}`);
+      expect(result.get(deloraPriceKey(1, zeroAddress))).toBe(2286.97);
+    });
+
+    test("chunks very large requests to bound URL length", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(pricesResponse([])),
+      });
+
+      // 150 unique addresses -> 2 requests at a 100-pair chunk size.
+      const tokens = Array.from({ length: 150 }, (_, i) => ({
+        chainId: 1,
+        token: `0x${(i + 1).toString(16).padStart(40, "0")}` as Address,
+      }));
+
+      await fetchDeloraPrices(tokens);
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
     test("forwards AbortSignal to fetch", async () => {
@@ -877,38 +756,40 @@ describe("odos", () => {
         }
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ currencyId: "USD", tokenPrices: { [ADDR_1]: 1.0 } }),
+          json: () => Promise.resolve(pricesResponse([[1, ADDR_1, "1.0"]])),
         });
       });
 
       const controller = new AbortController();
       controller.abort();
 
-      const result = await fetchOdosPrices([{ chainId: 1, token: ADDR_1 }], controller.signal);
+      const result = await fetchDeloraPrices([{ chainId: 1, token: ADDR_1 }], controller.signal);
 
       // Aborted before fetch resolved → no price recorded
-      expect(result.has(odosPriceKey(1, ADDR_1))).toBe(false);
+      expect(result.has(deloraPriceKey(1, ADDR_1))).toBe(false);
     });
   });
 
-  describe("fetchOdosTokensForChain", () => {
+  describe("fetchDeloraTokensForChain", () => {
     test("returns a Set of lowercased addresses on success", async () => {
       // Mix a checksum-cased address, an already-lowercase one, and native ETH
-      // (which Odos returns as `0x00…00`) so we lock in both the lowercase
+      // (which Delora returns as `0x00…00`) so we lock in both the lowercase
       // normalisation and the native-token handling the UI relies on.
       const CHECKSUM = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
       const LOWER = "0xdac17f958d2ee523a2206206994597c13d831ec7";
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: () =>
-          Promise.resolve([
-            { address: CHECKSUM, chainId: "1", symbol: "USDC", name: "USD Coin", decimals: 6, isWhitelisted: true },
-            { address: LOWER, chainId: "1", symbol: "USDT", name: "Tether", decimals: 6, isWhitelisted: true },
-            { address: zeroAddress, chainId: "1", symbol: "ETH", name: "Ethereum", decimals: 18, isWhitelisted: true },
-          ]),
+          Promise.resolve({
+            "1": [
+              { address: CHECKSUM, chainId: 1, symbol: "USDC", name: "USD Coin", decimals: 6 },
+              { address: LOWER, chainId: 1, symbol: "USDT", name: "Tether", decimals: 6 },
+              { address: zeroAddress, chainId: 1, symbol: "ETH", name: "Ether", decimals: 18 },
+            ],
+          }),
       });
 
-      const set = await fetchOdosTokensForChain(1);
+      const set = await fetchDeloraTokensForChain(1);
 
       expect(set).toBeInstanceOf(Set);
       expect(set.size).toBe(3);
@@ -919,25 +800,32 @@ describe("odos", () => {
       expect(set.has(CHECKSUM)).toBe(false);
     });
 
-    test("builds the documented URL: /token?query=&chainId=N", async () => {
+    test("builds the documented URL: /v1/tokens?chains=N", async () => {
       let capturedUrl = "";
       mockFetch.mockImplementation((url: string) => {
         capturedUrl = url;
-        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
       });
 
-      await fetchOdosTokensForChain(42161);
+      await fetchDeloraTokensForChain(42161);
 
       const parsed = new URL(capturedUrl);
-      expect(parsed.origin + parsed.pathname).toBe("https://api.odos.xyz/token");
-      expect(parsed.searchParams.get("chainId")).toBe("42161");
-      expect(parsed.searchParams.get("query")).toBe("");
+      expect(parsed.origin + parsed.pathname).toBe("https://api.delora.build/v1/tokens");
+      expect(parsed.searchParams.get("chains")).toBe("42161");
+    });
+
+    test("returns an empty set when the chain key is missing from the response", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      const set = await fetchDeloraTokensForChain(1);
+
+      expect(set.size).toBe(0);
     });
 
     test("throws on non-2xx so callers can observe the failure", async () => {
       mockFetch.mockResolvedValueOnce({ ok: false, status: 503, statusText: "Service Unavailable" });
 
-      await expect(fetchOdosTokensForChain(1)).rejects.toThrow(/Odos \/token failed for chain 1/);
+      await expect(fetchDeloraTokensForChain(1)).rejects.toThrow(/Delora \/v1\/tokens failed for chain 1/);
     });
 
     test("forwards AbortSignal to fetch", async () => {
@@ -945,27 +833,27 @@ describe("odos", () => {
         if (init.signal?.aborted) {
           return Promise.reject(new DOMException("aborted", "AbortError"));
         }
-        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
       });
 
       const controller = new AbortController();
       controller.abort();
 
-      await expect(fetchOdosTokensForChain(1, controller.signal)).rejects.toThrow();
+      await expect(fetchDeloraTokensForChain(1, controller.signal)).rejects.toThrow();
     });
   });
 
-  describe("checkOdosRoutableToUsdc", () => {
+  describe("checkDeloraRoutableToUsdc", () => {
     // A random ERC20 on mainnet — not USDC, so the probe is meaningful.
     const HIDDEN_TOKEN = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Address;
 
-    test("returns true when Odos returns a non-zero outAmount", async () => {
+    test("returns true when Delora returns a non-zero outputAmount", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ pathId: "abc", outAmounts: ["1000000"] }),
+        json: () => Promise.resolve({ outputAmount: "1000000" }),
       });
 
-      const result = await checkOdosRoutableToUsdc({
+      const result = await checkDeloraRoutableToUsdc({
         chainId: 1,
         token: HIDDEN_TOKEN,
         decimals: 18,
@@ -973,27 +861,25 @@ describe("odos", () => {
       });
 
       expect(result).toBe(true);
-      // Routes to /sor/quote/v3 with the USDC mainnet address as the output.
-      const [url, init] = mockFetch.mock.calls[0];
-      expect(url).toBe(`${odosBaseUrl()}/sor/quote/v3`);
-      const body = JSON.parse((init as RequestInit).body as string) as {
-        chainId: number;
-        inputTokens: { tokenAddress: string; amount: string }[];
-        outputTokens: { tokenAddress: string; proportion: number }[];
-        userAddr: string;
-        simple?: boolean;
-      };
-      expect(body.chainId).toBe(1);
-      expect(body.inputTokens[0].tokenAddress).toBe(HIDDEN_TOKEN);
-      expect(body.outputTokens[0].tokenAddress.toLowerCase()).toBe(USDC[1].toLowerCase());
-      expect(body.userAddr).toBe(zeroAddress);
-      expect(body.simple).toBe(true);
+      // Routes to /v1/quotes with the USDC mainnet address as the output and
+      // the zero address as the sender (privacy: discovery-only call).
+      const [url] = mockFetch.mock.calls[0];
+      const parsed = new URL(url as string);
+      expect(parsed.origin + parsed.pathname).toBe("https://api.delora.build/v1/quotes");
+      expect(parsed.searchParams.get("senderAddress")).toBe(zeroAddress);
+      expect(parsed.searchParams.get("originChainId")).toBe("1");
+      expect(parsed.searchParams.get("destinationChainId")).toBe("1");
+      expect(parsed.searchParams.get("originCurrency")).toBe(HIDDEN_TOKEN);
+      expect(parsed.searchParams.get("destinationCurrency")?.toLowerCase()).toBe(USDC[1].toLowerCase());
+      // Discovery probes are not monetized.
+      expect(parsed.searchParams.get("integrator")).toBeNull();
+      expect(parsed.searchParams.get("fee")).toBeNull();
     });
 
-    test("returns false on non-2xx response", async () => {
+    test("returns false on non-2xx response (including the no-adapters 500)", async () => {
       mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
 
-      const result = await checkOdosRoutableToUsdc({
+      const result = await checkDeloraRoutableToUsdc({
         chainId: 1,
         token: HIDDEN_TOKEN,
         decimals: 18,
@@ -1006,7 +892,7 @@ describe("odos", () => {
     test("returns false on thrown network error", async () => {
       mockFetch.mockRejectedValueOnce(new Error("Network error"));
 
-      const result = await checkOdosRoutableToUsdc({
+      const result = await checkDeloraRoutableToUsdc({
         chainId: 1,
         token: HIDDEN_TOKEN,
         decimals: 18,
@@ -1016,13 +902,13 @@ describe("odos", () => {
       expect(result).toBe(false);
     });
 
-    test("returns false when outAmounts is missing", async () => {
+    test("returns false when outputAmount is missing", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ pathId: "abc" }),
+        json: () => Promise.resolve({}),
       });
 
-      const result = await checkOdosRoutableToUsdc({
+      const result = await checkDeloraRoutableToUsdc({
         chainId: 1,
         token: HIDDEN_TOKEN,
         decimals: 18,
@@ -1032,13 +918,13 @@ describe("odos", () => {
       expect(result).toBe(false);
     });
 
-    test("returns false when outAmounts[0] is zero", async () => {
+    test("returns false when outputAmount is zero", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ pathId: "abc", outAmounts: ["0"] }),
+        json: () => Promise.resolve({ outputAmount: "0" }),
       });
 
-      const result = await checkOdosRoutableToUsdc({
+      const result = await checkDeloraRoutableToUsdc({
         chainId: 1,
         token: HIDDEN_TOKEN,
         decimals: 18,
@@ -1049,7 +935,7 @@ describe("odos", () => {
     });
 
     test("returns false (and doesn't fetch) when token is already USDC on that chain", async () => {
-      const result = await checkOdosRoutableToUsdc({
+      const result = await checkDeloraRoutableToUsdc({
         chainId: 1,
         token: USDC[1],
         decimals: 6,
@@ -1061,7 +947,7 @@ describe("odos", () => {
     });
 
     test("returns false (and doesn't fetch) when chain has no USDC mapping", async () => {
-      const result = await checkOdosRoutableToUsdc({
+      const result = await checkDeloraRoutableToUsdc({
         chainId: 999_999,
         token: HIDDEN_TOKEN,
         decimals: 18,
@@ -1073,13 +959,13 @@ describe("odos", () => {
     });
 
     test("returns false (and doesn't fetch) when unitaryPrice is non-positive", async () => {
-      const zeroPrice = await checkOdosRoutableToUsdc({
+      const zeroPrice = await checkDeloraRoutableToUsdc({
         chainId: 1,
         token: HIDDEN_TOKEN,
         decimals: 18,
         unitaryPrice: 0,
       });
-      const negativePrice = await checkOdosRoutableToUsdc({
+      const negativePrice = await checkDeloraRoutableToUsdc({
         chainId: 1,
         token: HIDDEN_TOKEN,
         decimals: 18,
@@ -1094,45 +980,38 @@ describe("odos", () => {
     test("normalises input to a ~$1-equivalent amount derived from unitaryPrice", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ pathId: "abc", outAmounts: ["1"] }),
+        json: () => Promise.resolve({ outputAmount: "1" }),
       });
 
-      await checkOdosRoutableToUsdc({
+      await checkDeloraRoutableToUsdc({
         chainId: 1,
         token: HIDDEN_TOKEN,
         decimals: 18,
         unitaryPrice: 2,
       });
 
-      const init = mockFetch.mock.calls[0][1] as RequestInit;
-      const body = JSON.parse(init.body as string) as {
-        inputTokens: { amount: string }[];
-      };
+      const parsed = new URL(mockFetch.mock.calls[0][0] as string);
       // $1 of a $2 token → 0.5 tokens with 18 decimals.
-      expect(body.inputTokens[0].amount).toBe(parseUnits("0.5", 18).toString());
+      expect(parsed.searchParams.get("amount")).toBe(parseUnits("0.5", 18).toString());
     });
 
     test("clamps the amount to 1n when the $1-equivalent rounds to zero", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ pathId: "abc", outAmounts: ["1"] }),
+        json: () => Promise.resolve({ outputAmount: "1" }),
       });
 
-      // A 0-decimal token at $0.01 would round to 100 tokens of $1, but a
-      // 0-decimal token priced at $1,000,000 would truncate to 0 — that's
-      // the clamp case we want to verify.
-      await checkOdosRoutableToUsdc({
+      // A 0-decimal token priced at $1,000,000 truncates to 0 — that's the
+      // clamp case we want to verify.
+      await checkDeloraRoutableToUsdc({
         chainId: 1,
         token: HIDDEN_TOKEN,
         decimals: 0,
         unitaryPrice: 1_000_000,
       });
 
-      const init = mockFetch.mock.calls[0][1] as RequestInit;
-      const body = JSON.parse(init.body as string) as {
-        inputTokens: { amount: string }[];
-      };
-      expect(body.inputTokens[0].amount).toBe("1");
+      const parsed = new URL(mockFetch.mock.calls[0][0] as string);
+      expect(parsed.searchParams.get("amount")).toBe("1");
     });
 
     test("forwards AbortSignal to fetch and returns false when aborted", async () => {
@@ -1142,14 +1021,14 @@ describe("odos", () => {
         }
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ pathId: "abc", outAmounts: ["1"] }),
+          json: () => Promise.resolve({ outputAmount: "1" }),
         });
       });
 
       const controller = new AbortController();
       controller.abort();
 
-      const result = await checkOdosRoutableToUsdc(
+      const result = await checkDeloraRoutableToUsdc(
         {
           chainId: 1,
           token: HIDDEN_TOKEN,

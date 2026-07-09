@@ -25,7 +25,6 @@ import type { TransactionStep } from "./types";
 export type OperationType =
   | "erc20-approval"
   | "swap"
-  | "swap-multi"
   | "cctp-approval"
   | "cctp-burn"
   | "cctp-claim"
@@ -36,7 +35,7 @@ export type OperationType =
 
 /**
  * Per-operation gas unit budgets used as a fallback whenever live simulation is
- * unavailable (e.g. Odos swaps whose calldata isn't built until execution, CCTP
+ * unavailable (e.g. Delora swaps whose calldata isn't built until execution, CCTP
  * claims that need an attestation, or RPCs that don't support `eth_estimateGas`
  * with state overrides). Conservative upper bounds derived from observed
  * mainnet/L2 traces; the SAFETY_BUFFER_PCT below is the second line of defense.
@@ -44,7 +43,6 @@ export type OperationType =
 const GAS_BUDGETS: Record<OperationType, bigint> = {
   "erc20-approval": 65_000n,
   swap: 500_000n,
-  "swap-multi": 800_000n,
   "cctp-approval": 65_000n,
   "cctp-burn": 200_000n,
   "cctp-claim": 300_000n,
@@ -271,12 +269,9 @@ export function estimateOperationsForChainWallet(
       ops.push("erc20-approval");
     }
 
-    if (totalSwapTokens > 0) {
-      const batchCount = Math.ceil(totalSwapTokens / 6);
-      for (let i = 0; i < batchCount; i++) {
-        const batchSize = Math.min(totalSwapTokens - i * 6, 6);
-        ops.push(batchSize > 1 ? "swap-multi" : "swap");
-      }
+    // Delora swaps are single-input: one swap tx per token.
+    for (let i = 0; i < totalSwapTokens; i++) {
+      ops.push("swap");
     }
 
     // CCTP bridge ops are only added when there's at least one token on this chain
@@ -290,12 +285,9 @@ export function estimateOperationsForChainWallet(
       ops.push("erc20-approval");
     }
 
-    if (totalSwapTokens > 0) {
-      const batchCount = Math.ceil(totalSwapTokens / 6);
-      for (let i = 0; i < batchCount; i++) {
-        const batchSize = Math.min(totalSwapTokens - i * 6, 6);
-        ops.push(batchSize > 1 ? "swap-multi" : "swap");
-      }
+    // Delora swaps are single-input: one swap tx per token.
+    for (let i = 0; i < totalSwapTokens; i++) {
+      ops.push("swap");
     }
   }
 
@@ -332,12 +324,9 @@ export function estimateDestinationChainOperations(
     ops.push("erc20-approval");
   }
 
-  if (totalSwapTokens > 0) {
-    const batchCount = Math.ceil(totalSwapTokens / 6);
-    for (let i = 0; i < batchCount; i++) {
-      const batchSize = Math.min(totalSwapTokens - i * 6, 6);
-      ops.push(batchSize > 1 ? "swap-multi" : "swap");
-    }
+  // Delora swaps are single-input: one swap tx per token.
+  for (let i = 0; i < totalSwapTokens; i++) {
+    ops.push("swap");
   }
 
   if (needsTransfer) {
@@ -387,7 +376,7 @@ const depositForBurnAbi = parseAbi([
 ]);
 
 /** Sentinel spender for ERC20-approval simulation in swap steps where the actual
- * Odos router calldata isn't built until execution. The gas of `approve()` is
+ * Delora calldata isn't built until execution. The gas of `approve()` is
  * independent of the spender's bytecode (the routine just writes a single
  * storage slot), so any non-precompile address yields the right answer. */
 const APPROVAL_SIM_SPENDER: Address = "0x000000000000000000000000000000000000bEEF";
@@ -399,7 +388,7 @@ interface SimulationContext {
 /**
  * Tries to simulate a single operation's gas usage at planning time via
  * `eth_estimateGas`. Returns `null` for ops whose calldata isn't known yet
- * (Odos swaps, CCTP claims) or when the simulation reverts; callers fall
+ * (Delora swaps, CCTP claims) or when the simulation reverts; callers fall
  * back to {@link GAS_BUDGETS} in that case.
  *
  * For `cctp-burn`, we use a `stateOverride` to fake a max USDC balance and
@@ -418,11 +407,10 @@ async function simulateOperationGas(
   try {
     switch (op) {
       case "swap":
-      case "swap-multi":
       case "cctp-claim":
       case "gas-topup-leg":
       case "shield":
-        // Calldata not available at planning time — Odos `/sor/assemble` runs
+        // Calldata not available at planning time — Delora quotes are fetched
         // at execution, CCTP claim needs the attestation message, the
         // gas-topup leg's LI.FI `transactionRequest` is quoted at execution,
         // and the shield note requires a wallet signature at execution.
@@ -556,7 +544,7 @@ async function simulateOperationGas(
 /**
  * Builds a {@link StepGasEstimate} for a single step. Calls
  * {@link simulateOperationGas} for each operation type and falls back to
- * {@link GAS_BUDGETS} when simulation isn't possible (Odos swaps, CCTP claim,
+ * {@link GAS_BUDGETS} when simulation isn't possible (Delora swaps, CCTP claim,
  * or revert). The 30% {@link SAFETY_BUFFER_PCT} layers on top of either
  * source so reserved native always exceeds actual cost.
  */
@@ -659,13 +647,17 @@ export async function attachGasEstimates(steps: TransactionStep[], gasCtx: GasCo
 function getStepOperations(step: TransactionStep): OperationType[] {
   switch (step.type) {
     case "swap": {
+      // One approval (ERC20 only) + one Delora swap tx per unique token
+      // address. Same-address entries with different provenance share one
+      // quote/swap (see `dedupeSwapInputs` in delora.ts).
       const ops: OperationType[] = [];
-      for (const input of step.inputTokens) {
-        if (!isAddressEqual(input.token, zeroAddress)) {
+      const uniqueTokens = new Set(step.inputTokens.map((input) => input.token.toLowerCase()));
+      for (const token of uniqueTokens) {
+        if (!isAddressEqual(token as Address, zeroAddress)) {
           ops.push("erc20-approval");
         }
+        ops.push("swap");
       }
-      ops.push(step.inputTokens.length > 1 ? "swap-multi" : "swap");
       return ops;
     }
     case "bridge":

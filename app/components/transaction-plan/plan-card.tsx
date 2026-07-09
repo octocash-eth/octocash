@@ -86,7 +86,7 @@ function AddressInline({ address }: { address: string }) {
 
 /**
  * Renders a token icon + amount + symbol + inline USD label, where the USD
- * value is driven by the live Odos price from {@link usePrice}. The amount
+ * value is driven by the live Delora price from {@link usePrice}. The amount
  * text gets re-keyed on every change so its `animate-in fade-in` entrance
  * animation reruns — a small one-shot blink that signals "this number just
  * moved" without committing to a direction or threshold.

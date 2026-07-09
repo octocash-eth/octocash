@@ -1,11 +1,10 @@
 import { type Address, erc20Abi, formatUnits, isAddressEqual, parseUnits, zeroAddress } from "viem";
 import { STAKED_TOKENS } from "~/data/staked-tokens";
-import { wrappedNative } from "~/data/supported-chains";
 import { USDC } from "~/data/token-contracts";
 import { getPublicClient } from "../public-client";
 import { groupTokensByChain } from "../tokens";
 import type { TokenAmount } from "../types";
-import { odosBaseUrl, odosHeaders } from "./odos-client";
+import { deloraBaseUrl, deloraHeaders } from "./delora-client";
 
 function isEffectivelyZero(balance: number): boolean {
   return balance < 0.01; // Consider anything less than $0.01 as effectively zero
@@ -16,59 +15,64 @@ export const EXTRA_TOKENS = STAKED_TOKENS.map((token) => {
   return { chainId: Number(chainId), address: address as Address };
 });
 
-// Odos pricing API response type
-interface OdosPricingResponse {
-  currencyId: string;
-  tokenPrices: Record<string, number | null>;
+// Delora `/v1/prices` response type
+interface DeloraPricesResponse {
+  prices: {
+    chainId: number;
+    token: string;
+    priceUSD: string;
+    source?: string;
+    updatedAt?: string;
+    stale?: boolean;
+  }[];
 }
 
-// Odos `/token?query=&chainId=N` returns an array of token catalog entries.
-// We only care about the address; the rest is metadata we already have.
-interface OdosTokenInfo {
+// Delora `/v1/tokens?chains=N` returns a record keyed by chainId with arrays
+// of token catalog entries. We only care about the address; the rest is
+// metadata we already have.
+interface DeloraTokenInfo {
   address: string;
-  chainId: string;
+  chainId: number;
   symbol: string;
   name: string;
   decimals: number;
-  isWhitelisted: boolean;
 }
 
 /**
- * Fetch Odos's swappable-token catalog for a single chain.
+ * Fetch Delora's swappable-token catalog for a single chain.
  *
  * Returns a Set of lowercased addresses. Throws on non-2xx so callers (e.g.
  * TanStack Query) can observe the failure and decide whether to fail open.
  * Native ETH is represented in the response as `0x0000…0000`, which matches
  * the `zeroAddress` we use internally — no special-casing required.
  */
-export async function fetchOdosTokensForChain(chainId: number, signal?: AbortSignal): Promise<ReadonlySet<string>> {
-  // Catalog stays on the public `api.odos.xyz` host without the API key: it's
-  // a free read endpoint that isn't subject to the `/sor/*` rate limit, so
-  // there's no need to spend monetized quota or pay the CORS-proxy hop on it.
-  const url = new URL("https://api.odos.xyz/token");
-  url.searchParams.set("query", "");
-  url.searchParams.set("chainId", String(chainId));
+export async function fetchDeloraTokensForChain(chainId: number, signal?: AbortSignal): Promise<ReadonlySet<string>> {
+  const url = new URL(`${deloraBaseUrl()}/v1/tokens`);
+  url.searchParams.set("chains", String(chainId));
 
   const response = await fetch(url.toString(), {
-    headers: { accept: "application/json" },
+    headers: deloraHeaders({ accept: "application/json" }),
     signal,
   });
 
   if (!response.ok) {
-    throw new Error(`Odos /token failed for chain ${chainId}: ${response.status} ${response.statusText}`);
+    throw new Error(`Delora /v1/tokens failed for chain ${chainId}: ${response.status} ${response.statusText}`);
   }
 
-  const data: OdosTokenInfo[] = await response.json();
-  return new Set(data.map((t) => t.address.toLowerCase()));
+  const data: Record<string, DeloraTokenInfo[]> = await response.json();
+  const tokens = data[String(chainId)] ?? [];
+  return new Set(tokens.map((t) => t.address.toLowerCase()));
 }
 
 /**
- * Input for {@link checkOdosRoutableToUsdc}. `unitaryPrice` is required so we
- * can normalise the probe to a $1-equivalent amount regardless of the token's
- * decimals/price — callers that don't have a price should skip the probe.
+ * Input for {@link checkDeloraRoutableToUsdc}. `unitaryPrice` is required so
+ * we can normalise the probe to a $1-equivalent amount regardless of the
+ * token's decimals/price — callers that don't have a price should skip the
+ * probe.
  *
- * Requests use viem `zeroAddress` as `userAddr` so routability discovery does
- * not disclose real wallet addresses to Odos (only route existence is needed).
+ * Requests use viem `zeroAddress` as `senderAddress` so routability discovery
+ * does not disclose real wallet addresses to Delora (only route existence is
+ * needed).
  */
 export interface RoutabilityProbe {
   chainId: number;
@@ -78,23 +82,26 @@ export interface RoutabilityProbe {
 }
 
 /**
- * Probe whether Odos can quote a swap from `token` → USDC on the same chain.
+ * Probe whether Delora can quote a swap from `token` → USDC on the same chain.
  *
- * Used by the wallet table to re-admit tokens that aren't in Odos's `/token`
- * catalog but still have a live route through `/sor/quote/v3` (the same
- * endpoint planning uses). We send a normalised ~$1-equivalent input amount
- * derived from `unitaryPrice` so the probe is stable across token decimals
- * and price magnitudes. `userAddr` on the quote request is the zero address
- * so Odos logs do not record the viewer's wallet for this discovery-only call.
+ * Used by the wallet table to re-admit tokens that aren't in Delora's
+ * `/v1/tokens` catalog but still have a live route through `/v1/quotes` (the
+ * same endpoint planning uses). We send a normalised ~$1-equivalent input
+ * amount derived from `unitaryPrice` so the probe is stable across token
+ * decimals and price magnitudes. `senderAddress` on the quote request is the
+ * zero address so Delora logs do not record the viewer's wallet for this
+ * discovery-only call. No integrator/fee params are sent — this is not a
+ * monetizable swap.
  *
  * Returns `false` (without making a request) when the chain has no mapped
  * USDC address or when the input token already *is* USDC, since neither is a
- * meaningful "swap to USDC" question. Any non-2xx response, network error,
- * or zero/missing `outAmounts` also yields `false` — failing closed is OK
- * here because the only consequence is the token staying hidden until the
- * user refreshes.
+ * meaningful "swap to USDC" question. Any non-2xx response (including the
+ * deterministic "No adapters available" 500 for unroutable tokens), network
+ * error, or zero/missing `outputAmount` also yields `false` — failing closed
+ * is OK here because the only consequence is the token staying hidden until
+ * the user refreshes.
  */
-export async function checkOdosRoutableToUsdc(probe: RoutabilityProbe, signal?: AbortSignal): Promise<boolean> {
+export async function checkDeloraRoutableToUsdc(probe: RoutabilityProbe, signal?: AbortSignal): Promise<boolean> {
   const usdc = USDC[probe.chainId];
   if (usdc === undefined) return false;
   if (isAddressEqual(probe.token, usdc)) return false;
@@ -115,132 +122,105 @@ export async function checkOdosRoutableToUsdc(probe: RoutabilityProbe, signal?: 
   }
 
   try {
-    const response = await fetch(`${odosBaseUrl()}/sor/quote/v3`, {
-      method: "POST",
-      headers: odosHeaders({ "Content-Type": "application/json", accept: "application/json" }),
+    const url = new URL(`${deloraBaseUrl()}/v1/quotes`);
+    url.searchParams.set("senderAddress", zeroAddress);
+    url.searchParams.set("originChainId", String(probe.chainId));
+    url.searchParams.set("destinationChainId", String(probe.chainId));
+    url.searchParams.set("amount", amount.toString());
+    url.searchParams.set("originCurrency", probe.token);
+    url.searchParams.set("destinationCurrency", usdc);
+    url.searchParams.set("slippage", "0.005");
+
+    const response = await fetch(url.toString(), {
+      headers: deloraHeaders({ accept: "application/json" }),
       signal,
-      body: JSON.stringify({
-        chainId: probe.chainId,
-        inputTokens: [{ tokenAddress: probe.token, amount: amount.toString() }],
-        outputTokens: [{ tokenAddress: usdc, proportion: 1 }],
-        userAddr: zeroAddress,
-        slippageLimitPercent: 0.3,
-        referralCode: 0,
-        disableRFQs: true,
-        compact: false,
-        simple: true,
-      }),
     });
 
     if (!response.ok) return false;
 
-    const data = (await response.json()) as { outAmounts?: string[] };
-    const outAmountStr = data.outAmounts?.[0];
-    if (outAmountStr === undefined) return false;
+    const data = (await response.json()) as { outputAmount?: string };
+    if (data.outputAmount === undefined) return false;
     try {
-      return BigInt(outAmountStr) > 0n;
+      return BigInt(data.outputAmount) > 0n;
     } catch {
       return false;
     }
   } catch (error) {
     if (signal?.aborted) return false;
-    console.warn(`[OdosRoutable] Probe failed for ${probe.chainId}:${probe.token}:`, error);
+    console.warn(`[DeloraRoutable] Probe failed for ${probe.chainId}:${probe.token}:`, error);
     return false;
   }
 }
 
-export type OdosPriceKey = `${number}:${string}`;
-export const odosPriceKey = (chainId: number, address: Address): OdosPriceKey => `${chainId}:${address.toLowerCase()}`;
+export type DeloraPriceKey = `${number}:${string}`;
+export const deloraPriceKey = (chainId: number, address: Address): DeloraPriceKey =>
+  `${chainId}:${address.toLowerCase()}`;
 
 /**
- * Fetch Odos token prices for the given (chainId, token) pairs.
- *
- * - Groups by chainId, dedupes addresses, issues one fetch per chain in parallel.
- * - For native tokens (zeroAddress), we ignore Odos's `0xeeee…eEEE` sentinel
- *   entirely and ask for the chain's wrapped-native equivalent (WETH/WPOL/…)
- *   instead, because the sentinel quote is unreliable on several L2s (off by
- *   ~12% on Optimism vs the WETH spot on the same chain). Native and
- *   wrapped-native are 1:1 redeemable, so the wrapped price is the correct
- *   number for both. Results are still keyed back under `zeroAddress` so
- *   callers don't need to know about the substitution.
- * - Returned map keys are `${chainId}:${lowercase address}`. Use `odosPriceKey()`.
- * - Per-chain failures are swallowed and logged; missing keys mean "no price".
+ * Maximum `chainId:address` pairs per `/v1/prices` request, to keep the URL
+ * comfortably under common length limits (each pair is ~46 chars).
  */
-export async function fetchOdosPrices(
+const PRICES_CHUNK_SIZE = 100;
+
+/**
+ * Fetch Delora token prices for the given (chainId, token) pairs.
+ *
+ * - Delora's `/v1/prices` accepts pairs across chains in a single request
+ *   (`?tokens=1:0xabc…,137:0xdef…`), so all chains are batched together;
+ *   requests are only split into chunks of {@link PRICES_CHUNK_SIZE} to
+ *   bound URL length.
+ * - Native tokens (zeroAddress) are priced directly by Delora — no
+ *   wrapped-native substitution needed.
+ * - Returned map keys are `${chainId}:${lowercase address}`. Use
+ *   `deloraPriceKey()`. Stale-flagged entries are still included — a slightly
+ *   old price beats a gap, and the price context refreshes every poll.
+ * - Failures are swallowed and logged; missing keys mean "no price".
+ */
+export async function fetchDeloraPrices(
   tokens: ReadonlyArray<Pick<TokenAmount, "chainId" | "token">>,
   signal?: AbortSignal,
-): Promise<Map<OdosPriceKey, number>> {
-  const prices = new Map<OdosPriceKey, number>();
+): Promise<Map<DeloraPriceKey, number>> {
+  const prices = new Map<DeloraPriceKey, number>();
   if (tokens.length === 0) return prices;
 
-  const byChain = groupTokensByChain(tokens.map((t) => ({ chainId: t.chainId, token: t.token })));
+  // Dedupe pairs (case-insensitive) across all chains.
+  const uniquePairs = new Set<DeloraPriceKey>();
+  for (const t of tokens) {
+    uniquePairs.add(deloraPriceKey(t.chainId, t.token));
+  }
+  const pairs = Array.from(uniquePairs);
+
+  const chunks: DeloraPriceKey[][] = [];
+  for (let i = 0; i < pairs.length; i += PRICES_CHUNK_SIZE) {
+    chunks.push(pairs.slice(i, i + PRICES_CHUNK_SIZE));
+  }
 
   await Promise.all(
-    Array.from(byChain.entries()).map(async ([chainId, chainTokens]) => {
+    chunks.map(async (chunk) => {
       try {
-        // Dedupe addresses (case-insensitive).
-        const uniqueAddresses = new Set<string>();
-        for (const t of chainTokens) {
-          uniqueAddresses.add(t.token.toLowerCase());
-        }
-
-        // Resolve the wrapped-native address for this chain so we can quote
-        // native balances against it. May be undefined for chains we haven't
-        // mapped yet, in which case native tokens just won't get priced.
-        const wrappedNativeLc = wrappedNative[chainId]?.toLowerCase();
-
-        // Build the request set, substituting zeroAddress -> wrapped-native.
-        // Using a Set so a caller that asks for both native AND wrapped-native
-        // doesn't make us send the same address twice.
-        const requestAddresses = new Set<string>();
-        for (const addr of uniqueAddresses) {
-          if (isAddressEqual(addr as Address, zeroAddress)) {
-            if (wrappedNativeLc !== undefined) requestAddresses.add(wrappedNativeLc);
-          } else {
-            requestAddresses.add(addr);
-          }
-        }
-
-        if (requestAddresses.size === 0) return;
-
-        // Pricing stays on the public `api.odos.xyz` host without the API key:
-        // it's a free read endpoint and we don't want to spend monetized quota
-        // on background price refreshes.
-        const url = new URL(`https://api.odos.xyz/pricing/token/${chainId}`);
-        for (const addr of requestAddresses) {
-          url.searchParams.append("token_addresses", addr);
-        }
+        const url = new URL(`${deloraBaseUrl()}/v1/prices`);
+        url.searchParams.set("tokens", chunk.join(","));
 
         const response = await fetch(url.toString(), {
-          headers: { accept: "application/json" },
+          headers: deloraHeaders({ accept: "application/json" }),
           signal,
         });
 
         if (!response.ok) {
-          console.warn(`[OdosPrices] Failed to fetch prices for chain ${chainId}: ${response.status}`);
+          console.warn(`[DeloraPrices] Failed to fetch prices: ${response.status}`);
           return;
         }
 
-        const data: OdosPricingResponse = await response.json();
-
-        // Build a lowercase-keyed view of the response for case-insensitive lookup.
-        const tokenPricesLc: Record<string, number | null> = {};
-        for (const [k, v] of Object.entries(data.tokenPrices)) {
-          tokenPricesLc[k.toLowerCase()] = v;
-        }
-
-        for (const addr of uniqueAddresses) {
-          const isNative = isAddressEqual(addr as Address, zeroAddress);
-          const lookup = isNative ? wrappedNativeLc : addr;
-          if (lookup === undefined) continue;
-          const price = tokenPricesLc[lookup];
-          if (price !== null && price !== undefined) {
-            prices.set(odosPriceKey(chainId, addr as Address), price);
+        const data: DeloraPricesResponse = await response.json();
+        for (const entry of data.prices ?? []) {
+          const price = Number(entry.priceUSD);
+          if (Number.isFinite(price)) {
+            prices.set(deloraPriceKey(entry.chainId, entry.token as Address), price);
           }
         }
       } catch (error) {
         if (signal?.aborted) return;
-        console.error(`[OdosPrices] Odos pricing API failed for chain ${chainId}:`, error);
+        console.error("[DeloraPrices] Delora pricing API failed:", error);
       }
     }),
   );
@@ -398,14 +378,14 @@ export async function fetchExtraTokenBalances(walletAddresses: string[]): Promis
 
     if (tokenAmounts.length === 0) return [];
 
-    // Step 5: Fetch Odos prices once, then use them in-place to drop dust
+    // Step 5: Fetch Delora prices once, then use them in-place to drop dust
     // and order by USD value descending. We deliberately do NOT stamp the
     // price onto the returned `TokenAmount` — downstream consumers read
     // live prices from the central price context to avoid two-sources-of-
     // truth bugs (see app/context/token-price-provider.tsx).
-    const prices = await fetchOdosPrices(tokenAmounts);
+    const prices = await fetchDeloraPrices(tokenAmounts);
     const usdValue = (t: TokenAmount): number => {
-      const price = prices.get(odosPriceKey(t.chainId, t.token));
+      const price = prices.get(deloraPriceKey(t.chainId, t.token));
       if (price === undefined) return 0;
       return Number(formatUnits(t.amount, t.decimals)) * price;
     };

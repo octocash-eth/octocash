@@ -5,6 +5,7 @@ import { tokenMessenger } from "~/data/cctp-contracts";
 import { BPS_DENOMINATOR, RAILGUN_PROXY, RAILGUN_SHIELD_FEE_BPS } from "~/data/railgun";
 import { chains, transports } from "~/data/supported-chains";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
+import { deriveSwapOutputAmount, executeDeloraSwap, getSwapQuote } from "./delora";
 import { createTransactionError } from "./errors";
 import { getNativeBalance } from "./gas";
 import {
@@ -14,7 +15,6 @@ import {
   type OperationType,
 } from "./gas-estimation";
 import { getLiFiQuoteForTargetOutput, type LiFiStatusResponse, pollLiFiTransferStatus } from "./lifi";
-import { deriveSwapOutputAmount, executeOdosSwap, getSwapQuote } from "./odos";
 import { getPublicClient, retryOnRateLimit } from "./public-client";
 import { prepareSendCalls, SendCallsError } from "./send-calls";
 import { getTokenBalance } from "./tokens";
@@ -26,7 +26,7 @@ import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } fro
  * the user knows exactly which token / wallet is short rather than seeing a
  * cryptic on-chain revert.
  */
-/** Quotes younger than this are reused; older ones get a fresh Odos round-trip. */
+/** Quotes younger than this are reused; older ones get a fresh Delora round-trip. */
 const SWAP_QUOTE_STALE_MS = 10_000;
 
 export class InsufficientInputBalanceError extends Error {
@@ -184,8 +184,9 @@ export async function* executeConsolidationPlan(
     // Refresh swap quote immediately before execution so the UI shows the
     // freshest amount (and any delta vs the previously displayed quote).
     // Skip when the quote was fetched within `SWAP_QUOTE_STALE_MS` to avoid
-    // an extra Odos round-trip on rapid retry/skip cycles — Odos quotes don't
-    // meaningfully drift on that timescale.
+    // an extra Delora round-trip on rapid retry/skip cycles — quotes don't
+    // meaningfully drift on that timescale, and each skip saves a unit of
+    // Delora's per-IP rate-limit quota.
     if (step.type === "swap" && (step.quotedAt === undefined || Date.now() - step.quotedAt >= SWAP_QUOTE_STALE_MS)) {
       const refreshedStep = await refreshSwapQuote(step);
       if (refreshedStep.outputToken.amount !== step.outputToken.amount) {
@@ -593,13 +594,16 @@ function filterZeroAmounts(
 }
 
 /**
- * Re-quote a swap step against Odos right before execution.
+ * Re-quote a swap step against Delora right before execution.
  *
  * Called unconditionally for every swap step (no staleness gate) so the UI
  * surfaces the most up-to-date output amount — and any delta vs the
- * previously displayed value — before signing.
+ * previously displayed value — before signing. Note that execution fetches
+ * its own quote again inside `buildDeloraCalls` (the Delora quote *is* the
+ * executable calldata); drift between the displayed and executed quote is
+ * bounded on-chain by the quote's `minOutputAmount`.
  *
- * Best-effort: if the quote request fails (RPC/Odos outage), the original
+ * Best-effort: if the quote request fails (RPC/Delora outage), the original
  * step is returned and execution proceeds with the previously cached quote.
  *
  * @param step - The swap step to refresh
@@ -704,12 +708,16 @@ export function estimateRemainingChainOps(currentStep: TransactionStep, state: C
     if (planStep.status === "success" || planStep.status === "skipped") continue;
 
     switch (planStep.type) {
-      case "swap":
-        for (const input of planStep.inputTokens) {
-          if (!isAddressEqual(input.token, zeroAddress)) ops.push("erc20-approval");
+      case "swap": {
+        // One approval (ERC20 only) + one Delora swap tx per unique token
+        // address (same-address entries share one quote/swap).
+        const uniqueTokens = new Set(planStep.inputTokens.map((input) => input.token.toLowerCase()));
+        for (const token of uniqueTokens) {
+          if (!isAddressEqual(token as Address, zeroAddress)) ops.push("erc20-approval");
+          ops.push("swap");
         }
-        ops.push(planStep.inputTokens.length > 1 ? "swap-multi" : "swap");
         break;
+      }
       case "bridge":
         ops.push("cctp-approval", "cctp-burn");
         break;
@@ -765,8 +773,8 @@ async function executeStep(
       // including the post-adjustment native amount.
       await validateInputBalances(step, state);
 
-      // Execute swap using Odos with non-zero tokens
-      const { amount: actualAmount, transactionHash } = await executeOdosSwap(
+      // Execute swap using Delora with non-zero tokens
+      const { amount: actualAmount, transactionHash } = await executeDeloraSwap(
         nonZeroTokens,
         step.outputToken,
         sendCalls,
