@@ -2,16 +2,20 @@ import {
   type Address,
   type Call,
   erc20Abi,
+  ethAddress,
+  formatUnits,
   getAddress,
   type Hex,
   isAddressEqual,
   type Log,
   parseEventLogs,
+  zeroAddress,
 } from "viem";
 import { DELORA_INTEGRATOR, OCTOCASH_SWAP_FEE } from "~/data/delora";
 import type { SendCallsFn } from "~/lib/send-calls";
 import type { TokenAmount } from "~/lib/types";
 import { deloraBaseUrl, deloraHeaders } from "./api/delora-client";
+import { getPublicClient } from "./public-client";
 import { buildERC20ApprovalCalls } from "./tokens";
 
 /**
@@ -123,9 +127,17 @@ function dedupeSwapInputs(inputTokens: TokenAmount[]): TokenAmount[] {
  * Quote each (deduped) input token and turn the quotes into executable calls:
  * `[approval?, swap]` per token. Quotes are fetched sequentially to avoid
  * bursting Delora's per-IP rate limit.
+ *
+ * `minOutputAmount` is the sum of the per-quote on-chain slippage floors —
+ * the least the wallet should receive across all swap calls combined. It
+ * feeds the pre-flight delivery check in {@link simulateSwapDelivery}.
  */
-export async function buildDeloraCalls(tokensToSwap: TokenAmount[], tokenOut: TokenAmount): Promise<Call[]> {
+export async function buildDeloraCalls(
+  tokensToSwap: TokenAmount[],
+  tokenOut: TokenAmount,
+): Promise<{ calls: Call[]; minOutputAmount: bigint }> {
   const calls: Call[] = [];
+  let minOutputAmount = 0n;
   for (const input of dedupeSwapInputs(tokensToSwap)) {
     // Nothing to swap for this address; a zero-amount quote would be rejected.
     if (input.amount <= 0n) continue;
@@ -141,8 +153,107 @@ export async function buildDeloraCalls(tokensToSwap: TokenAmount[], tokenOut: To
       data: quote.calldata.data,
       value: BigInt(quote.calldata.value ?? "0x0"),
     });
+    // A quote missing its floor contributes 0 rather than failing the swap —
+    // the delivery check just gets weaker for that leg.
+    minOutputAmount += BigInt(quote.minOutputAmount ?? "0");
   }
-  return calls;
+  return { calls, minOutputAmount };
+}
+
+/**
+ * Shape of one entry in `simulateCalls().results`. viem's full result type is
+ * generic over the call array; this narrows to the three fields we consume.
+ */
+interface SimulatedCallResult {
+  status: "success" | "failure";
+  error?: Error;
+  logs?: Log[];
+}
+
+/**
+ * Pre-flight delivery check: simulate the full `[approval?, swap]+` sequence
+ * via `eth_simulateV1` and verify the user's wallet would actually receive at
+ * least the quotes' combined `minOutputAmount`.
+ *
+ * Why this exists: the swap calldata is Delora's, sent verbatim. The on-chain
+ * `minOutputAmount` floor protects against price movement — but only if the
+ * calldata actually contains that check and pays out to the user's wallet.
+ * Simulating verifies both without trusting Delora: a route that would execute
+ * "successfully" while under-delivering, or paying someone else, is caught
+ * here before the wallet prompt and before any gas is spent.
+ *
+ * Failure policy:
+ * - Simulated shortfall or simulated revert → throw (fail closed).
+ * - Simulation infrastructure errors (RPC without `eth_simulateV1`, rate
+ *   limit, network) → warn and proceed (fail open): the on-chain floor still
+ *   protects the funds, matching the gas-estimation fallback in send-calls.ts.
+ *
+ * Native output (zeroAddress) emits no ERC20 Transfer, so it is verified via
+ * `traceAssetChanges` (native balance delta, reported under viem's
+ * `ethAddress` placeholder) instead of Transfer logs.
+ *
+ * This is a point-in-time check — pool state can move between simulation and
+ * inclusion — so it complements the on-chain floor rather than replacing it.
+ */
+export async function simulateSwapDelivery(
+  chainId: number,
+  wallet: Address,
+  calls: Call[],
+  tokenOut: TokenAmount,
+  minOutputAmount: bigint,
+): Promise<void> {
+  if (calls.length === 0 || minOutputAmount <= 0n) return;
+
+  const isNativeOut = isAddressEqual(tokenOut.token, zeroAddress);
+  let outcome: { simulatedOutput: bigint } | { revertReason: string } | undefined;
+  try {
+    const client = getPublicClient(chainId);
+    if (isNativeOut) {
+      const { assetChanges, results } = await client.simulateCalls({
+        account: wallet,
+        calls,
+        traceAssetChanges: true,
+      });
+      const failed = (results as readonly SimulatedCallResult[]).find((r) => r.status === "failure");
+      if (failed) {
+        outcome = { revertReason: failed.error?.message ?? "execution reverted" };
+      } else {
+        const native = assetChanges.find((c) => isAddressEqual(c.token.address, ethAddress));
+        // Missing native entry means the balance probes failed; leave
+        // `outcome` unset so this is treated as "simulation unavailable".
+        if (native) outcome = { simulatedOutput: native.value.diff };
+      }
+    } else {
+      const { results } = await client.simulateCalls({ account: wallet, calls });
+      const failed = (results as readonly SimulatedCallResult[]).find((r) => r.status === "failure");
+      if (failed) {
+        outcome = { revertReason: failed.error?.message ?? "execution reverted" };
+      } else {
+        const logs = (results as readonly SimulatedCallResult[]).flatMap((r) => r.logs ?? []);
+        outcome = { simulatedOutput: sumTransfersToWallet(logs, tokenOut) };
+      }
+    }
+  } catch (error) {
+    console.warn("[delora] Pre-flight simulation unavailable; relying on on-chain minOutputAmount.", error);
+    return;
+  }
+
+  if (outcome === undefined) {
+    console.warn(
+      "[delora] Pre-flight simulation returned no native balance delta; relying on on-chain minOutputAmount.",
+    );
+    return;
+  }
+  if ("revertReason" in outcome) {
+    throw new Error(`Swap simulation reverted: ${outcome.revertReason}`);
+  }
+  if (outcome.simulatedOutput < minOutputAmount) {
+    const fmt = (amount: bigint) => `${formatUnits(amount, tokenOut.decimals)} ${tokenOut.symbol}`;
+    throw new Error(
+      `Swap aborted: simulation shows the wallet would receive ${fmt(outcome.simulatedOutput)}, ` +
+        `below the quoted minimum of ${fmt(minOutputAmount)}. No transaction was sent.`,
+    );
+  }
 }
 
 /**
@@ -173,8 +284,11 @@ export async function executeDeloraSwap(
     throw new Error("Swap destination chain must be the same as the source chain");
   }
 
-  // Build and execute swap calls
-  const calls = await buildDeloraCalls(tokensIn, tokenOut);
+  // Build swap calls, then simulate them before asking the wallet to sign:
+  // aborts (throws) if the simulated delivery falls short of the quoted
+  // minimum or the sequence would revert. See `simulateSwapDelivery`.
+  const { calls, minOutputAmount } = await buildDeloraCalls(tokensIn, tokenOut);
+  await simulateSwapDelivery(chainId, wallet, calls, tokenOut, minOutputAmount);
   const [transactionHash, logs] = await sendCalls("swap", chainId, wallet, calls, "atomic-steps", retryHints);
   const flattenedLogs = logs.flat();
 
@@ -202,6 +316,20 @@ export async function executeDeloraSwap(
  * natural extension if native outputs become common.
  */
 export function deriveSwapOutputAmount(logs: Log[], tokenOut: TokenAmount): bigint {
+  const summed = sumTransfersToWallet(logs, tokenOut);
+  if (summed > 0n) return summed;
+
+  console.warn("[delora] No matching ERC20 Transfer found in receipt; falling back to quoted amount.");
+  return tokenOut.amount;
+}
+
+/**
+ * Sum standard ERC20 `Transfer` amounts to the user's wallet for the output
+ * token. Shared by receipt parsing (above) and the pre-flight simulation —
+ * unlike `deriveSwapOutputAmount` there is no quoted-amount fallback, so a
+ * zero here genuinely means "nothing delivered".
+ */
+function sumTransfersToWallet(logs: Log[], tokenOut: TokenAmount): bigint {
   const transfers = parseEventLogs({
     abi: erc20Abi,
     eventName: "Transfer",
@@ -214,10 +342,7 @@ export function deriveSwapOutputAmount(logs: Log[], tokenOut: TokenAmount): bigi
     if (!isAddressEqual(log.args.to, tokenOut.walletAddress)) continue;
     summed += log.args.value;
   }
-  if (summed > 0n) return summed;
-
-  console.warn("[delora] No matching ERC20 Transfer found in receipt; falling back to quoted amount.");
-  return tokenOut.amount;
+  return summed;
 }
 
 /**

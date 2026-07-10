@@ -1,5 +1,5 @@
 import type { Address, Hex, Log, PublicClient } from "viem";
-import { encodeAbiParameters, encodeEventTopics, parseAbi, parseAbiParameters } from "viem";
+import { encodeAbiParameters, encodeEventTopics, ethAddress, parseAbi, parseAbiParameters } from "viem";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ETH_ADDRESS, makeToken, WALLET } from "../../test/test-helpers";
@@ -64,6 +64,26 @@ function quoteParams(fetchMock: Mock, callIndex = 0): URLSearchParams {
   return new URL(url as string).searchParams;
 }
 
+const transferEventAbi = parseAbi(["event Transfer(address indexed from, address indexed to, uint256 value)"]);
+
+/** Minimal ERC20 Transfer log, shaped like simulateCalls/receipt logs. */
+function makeTransferLog(token: Address, to: Address, value: bigint): Log {
+  return {
+    address: token,
+    topics: encodeEventTopics({
+      abi: transferEventAbi,
+      eventName: "Transfer",
+      args: { from: "0x000000000000000000000000000000000000dead" as Address, to },
+    }),
+    data: encodeAbiParameters(parseAbiParameters("uint256"), [value]),
+  } as Log;
+}
+
+/** A successful entry of `simulateCalls().results` carrying the given logs. */
+function makeSimResult(logs: Log[] = []) {
+  return { status: "success" as const, data: "0x" as Hex, gasUsed: 0n, logs };
+}
+
 describe("delora", () => {
   const mockTokenUSDC = makeToken(USDC_TOKEN, 1000000n, 1, { walletAddress: WALLET });
   const mockTokenUSDT = makeToken(USDT_TOKEN, 2000000n, 1, { walletAddress: WALLET, symbol: "USDT" });
@@ -92,7 +112,7 @@ describe("delora", () => {
     });
 
     test("returns one approve+swap pair per input token", async () => {
-      const calls = await buildDeloraCalls([mockTokenUSDC, mockTokenUSDT], mockTokenUSDC);
+      const { calls } = await buildDeloraCalls([mockTokenUSDC, mockTokenUSDT], mockTokenUSDC);
 
       expect(calls).toEqual([
         // Approve USDC
@@ -121,7 +141,7 @@ describe("delora", () => {
     });
 
     test("skips approval for native token (zero address)", async () => {
-      const calls = await buildDeloraCalls([mockTokenNative], mockTokenUSDC);
+      const { calls } = await buildDeloraCalls([mockTokenNative], mockTokenUSDC);
 
       // Only the swap call — natives don't need approval
       expect(calls).toHaveLength(1);
@@ -134,7 +154,7 @@ describe("delora", () => {
 
     test("skips tokens with zero amount entirely", async () => {
       const zeroAmountToken = { ...mockTokenUSDC, amount: 0n };
-      const calls = await buildDeloraCalls([zeroAmountToken, mockTokenUSDT], mockTokenUSDC);
+      const { calls } = await buildDeloraCalls([zeroAmountToken, mockTokenUSDT], mockTokenUSDC);
 
       // Only USDT's approval + swap; no quote is even requested for the
       // zero-amount token.
@@ -145,7 +165,7 @@ describe("delora", () => {
 
     test("merges same-address inputs into a single approve+swap pair", async () => {
       const duplicateToken = { ...mockTokenUSDC };
-      const calls = await buildDeloraCalls([mockTokenUSDC, duplicateToken], mockTokenUSDT);
+      const { calls } = await buildDeloraCalls([mockTokenUSDC, duplicateToken], mockTokenUSDT);
 
       expect(calls).toHaveLength(2);
       expect(calls[0].to).toBe(mockTokenUSDC.token); // one approval
@@ -156,7 +176,7 @@ describe("delora", () => {
       const spender = "0x00000000000000000000000000000000000005e0" as Address;
       stubQuoteFetch({ approvalAddress: spender });
 
-      const calls = await buildDeloraCalls([mockTokenUSDC], mockTokenUSDT);
+      const { calls } = await buildDeloraCalls([mockTokenUSDC], mockTokenUSDT);
 
       expect(calls).toHaveLength(2);
       // The approval call encodes the spender in its calldata.
@@ -168,7 +188,7 @@ describe("delora", () => {
     test("falls back to calldata.to as spender when approvalAddress is missing", async () => {
       stubQuoteFetch({ approvalAddress: undefined });
 
-      const calls = await buildDeloraCalls([mockTokenUSDC], mockTokenUSDT);
+      const { calls } = await buildDeloraCalls([mockTokenUSDC], mockTokenUSDT);
 
       expect(calls).toHaveLength(2);
       expect(calls[0].data).toContain(DELORA_ENTRYPOINT.slice(2).toLowerCase());
@@ -204,13 +224,30 @@ describe("delora", () => {
       );
     });
 
+    test("sums each quote's minOutputAmount across input tokens", async () => {
+      // Two distinct input tokens -> two quotes, each with minOutputAmount
+      // 2985000 (see makeQuoteResponse) -> combined delivery floor.
+      const { minOutputAmount } = await buildDeloraCalls([mockTokenUSDC, mockTokenUSDT], mockTokenUSDC);
+
+      expect(minOutputAmount).toBe(2n * 2985000n);
+    });
+
+    test("treats a quote without minOutputAmount as contributing zero to the floor", async () => {
+      stubQuoteFetch({ minOutputAmount: undefined });
+
+      const { calls, minOutputAmount } = await buildDeloraCalls([mockTokenUSDC], mockTokenUSDT);
+
+      expect(calls).toHaveLength(2); // approval + swap still built
+      expect(minOutputAmount).toBe(0n);
+    });
+
     test("skips approval when sufficient allowance already exists", async () => {
       // Sufficient allowance for USDC, none for USDT
       mockPublicClient.readContract
         .mockResolvedValueOnce(mockTokenUSDC.amount) // USDC allowance check
         .mockResolvedValueOnce(0n); // USDT allowance check
 
-      const calls = await buildDeloraCalls([mockTokenUSDC, mockTokenUSDT], mockTokenUSDC);
+      const { calls } = await buildDeloraCalls([mockTokenUSDC, mockTokenUSDT], mockTokenUSDC);
 
       // USDC: swap only; USDT: approve + swap
       expect(calls).toHaveLength(3);
@@ -489,12 +526,17 @@ describe("delora", () => {
   });
 
   describe("executeDeloraSwap", () => {
-    let mockPublicClient: { readContract: Mock };
+    let mockPublicClient: { readContract: Mock; simulateCalls: Mock };
 
     beforeEach(async () => {
       const { getPublicClient } = await import("./public-client");
       mockPublicClient = {
         readContract: vi.fn().mockResolvedValue(0n), // Default: no allowance
+        // Default: RPC without eth_simulateV1 support — the pre-flight
+        // delivery check fails open, leaving these tests to exercise the
+        // send path undisturbed. The dedicated pre-flight describe below
+        // overrides this with real simulation results.
+        simulateCalls: vi.fn().mockRejectedValue(new Error("the method eth_simulateV1 does not exist")),
       };
       vi.mocked(getPublicClient).mockReturnValue(mockPublicClient as Partial<PublicClient> as PublicClient);
 
@@ -629,6 +671,176 @@ describe("delora", () => {
       // mockTokenUSDT.amount === 2000000n (the quote pre-call)
       expect(result.amount).toBe(2000000n);
       expect(result.transactionHash).toBe("0xtxhash");
+    });
+  });
+
+  describe("pre-flight delivery simulation", () => {
+    let mockPublicClient: { readContract: Mock; simulateCalls: Mock };
+    let mockSendCalls: SendCallsFn;
+
+    beforeEach(async () => {
+      const { getPublicClient } = await import("./public-client");
+      mockPublicClient = {
+        readContract: vi.fn().mockResolvedValue(0n), // No allowance -> approval + swap per input
+        simulateCalls: vi.fn(),
+      };
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient as Partial<PublicClient> as PublicClient);
+
+      mockSendCalls = vi.fn(async () => ["0xtxhash" as Hex, [[]]]) as unknown as SendCallsFn;
+
+      // Quote floor from makeQuoteResponse: minOutputAmount 2985000 per input.
+      stubQuoteFetch();
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.clearAllMocks();
+    });
+
+    test("sends the swap when simulated delivery meets the quoted minimum", async () => {
+      mockPublicClient.simulateCalls.mockResolvedValue({
+        assetChanges: [],
+        results: [
+          makeSimResult(), // approval
+          makeSimResult([makeTransferLog(mockTokenUSDT.token, WALLET, 3000000n)]), // swap
+        ],
+      });
+
+      const result = await executeDeloraSwap([mockTokenUSDC], mockTokenUSDT, mockSendCalls);
+
+      expect(mockPublicClient.simulateCalls).toHaveBeenCalledWith(
+        expect.objectContaining({ account: WALLET, calls: expect.any(Array) }),
+      );
+      expect(mockSendCalls).toHaveBeenCalledTimes(1);
+      expect(result.transactionHash).toBe("0xtxhash");
+    });
+
+    test("sums simulated delivery across multiple input swaps against the combined floor", async () => {
+      // Two input tokens -> two quotes -> combined floor 2 × 2985000. The two
+      // simulated swaps together deliver 5990000, which meets it even though
+      // each individual transfer is below the combined floor.
+      const outputToken = makeToken("0x0000000000000000000000000000000000000007" as Address, 0n, 1, {
+        walletAddress: WALLET,
+        symbol: "DAI",
+      });
+      mockPublicClient.simulateCalls.mockResolvedValue({
+        assetChanges: [],
+        results: [
+          makeSimResult(),
+          makeSimResult([makeTransferLog(outputToken.token, WALLET, 3000000n)]),
+          makeSimResult(),
+          makeSimResult([makeTransferLog(outputToken.token, WALLET, 2990000n)]),
+        ],
+      });
+
+      await executeDeloraSwap([mockTokenUSDC, mockTokenUSDT], outputToken, mockSendCalls);
+
+      expect(mockSendCalls).toHaveBeenCalledTimes(1);
+    });
+
+    test("aborts before the wallet prompt when simulated delivery is below the quoted minimum", async () => {
+      mockPublicClient.simulateCalls.mockResolvedValue({
+        assetChanges: [],
+        results: [makeSimResult(), makeSimResult([makeTransferLog(mockTokenUSDT.token, WALLET, 2000000n)])],
+      });
+
+      await expect(executeDeloraSwap([mockTokenUSDC], mockTokenUSDT, mockSendCalls)).rejects.toThrow(
+        /below the quoted minimum/,
+      );
+      expect(mockSendCalls).not.toHaveBeenCalled();
+    });
+
+    test("does not count simulated transfers to other recipients or of other tokens", async () => {
+      const otherWallet = "0x000000000000000000000000000000000000feed" as Address;
+      mockPublicClient.simulateCalls.mockResolvedValue({
+        assetChanges: [],
+        results: [
+          makeSimResult(),
+          makeSimResult([
+            // Right token, wrong recipient — the fraud case this check exists for.
+            makeTransferLog(mockTokenUSDT.token, otherWallet, 5000000n),
+            // Right recipient, wrong token.
+            makeTransferLog(mockTokenUSDC.token, WALLET, 5000000n),
+          ]),
+        ],
+      });
+
+      await expect(executeDeloraSwap([mockTokenUSDC], mockTokenUSDT, mockSendCalls)).rejects.toThrow(
+        /below the quoted minimum/,
+      );
+      expect(mockSendCalls).not.toHaveBeenCalled();
+    });
+
+    test("aborts when any simulated call reverts", async () => {
+      mockPublicClient.simulateCalls.mockResolvedValue({
+        assetChanges: [],
+        results: [
+          makeSimResult(),
+          { status: "failure" as const, error: new Error("SlippageExceeded"), data: "0x" as Hex, gasUsed: 0n },
+        ],
+      });
+
+      await expect(executeDeloraSwap([mockTokenUSDC], mockTokenUSDT, mockSendCalls)).rejects.toThrow(
+        "Swap simulation reverted: SlippageExceeded",
+      );
+      expect(mockSendCalls).not.toHaveBeenCalled();
+    });
+
+    test("fails open when the RPC lacks eth_simulateV1 support", async () => {
+      mockPublicClient.simulateCalls.mockRejectedValue(new Error("the method eth_simulateV1 does not exist"));
+
+      const result = await executeDeloraSwap([mockTokenUSDC], mockTokenUSDT, mockSendCalls);
+
+      expect(mockSendCalls).toHaveBeenCalledTimes(1);
+      expect(result.transactionHash).toBe("0xtxhash");
+    });
+
+    test("verifies native-token output via traceAssetChanges instead of Transfer logs", async () => {
+      mockPublicClient.simulateCalls.mockResolvedValue({
+        // viem reports the native delta under its ETH placeholder address.
+        assetChanges: [
+          {
+            token: { address: ethAddress, decimals: 18, symbol: "ETH" },
+            value: { pre: 0n, post: 3000000n, diff: 3000000n },
+          },
+        ],
+        results: [makeSimResult(), makeSimResult()],
+      });
+
+      await executeDeloraSwap([mockTokenUSDC], mockTokenNative, mockSendCalls);
+
+      expect(mockPublicClient.simulateCalls).toHaveBeenCalledWith(expect.objectContaining({ traceAssetChanges: true }));
+      expect(mockSendCalls).toHaveBeenCalledTimes(1);
+    });
+
+    test("aborts a native-output swap when the simulated native delta is below the minimum", async () => {
+      mockPublicClient.simulateCalls.mockResolvedValue({
+        assetChanges: [
+          {
+            token: { address: ethAddress, decimals: 18, symbol: "ETH" },
+            value: { pre: 0n, post: 1000000n, diff: 1000000n },
+          },
+        ],
+        results: [makeSimResult(), makeSimResult()],
+      });
+
+      await expect(executeDeloraSwap([mockTokenUSDC], mockTokenNative, mockSendCalls)).rejects.toThrow(
+        /below the quoted minimum/,
+      );
+      expect(mockSendCalls).not.toHaveBeenCalled();
+    });
+
+    test("fails open on native output when the simulation returns no native balance delta", async () => {
+      // Balance probes failed inside simulateCalls -> no ETH entry. Delivery
+      // can't be judged, so proceed and rely on the on-chain floor.
+      mockPublicClient.simulateCalls.mockResolvedValue({
+        assetChanges: [],
+        results: [makeSimResult(), makeSimResult()],
+      });
+
+      await executeDeloraSwap([mockTokenUSDC], mockTokenNative, mockSendCalls);
+
+      expect(mockSendCalls).toHaveBeenCalledTimes(1);
     });
   });
 });
