@@ -5,17 +5,22 @@ import { chains, transports } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
 import { deloraPriceKey, fetchDeloraPrices } from "./api/delora";
 import { getBridgeFee } from "./cctp";
-import { getSwapQuote } from "./delora";
+import { type DeloraSwapLeg, getSwapQuoteWithLegs } from "./delora";
 import { getNativeBalance } from "./gas";
 import {
   attachGasEstimates,
+  buildBridgeSimOps,
   buildGasContext,
+  buildSwapLegSimOps,
+  emptyPlanArtifacts,
   estimateChainGasCosts,
   estimateDestinationChainOperations,
-  estimateOperationsForChainWallet,
   formatGasCostNative,
   type GasContext,
+  measureOpsGas,
   type OperationType,
+  type PlanArtifacts,
+  type SimOp,
 } from "./gas-estimation";
 import { getLiFiQuoteForTargetOutput } from "./lifi";
 import { getPublicClient } from "./public-client";
@@ -32,6 +37,13 @@ const SUPPORTED_CHAINS = Object.keys(chains).map(Number);
  */
 type GasGap = { chainId: number; walletAddress: Address; deficitWei: bigint };
 type GasGaps = Map<string, GasGap>;
+
+/**
+ * Native balances observed while drafting, keyed by {@link gapKey}. Reused by
+ * {@link reconcileGasGaps} so the post-drafting reconciliation doesn't refetch
+ * what the capping checks already paid for.
+ */
+type NativeBalances = Map<string, bigint>;
 
 function gapKey(chainId: number, walletAddress: Address): string {
   return `${chainId}:${getAddress(walletAddress)}`;
@@ -51,6 +63,76 @@ function recordGasGap(gaps: GasGaps, chainId: number, walletAddress: Address, de
     return;
   }
   gaps.set(key, { chainId, walletAddress: normalized, deficitWei });
+}
+
+/**
+ * Fetches (and caches) a wallet's native balance on a chain.
+ */
+async function getCachedNativeBalance(balances: NativeBalances, chainId: number, wallet: Address): Promise<bigint> {
+  const key = gapKey(chainId, wallet);
+  const cached = balances.get(key);
+  if (cached !== undefined) return cached;
+  const chain = chains[chainId as keyof typeof chains];
+  const balance = await getNativeBalance(chain, wallet, transports?.[chainId as keyof typeof transports]);
+  balances.set(key, balance);
+  return balance;
+}
+
+/**
+ * Computes the final gas gaps from the drafted plan's *measured* per-step
+ * estimates, superseding the budget-based deficits sketched while drafting.
+ *
+ * For each (chain, executing wallet): required = Σ `estimatedGas.gasCostWei`
+ * over the wallet's steps + the native it spends from its pre-existing balance
+ * (native inputs without provenance — provenance-tagged native arrived from an
+ * earlier in-plan step and doesn't draw the balance down). A wallet whose
+ * balance covers that is not a gap, even if the budget math said otherwise;
+ * a wallet whose measured cost exceeds the budget gets the bigger top-up it
+ * actually needs. Must run after {@link attachGasEstimates} and before
+ * {@link createGasTopUpSteps}.
+ */
+async function reconcileGasGaps(
+  steps: TransactionStep[],
+  balances: NativeBalances,
+  log: (...args: unknown[]) => void,
+): Promise<GasGaps> {
+  const gaps: GasGaps = new Map();
+  const groups = new Map<string, { chainId: number; wallet: Address; gasWei: bigint; nativeSpendWei: bigint }>();
+
+  for (const step of steps) {
+    if (step.type === "attestation" || step.type === "gas-topup" || step.type === "gas-topup-wait") continue;
+    const wallet = step.inputTokens[0]?.walletAddress;
+    if (!wallet) continue;
+    const key = gapKey(step.chainId, wallet);
+    let group = groups.get(key);
+    if (!group) {
+      group = { chainId: step.chainId, wallet: getAddress(wallet) as Address, gasWei: 0n, nativeSpendWei: 0n };
+      groups.set(key, group);
+    }
+    group.gasWei += step.estimatedGas?.gasCostWei ?? 0n;
+    for (const input of step.inputTokens) {
+      if (
+        isAddressEqual(input.token, zeroAddress) &&
+        input.provenance === undefined &&
+        isAddressEqual(input.walletAddress, wallet)
+      ) {
+        group.nativeSpendWei += input.amount;
+      }
+    }
+  }
+
+  for (const group of groups.values()) {
+    const balance = await getCachedNativeBalance(balances, group.chainId, group.wallet);
+    const required = group.gasWei + group.nativeSpendWei;
+    if (balance < required) {
+      recordGasGap(gaps, group.chainId, group.wallet, required - balance);
+      log(
+        `🔍 [DEBUG] Reconciled gas gap on chain ${group.chainId} for ${group.wallet}: balance=${balance.toString()}, gas=${group.gasWei.toString()}, nativeSpend=${group.nativeSpendWei.toString()}, deficit=${(required - balance).toString()}`,
+      );
+    }
+  }
+
+  return gaps;
 }
 
 /**
@@ -217,7 +299,7 @@ async function resolveIntermediateWallet(
   destinationToken: DestinationToken,
   connectedWallets: readonly Address[],
   gasCtx: GasContext,
-  gaps: GasGaps,
+  balances: NativeBalances,
   isRailgun = false,
 ): Promise<Address> {
   const destinationWallet = destinationToken.walletAddress;
@@ -229,17 +311,10 @@ async function resolveIntermediateWallet(
   const chain = chains[destChainId as keyof typeof chains];
 
   if (isDestinationConnected) {
-    const destOps = predictIntermediateDestinationOps(sourceTokens, destinationToken, destinationWallet, true);
-    const destGas = await estimateChainGasCosts(destChainId, destOps, gasCtx.maxFeePerGas[destChainId]);
-    const balance = await getNativeBalance(
-      chain,
-      destinationWallet,
-      transports?.[destChainId as keyof typeof transports],
-    );
-    if (balance < destGas.totalGasCost) {
-      // Record the deficit so a gas-topup step can refuel the destination wallet.
-      recordGasGap(gaps, destChainId, destinationWallet, destGas.totalGasCost - balance);
-    }
+    // Even if the destination wallet can't cover its own dest-chain gas it is
+    // still the intermediate; `reconcileGasGaps` sizes the top-up afterwards
+    // from the drafted steps' measured estimates.
+    await getCachedNativeBalance(balances, destChainId, destinationWallet);
     return destinationWallet;
   }
 
@@ -247,24 +322,22 @@ async function resolveIntermediateWallet(
 
   // Find first wallet whose destination-chain balance covers its predicted ops
   // (each candidate may need a different op shape — e.g. one holds extra
-  // dest-chain source tokens that increase the final-swap batch).
+  // dest-chain source tokens that increase the final-swap batch). The shape
+  // check runs on conservative budgets — the steps don't exist yet — so it
+  // biases toward candidates that need no top-up at all.
   for (const wallet of searchOrder) {
     const destOps = predictIntermediateDestinationOps(sourceTokens, destinationToken, wallet, false, isRailgun);
     const destGas = await estimateChainGasCosts(destChainId, destOps, gasCtx.maxFeePerGas[destChainId]);
-    const balance = await getNativeBalance(chain, wallet, transports?.[destChainId as keyof typeof transports]);
+    const balance = await getCachedNativeBalance(balances, destChainId, wallet);
     if (balance >= destGas.totalGasCost) {
       return wallet;
     }
   }
 
-  // No connected wallet has enough — pick the first connected one and record a gap.
+  // No connected wallet has enough — pick the first one; reconcileGasGaps
+  // records its measured deficit once the plan is drafted.
   if (searchOrder.length > 0) {
-    const wallet = searchOrder[0];
-    const destOps = predictIntermediateDestinationOps(sourceTokens, destinationToken, wallet, false, isRailgun);
-    const destGas = await estimateChainGasCosts(destChainId, destOps, gasCtx.maxFeePerGas[destChainId]);
-    const balance = await getNativeBalance(chain, wallet, transports?.[destChainId as keyof typeof transports]);
-    recordGasGap(gaps, destChainId, wallet, destGas.totalGasCost - balance);
-    return wallet;
+    return searchOrder[0];
   }
 
   const chainName = chain?.name ?? `chain ${destChainId}`;
@@ -366,36 +439,38 @@ function validateInputs(
 }
 
 /**
- * Creates swap steps from a list of tokens to a target token
- *
- * Delora quotes are single-input, so tokens are grouped by on-chain token
- * address and each group becomes one swap step (one quote request, one
- * approval+swap pair at execution). A group can contain multiple
- * `TokenAmount`s for the same address (different `provenance`, e.g. the
- * user's pre-existing USDC plus a CCTP claim output) — those legitimately
- * share a step. A token that Delora can't route to `targetToken` is skipped
- * (and logged) so the rest of the wallet can still be consolidated.
- *
- * @param tokensToSwap - Tokens to swap to target (must be different tokens)
- * @param targetToken - Target token specification (without amount)
- * @param steps - Existing steps array to append to
- * @param log - Logging function for debug output
- * @returns Array of output tokens from the swaps (excludes any token that is
- *   unroutable to `targetToken` — those are skipped, not fatal)
+ * One quoted same-address swap group awaiting step creation: the inputs it
+ * consumes, the summed quote output (no provenance yet), and the retained
+ * Delora legs for gas simulation.
  */
-async function createSwapSteps(
+interface QuotedSwapGroup {
+  group: TokenAmount[];
+  output: TokenAmount;
+  legs: DeloraSwapLeg[];
+}
+
+/**
+ * Quotes a list of tokens toward `targetToken`, one Delora request per
+ * on-chain token address (Delora quotes are single-input). A group can
+ * contain multiple `TokenAmount`s for the same address (different
+ * `provenance`, e.g. the user's pre-existing USDC plus a CCTP claim output) —
+ * those legitimately share a quote. A token that Delora can't route to
+ * `targetToken` is skipped (and logged) so the rest of the wallet can still
+ * be consolidated; any other failure propagates so the plan fails loudly.
+ *
+ * Quoting is separated from step creation so planning can MEASURE the gas of
+ * the quoted calls (via `eth_simulateV1`) and cap/drop native inputs before
+ * committing the steps.
+ */
+async function fetchSwapQuoteGroups(
   tokensToSwap: TokenAmount[],
   targetToken: Omit<TokenAmount, "amount">,
-  steps: TransactionStep[],
   log: (...args: unknown[]) => void,
-): Promise<TokenAmount[]> {
-  const outputTokens: TokenAmount[] = [];
+): Promise<QuotedSwapGroup[]> {
+  const quoted: QuotedSwapGroup[] = [];
+  if (tokensToSwap.length === 0) return quoted;
 
-  if (tokensToSwap.length === 0) {
-    return outputTokens;
-  }
-
-  // Group same-address entries (EIP-55 normalised) into a single step.
+  // Group same-address entries (EIP-55 normalised) into a single quote/step.
   const groups = new Map<Address, TokenAmount[]>();
   for (const token of tokensToSwap) {
     const key = getAddress(token.token);
@@ -409,35 +484,10 @@ async function createSwapSteps(
 
   for (const group of groups.values()) {
     try {
-      const quote = await getSwapQuote(group, targetToken);
-      const stepId = `step-${steps.length + 1}`;
-
-      const outputTokenWithProvenance = {
-        ...quote,
-        provenance: stepId, // Mark this token as coming from this swap step
-      };
-
-      steps.push({
-        id: stepId,
-        type: "swap",
-        status: "pending",
-        chainId: targetToken.chainId,
-        inputTokens: group as [TokenAmount, ...TokenAmount[]],
-        outputToken: outputTokenWithProvenance,
-        quotedAt: Date.now(),
-      });
-
-      outputTokens.push(outputTokenWithProvenance);
-
-      log(`🔍 [DEBUG] Added swap step ${stepId} for ${group[0].symbol ?? group[0].token} -> ${targetToken.symbol}`);
+      const { output, legs } = await getSwapQuoteWithLegs(group, targetToken);
+      quoted.push({ group, output, legs });
     } catch (error) {
       const reason = error instanceof Error ? error.message : "quote failed";
-
-      // A token that Delora explicitly can't route is skipped so the rest of
-      // the wallet still consolidates. Any other failure (network errors,
-      // outages, rate limiting) is propagated so the plan fails loudly and
-      // stays retryable rather than silently dropping funds on a transient
-      // hiccup.
       if (isUnroutableTokenError(error)) {
         log(
           `⚠️ [DEBUG] Skipping unroutable token ${group[0].symbol ?? group[0].token} -> ${targetToken.symbol}: ${reason}`,
@@ -448,7 +498,125 @@ async function createSwapSteps(
     }
   }
 
+  return quoted;
+}
+
+/**
+ * Turns quoted swap groups into swap steps, retaining each step's Delora legs
+ * in {@link PlanArtifacts} so `attachGasEstimates` can batch-simulate the
+ * approval + verbatim quote calldata.
+ *
+ * @returns Output tokens (provenance-tagged) of the created steps
+ */
+function createSwapStepsFromQuotes(
+  quoted: QuotedSwapGroup[],
+  steps: TransactionStep[],
+  artifacts: PlanArtifacts,
+  log: (...args: unknown[]) => void,
+): TokenAmount[] {
+  const outputTokens: TokenAmount[] = [];
+
+  for (const { group, output, legs } of quoted) {
+    const stepId = `step-${steps.length + 1}`;
+
+    const outputTokenWithProvenance = {
+      ...output,
+      provenance: stepId, // Mark this token as coming from this swap step
+    };
+
+    steps.push({
+      id: stepId,
+      type: "swap",
+      status: "pending",
+      chainId: output.chainId,
+      inputTokens: group as [TokenAmount, ...TokenAmount[]],
+      outputToken: outputTokenWithProvenance,
+      quotedAt: Date.now(),
+    });
+    artifacts.swapLegs.set(stepId, legs);
+
+    outputTokens.push(outputTokenWithProvenance);
+
+    log(`🔍 [DEBUG] Added swap step ${stepId} for ${group[0].symbol ?? group[0].token} -> ${output.symbol}`);
+  }
+
   return outputTokens;
+}
+
+/**
+ * Applies the measured-gas native capping policy to a wallet's quoted swap
+ * groups, mutating `quoted` in place:
+ * - balance covers gas: cap the native input to `balance − measuredGas` when
+ *   the selected amount would eat into the reserve, re-quoting that single
+ *   leg once (gas units for the same route are amount-insensitive, so the
+ *   measured cost is NOT re-simulated — the unit buffer absorbs the delta).
+ * - balance can't cover gas: refuse when the native is worthless dust and the
+ *   wallet's only value ({@link throwNativeAmountTooSmall}); drop the dust
+ *   when other value is present; keep the user's full amount otherwise —
+ *   `reconcileGasGaps` sizes the top-up from the drafted steps.
+ *
+ * @returns The native `TokenAmount` the plan should consume, or null when the
+ *   wallet has no native input among the quoted groups (or it was dropped)
+ */
+async function capNativeQuoteForGas(
+  quoted: QuotedSwapGroup[],
+  targetToken: Omit<TokenAmount, "amount">,
+  measuredGasWei: bigint,
+  nativeBalance: bigint,
+  hasOtherValue: boolean,
+  log: (...args: unknown[]) => void,
+): Promise<TokenAmount | null> {
+  const nativeIdx = quoted.findIndex((q) => q.group.some((t) => isAddressEqual(t.token, zeroAddress)));
+  if (nativeIdx < 0) return null;
+
+  const entry = quoted[nativeIdx];
+  const nativeToken = entry.group.find((t) => isAddressEqual(t.token, zeroAddress)) as TokenAmount;
+  const chainId = nativeToken.chainId;
+  const walletAddress = nativeToken.walletAddress;
+  const maxAffordable = nativeBalance > measuredGasWei ? nativeBalance - measuredGasWei : 0n;
+
+  if (maxAffordable <= 0n) {
+    // Wallet can't even cover gas.
+    if (nativeToken.amount <= dustTopUpThreshold(nativeToken.amount, measuredGasWei, nativeBalance)) {
+      if (!hasOtherValue) {
+        // Dust native is the only thing on this wallet — refuse instead of
+        // topping up gas to consolidate something worth less than the fees.
+        throwNativeAmountTooSmall(chainId, walletAddress, nativeToken.amount, measuredGasWei);
+      }
+      // Other value is present. Drop the dust native from the swap;
+      // reconcileGasGaps sizes the top-up for what remains.
+      log(
+        `🔍 [DEBUG] Dropping dust native on chain ${chainId} for ${walletAddress}: amount=${nativeToken.amount.toString()} <= gasCost=${measuredGasWei.toString()}`,
+      );
+      quoted.splice(nativeIdx, 1);
+      return null;
+    }
+    // The native amount exceeds the gas to move it — keep the user's selected
+    // amount; reconcileGasGaps records the deficit (amount + gas − balance).
+    return nativeToken;
+  }
+
+  if (nativeToken.amount <= maxAffordable) return nativeToken;
+
+  // Gas eats into the selected amount: cap and re-quote this single leg.
+  log(
+    `🔍 [DEBUG] Adjusting native token on chain ${chainId}: selected=${nativeToken.amount.toString()}, maxAffordable=${maxAffordable.toString()}, gasCost=${measuredGasWei.toString()}`,
+  );
+  const cappedToken = { ...nativeToken, amount: maxAffordable };
+  try {
+    const { output, legs } = await getSwapQuoteWithLegs([cappedToken], targetToken);
+    quoted[nativeIdx] = { group: [cappedToken], output, legs };
+    return cappedToken;
+  } catch (error) {
+    if (isUnroutableTokenError(error)) {
+      // The capped amount no longer routes (e.g. below Delora's minimum) —
+      // treat like dust and drop it.
+      log(`⚠️ [DEBUG] Capped native amount unroutable on chain ${chainId}; dropping native from the swap`);
+      quoted.splice(nativeIdx, 1);
+      return null;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -488,7 +656,9 @@ async function createSwapsAndTransfers(
   tokens: TokenAmount[],
   targetToken: DestinationToken,
   steps: TransactionStep[],
+  artifacts: PlanArtifacts,
   log: (...args: unknown[]) => void,
+  quotedSwaps?: QuotedSwapGroup[],
 ): Promise<TokenAmount[]> {
   const outputTokens: TokenAmount[] = [];
 
@@ -496,13 +666,14 @@ async function createSwapsAndTransfers(
   const tokensToSwap = tokens.filter((token) => !isAddressEqual(token.token, targetToken.token));
   const alreadyTargetToken = tokens.filter((token) => isAddressEqual(token.token, targetToken.token));
 
-  // Swap tokens to target token
-  if (tokensToSwap.length > 0) {
+  // Swap tokens to target token (quotes may have been pre-fetched by the
+  // caller for gas measurement/capping — reuse them instead of re-quoting)
+  const quoted = quotedSwaps ?? (await fetchSwapQuoteGroups(tokensToSwap, targetToken, log));
+  if (quoted.length > 0) {
     log(
-      `🔍 [DEBUG] Creating swap steps for ${tokensToSwap.length} tokens to ${targetToken.symbol} at wallet ${targetToken.walletAddress}`,
+      `🔍 [DEBUG] Creating swap steps for ${quoted.length} token groups to ${targetToken.symbol} at wallet ${targetToken.walletAddress}`,
     );
-    const swapOutputs = await createSwapSteps(tokensToSwap, targetToken, steps, log);
-    outputTokens.push(...swapOutputs);
+    outputTokens.push(...createSwapStepsFromQuotes(quoted, steps, artifacts, log));
   }
 
   // Handle tokens already at target token
@@ -559,7 +730,8 @@ async function processChainWalletSwaps(
   sourceTokens: TokenAmount[],
   destinationToken: DestinationToken,
   gasCtx: GasContext,
-  gaps: GasGaps,
+  balances: NativeBalances,
+  artifacts: PlanArtifacts,
   log: (...args: unknown[]) => void,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
   const steps: TransactionStep[] = [];
@@ -618,99 +790,8 @@ async function processChainWalletSwaps(
       tokensToSwapToUSDC.push(token);
     }
 
-    // Adjust native token amount for gas on source (non-destination) chains.
-    // We need to run this whenever the wallet has *anything* to do on this chain
-    // (swapping or bridging), since CCTP-burn alone still consumes gas.
-    if (!isDestChain && (tokensToSwapToUSDC.length > 0 || usdcAlreadyHere.length > 0)) {
-      const opsInputTokens = [...tokensToSwapToUSDC, ...usdcAlreadyHere];
-      const ops = estimateOperationsForChainWallet(
-        opsInputTokens.map((t) => ({
-          token: t.token,
-          symbol: t.symbol,
-          decimals: t.decimals,
-          amount: t.amount,
-        })),
-        chainId,
-        destinationToken.chainId,
-        chainUSDC,
-      );
-      const gasCost = await estimateChainGasCosts(chainId, ops, gasCtx.maxFeePerGas[chainId]);
-
-      const chain = chains[chainId as keyof typeof chains];
-      const nativeBalance = await getNativeBalance(
-        chain,
-        walletAddress,
-        transports?.[chainId as keyof typeof transports],
-      );
-      const nativeIdx = tokensToSwapToUSDC.findIndex((t) => isAddressEqual(t.token, zeroAddress));
-
-      if (nativeIdx >= 0) {
-        const nativeToken = tokensToSwapToUSDC[nativeIdx];
-        const maxAffordable = nativeBalance > gasCost.totalGasCost ? nativeBalance - gasCost.totalGasCost : 0n;
-
-        if (maxAffordable <= 0n) {
-          // Wallet can't even cover gas.
-          if (nativeToken.amount <= dustTopUpThreshold(nativeToken.amount, gasCost.totalGasCost, nativeBalance)) {
-            // Worth no more than the gas + assumed LI.FI overhead to move it.
-            const otherValue = tokensToSwapToUSDC.length > 1 || usdcAlreadyHere.length > 0;
-            if (!otherValue) {
-              // Dust native is the only thing on this wallet — refuse instead of
-              // topping up gas to consolidate something worth less than the fees.
-              throwNativeAmountTooSmall(chainId, walletAddress, nativeToken.amount, gasCost.totalGasCost);
-            }
-            // Other value is present (USDC/ERC20). Drop the dust native from the
-            // swap and re-estimate gas for what remains, topping up only for that.
-            log(
-              `🔍 [DEBUG] Dropping dust native on chain ${chainId} for ${walletAddress}: amount=${nativeToken.amount.toString()} <= gasCost=${gasCost.totalGasCost.toString()}`,
-            );
-            tokensToSwapToUSDC.splice(nativeIdx, 1);
-            const remainingInputs = [...tokensToSwapToUSDC, ...usdcAlreadyHere];
-            const remainingOps = estimateOperationsForChainWallet(
-              remainingInputs.map((t) => ({
-                token: t.token,
-                symbol: t.symbol,
-                decimals: t.decimals,
-                amount: t.amount,
-              })),
-              chainId,
-              destinationToken.chainId,
-              chainUSDC,
-            );
-            const remainingGas = await estimateChainGasCosts(chainId, remainingOps, gasCtx.maxFeePerGas[chainId]);
-            if (nativeBalance < remainingGas.totalGasCost) {
-              recordGasGap(gaps, chainId, walletAddress, remainingGas.totalGasCost - nativeBalance);
-              log(
-                `🔍 [DEBUG] Recording gas gap on chain ${chainId} for ${walletAddress}: balance=${nativeBalance.toString()}, gasCost=${remainingGas.totalGasCost.toString()}, deficit=${(remainingGas.totalGasCost - nativeBalance).toString()}`,
-              );
-            }
-          } else {
-            // Native amount exceeds the gas to move it — a top-up is worthwhile.
-            // Record a gap so the user's selected native swap amount is preserved
-            // AND there's enough native left for the swap+bridge gas.
-            const required = nativeToken.amount + gasCost.totalGasCost;
-            recordGasGap(gaps, chainId, walletAddress, required - nativeBalance);
-            log(
-              `🔍 [DEBUG] Recording gas gap on chain ${chainId} for ${walletAddress}: balance=${nativeBalance.toString()}, required=${required.toString()}, deficit=${(required - nativeBalance).toString()}`,
-            );
-          }
-        } else if (nativeToken.amount > maxAffordable) {
-          log(
-            `🔍 [DEBUG] Adjusting native token on chain ${chainId}: selected=${nativeToken.amount.toString()}, maxAffordable=${maxAffordable.toString()}, gasCost=${gasCost.totalGasCost.toString()}`,
-          );
-          tokensToSwapToUSDC[nativeIdx] = { ...nativeToken, amount: maxAffordable };
-        }
-      } else if (nativeBalance < gasCost.totalGasCost) {
-        // No native token being swapped (e.g. USDC-only or ERC20-only wallet)
-        // — record gas deficit so a top-up step can refuel this wallet.
-        recordGasGap(gaps, chainId, walletAddress, gasCost.totalGasCost - nativeBalance);
-        log(
-          `🔍 [DEBUG] Recording gas gap on chain ${chainId} for ${walletAddress}: balance=${nativeBalance.toString()}, gasCost=${gasCost.totalGasCost.toString()}, deficit=${(gasCost.totalGasCost - nativeBalance).toString()}`,
-        );
-      }
-    }
-
-    // Create swap steps to USDC
-    if (tokensToSwapToUSDC.length > 0) {
+    // Quote, measure, cap, then create the wallet's swap steps to USDC.
+    if (!isDestChain && tokensToSwapToUSDC.length > 0) {
       const chainUSDCToken: Omit<TokenAmount, "amount"> = {
         token: chainUSDC,
         chainId,
@@ -719,7 +800,30 @@ async function processChainWalletSwaps(
         decimals: 6,
       };
 
-      const swapOutputs = await createSwapSteps(tokensToSwapToUSDC, chainUSDCToken, steps, log);
+      const quoted = await fetchSwapQuoteGroups(tokensToSwapToUSDC, chainUSDCToken, log);
+
+      // Native capping runs on MEASURED gas: simulate the quoted swap calls
+      // plus the upcoming CCTP approve+burn (its amount is the quoted USDC
+      // total) in one eth_simulateV1 batch instead of trusting static budgets.
+      const hasNative = quoted.some((q) => q.group.some((t) => isAddressEqual(t.token, zeroAddress)));
+      if (hasNative) {
+        const simOps: SimOp[] = quoted.flatMap((q) => buildSwapLegSimOps(q.legs));
+        const totalUsdc =
+          quoted.reduce((sum, q) => sum + q.output.amount, 0n) + usdcAlreadyHere.reduce((sum, t) => sum + t.amount, 0n);
+        if (totalUsdc > 0n) {
+          simOps.push(
+            ...buildBridgeSimOps(chainId, destinationToken.chainId, destinationToken.walletAddress, totalUsdc),
+          );
+        }
+        const measuredGasWei = await measureOpsGas(chainId, walletAddress, simOps, gasCtx.maxFeePerGas[chainId]);
+        const nativeBalance = await getCachedNativeBalance(balances, chainId, walletAddress);
+        const hasOtherValue = quoted.length > 1 || usdcAlreadyHere.length > 0;
+        await capNativeQuoteForGas(quoted, chainUSDCToken, measuredGasWei, nativeBalance, hasOtherValue, log);
+      }
+      // Wallets that can't cover their gas (native or not) are handled by
+      // reconcileGasGaps after estimates are attached.
+
+      const swapOutputs = createSwapStepsFromQuotes(quoted, steps, artifacts, log);
       swappedTokens.push(...swapOutputs);
     }
   }
@@ -927,7 +1031,8 @@ async function createFinalSwaps(
   hasBridges: boolean,
   needsFinalTransfer: boolean,
   needsShield: boolean,
-  gaps: GasGaps,
+  balances: NativeBalances,
+  artifacts: PlanArtifacts,
   log: (...args: unknown[]) => void,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
   log(
@@ -966,113 +1071,71 @@ async function createFinalSwaps(
       })),
     );
 
-    // Adjust native token on destination chain for gas. When the wallet holds
-    // native (zeroAddress) being swapped on the dest chain we cap/drop it so gas
-    // is left over (skipped when the destination token IS native — the user
-    // wants to KEEP it). Otherwise (USDC-only / ERC20-only wallet) we just check
-    // the wallet can afford its dest-chain gas and record a gap if not.
+    // Quote the wallet's final swaps at full amounts, then MEASURE the whole
+    // dest-chain sequence (claim + swaps + transfer/shield) via eth_simulateV1
+    // so native capping runs on real numbers (skipped when the destination
+    // token IS native — the user wants to KEEP it). Wallets that can't cover
+    // their gas are handled by reconcileGasGaps after estimates are attached.
     const tokensToProcess = [...consolidatedTokens];
     const destIsNative = isAddressEqual(destinationToken.token, zeroAddress);
-    const nativeIdx = destIsNative ? -1 : tokensToProcess.findIndex((t) => isAddressEqual(t.token, zeroAddress));
-
     const destChainId = destinationToken.chainId;
-    const tokensNeedingSwap = tokensToProcess.filter((t) => !isAddressEqual(t.token, destinationToken.token));
-    const nonNativeSwapCount = tokensNeedingSwap.filter((t) => !isAddressEqual(t.token, zeroAddress)).length;
-    const hasNativeInSwap = tokensNeedingSwap.some((t) => isAddressEqual(t.token, zeroAddress));
+    const isIntermediateWallet = isAddressEqual(walletAddress, destinationToken.walletAddress);
 
     // Only the wallet holding the consolidated token (the intermediate wallet,
     // i.e. destinationToken.walletAddress here) executes the final shield.
-    const shieldsHere = needsShield && isAddressEqual(walletAddress, destinationToken.walletAddress);
+    const shieldsHere = needsShield && isIntermediateWallet;
 
-    const destOps = estimateDestinationChainOperations(
-      hasBridges,
-      nonNativeSwapCount,
-      hasNativeInSwap,
-      needsFinalTransfer,
-      destIsNative,
-      shieldsHere,
-    );
+    const tokensToSwap = tokensToProcess.filter((t) => !isAddressEqual(t.token, destinationToken.token));
+    const quoted = await fetchSwapQuoteGroups(tokensToSwap, destinationToken, log);
 
-    const gasCost = await estimateChainGasCosts(destChainId, destOps, gasCtx.maxFeePerGas[destChainId]);
-    const chain = chains[destChainId as keyof typeof chains];
-    const nativeBalance = await getNativeBalance(
-      chain,
-      walletAddress,
-      transports?.[destChainId as keyof typeof transports],
-    );
-
-    if (nativeIdx >= 0) {
-      const nativeToken = tokensToProcess[nativeIdx];
-      const maxAffordable = nativeBalance > gasCost.totalGasCost ? nativeBalance - gasCost.totalGasCost : 0n;
-
-      if (maxAffordable <= 0n) {
-        // Wallet can't even cover gas.
-        if (nativeToken.amount <= dustTopUpThreshold(nativeToken.amount, gasCost.totalGasCost, nativeBalance)) {
-          // Worth no more than the gas + assumed LI.FI overhead to move it.
-          const otherValue = tokensToProcess.length > 1;
-          if (!otherValue) {
-            // Dust native is the only thing on this wallet — refuse instead of
-            // topping up gas to consolidate something worth less than the fees.
-            throwNativeAmountTooSmall(destChainId, walletAddress, nativeToken.amount, gasCost.totalGasCost);
-          }
-          // Other value is present. Drop the dust native and re-estimate gas for
-          // the remaining final operations, topping up only for those.
-          log(
-            `🔍 [DEBUG] Dropping dust native on dest chain ${destChainId} for ${walletAddress}: amount=${nativeToken.amount.toString()} <= gasCost=${gasCost.totalGasCost.toString()}`,
-          );
-          tokensToProcess.splice(nativeIdx, 1);
-          const remainingNeedingSwap = tokensToProcess.filter((t) => !isAddressEqual(t.token, destinationToken.token));
-          const remainingNonNativeSwapCount = remainingNeedingSwap.filter(
-            (t) => !isAddressEqual(t.token, zeroAddress),
-          ).length;
-          const remainingDestOps = estimateDestinationChainOperations(
-            hasBridges,
-            remainingNonNativeSwapCount,
-            false,
-            needsFinalTransfer,
-            destIsNative,
-            shieldsHere,
-          );
-          const remainingGas = await estimateChainGasCosts(
-            destChainId,
-            remainingDestOps,
-            gasCtx.maxFeePerGas[destChainId],
-          );
-          if (nativeBalance < remainingGas.totalGasCost) {
-            recordGasGap(gaps, destChainId, walletAddress, remainingGas.totalGasCost - nativeBalance);
-            log(
-              `🔍 [DEBUG] Recording gas gap on dest chain ${destChainId} for ${walletAddress}: balance=${nativeBalance.toString()}, gasCost=${remainingGas.totalGasCost.toString()}, deficit=${(remainingGas.totalGasCost - nativeBalance).toString()}`,
-            );
-          }
-        } else {
-          // Native amount exceeds the gas to move it — a top-up is worthwhile.
-          // Record a gap so the user keeps their native swap input AND has gas
-          // for the final operations.
-          const required = nativeToken.amount + gasCost.totalGasCost;
-          recordGasGap(gaps, destChainId, walletAddress, required - nativeBalance);
-          log(
-            `🔍 [DEBUG] Recording gas gap on dest chain ${destChainId} for ${walletAddress}: balance=${nativeBalance.toString()}, required=${required.toString()}, deficit=${(required - nativeBalance).toString()}`,
-          );
-        }
-      } else if (nativeToken.amount > maxAffordable) {
-        log(
-          `🔍 [DEBUG] Adjusting native token on dest chain ${destChainId}: selected=${nativeToken.amount.toString()}, maxAffordable=${maxAffordable.toString()}, gasCost=${gasCost.totalGasCost.toString()}`,
-        );
-        tokensToProcess[nativeIdx] = { ...nativeToken, amount: maxAffordable };
+    const hasNativeToCap =
+      !destIsNative && quoted.some((q) => q.group.some((t) => isAddressEqual(t.token, zeroAddress)));
+    if (hasNativeToCap) {
+      const simOps: SimOp[] = [];
+      if (hasBridges && isIntermediateWallet) {
+        simOps.push({ op: "cctp-claim" });
       }
-    } else if (nativeBalance < gasCost.totalGasCost) {
-      // No native token being swapped on the destination chain (e.g. USDC-only
-      // or ERC20-only wallet, or bridged USDC to claim) — record the gas deficit
-      // so a top-up step can refuel this wallet for its final claim/swap/transfer.
-      // Mirrors the source-chain path in processChainWalletSwaps.
-      recordGasGap(gaps, destChainId, walletAddress, gasCost.totalGasCost - nativeBalance);
-      log(
-        `🔍 [DEBUG] Recording gas gap on dest chain ${destChainId} for ${walletAddress}: balance=${nativeBalance.toString()}, gasCost=${gasCost.totalGasCost.toString()}, deficit=${(gasCost.totalGasCost - nativeBalance).toString()}`,
+      simOps.push(...quoted.flatMap((q) => buildSwapLegSimOps(q.legs)));
+      if (needsFinalTransfer && isIntermediateWallet) {
+        simOps.push({ op: destIsNative ? "transfer-native" : "transfer-erc20" });
+      }
+      if (shieldsHere) {
+        simOps.push({ op: "erc20-approval" }, { op: "shield" });
+      }
+
+      const measuredGasWei = await measureOpsGas(destChainId, walletAddress, simOps, gasCtx.maxFeePerGas[destChainId]);
+      const nativeBalance = await getCachedNativeBalance(balances, destChainId, walletAddress);
+      const hasOtherValue = tokensToProcess.length > 1;
+      const cappedNative = await capNativeQuoteForGas(
+        quoted,
+        destinationToken,
+        measuredGasWei,
+        nativeBalance,
+        hasOtherValue,
+        log,
       );
+
+      // Mirror the cap/drop into tokensToProcess so the transfer/keep split in
+      // createSwapsAndTransfers stays consistent with the quoted groups.
+      const nativeIdx = tokensToProcess.findIndex((t) => isAddressEqual(t.token, zeroAddress));
+      if (nativeIdx >= 0) {
+        if (cappedNative === null) {
+          tokensToProcess.splice(nativeIdx, 1);
+        } else {
+          tokensToProcess[nativeIdx] = cappedNative;
+        }
+      }
     }
 
     // Use shared logic to create swaps and transfers
-    const walletOutputs = await createSwapsAndTransfers(tokensToProcess, destinationToken, steps, log);
+    const walletOutputs = await createSwapsAndTransfers(
+      tokensToProcess,
+      destinationToken,
+      steps,
+      artifacts,
+      log,
+      quoted,
+    );
 
     allOutputTokens.push(...walletOutputs);
   }
@@ -1481,11 +1544,8 @@ async function planTransferOnly(
   const destChainId = destinationToken.chainId;
   const destIsNative = isAddressEqual(destinationToken.token, zeroAddress);
   const transferOp: OperationType = destIsNative ? "transfer-native" : "transfer-erc20";
-  const chain = chains[destChainId as keyof typeof chains];
-  const transport = transports?.[destChainId as keyof typeof transports];
-
   const gasCtx = await buildGasContext([destChainId]);
-  const gaps: GasGaps = new Map();
+  const balances: NativeBalances = new Map();
   const steps: TransactionStep[] = [];
 
   // One transfer step per source row (mirrors createSwapsAndTransfers). Group
@@ -1503,7 +1563,7 @@ async function planTransferOnly(
 
     const ops: OperationType[] = walletTokens.map(() => transferOp);
     const gasCost = await estimateChainGasCosts(destChainId, ops, gasCtx.maxFeePerGas[destChainId]);
-    const nativeBalance = await getNativeBalance(chain, sourceWallet, transport);
+    const nativeBalance = await getCachedNativeBalance(balances, destChainId, sourceWallet);
 
     let processedTokens: TokenAmount[] = walletTokens;
 
@@ -1512,12 +1572,11 @@ async function planTransferOnly(
       const maxAffordable = nativeBalance > gasCost.totalGasCost ? nativeBalance - gasCost.totalGasCost : 0n;
 
       if (maxAffordable <= 0n) {
-        // Wallet can't cover its own gas. Refuse a sole dust transfer; otherwise
-        // record a top-up gap that covers amount + gas.
+        // Wallet can't cover its own gas. Refuse a sole dust transfer;
+        // otherwise keep the amount — reconcileGasGaps sizes the top-up.
         if (totalAmount <= dustTopUpThreshold(totalAmount, gasCost.totalGasCost, nativeBalance)) {
           throwNativeAmountTooSmall(destChainId, sourceWallet, totalAmount, gasCost.totalGasCost);
         }
-        recordGasGap(gaps, destChainId, sourceWallet, totalAmount + gasCost.totalGasCost - nativeBalance);
       } else if (totalAmount > maxAffordable) {
         // Cap the last row by the overshoot so enough native is left for gas.
         const overshoot = totalAmount - maxAffordable;
@@ -1531,12 +1590,8 @@ async function planTransferOnly(
           `🔍 [DEBUG] Transfer-only: capped native amount on ${sourceWallet}: total=${totalAmount.toString()} → ${maxAffordable.toString()} (gas=${gasCost.totalGasCost.toString()})`,
         );
       }
-    } else if (nativeBalance < gasCost.totalGasCost) {
-      recordGasGap(gaps, destChainId, sourceWallet, gasCost.totalGasCost - nativeBalance);
-      log(
-        `🔍 [DEBUG] Transfer-only: gas gap on ${sourceWallet}: balance=${nativeBalance.toString()}, need=${gasCost.totalGasCost.toString()}`,
-      );
     }
+    // Gas-poor wallets are topped up via reconcileGasGaps below.
 
     for (const token of processedTokens) {
       const stepId = `step-${steps.length + 1}`;
@@ -1556,6 +1611,11 @@ async function planTransferOnly(
     }
   }
 
+  // Measure first (batched eth_simulateV1 with ladder fallback), then size
+  // top-ups from the measured deficits.
+  await attachGasEstimates(steps, gasCtx);
+  const gaps = await reconcileGasGaps(steps, balances, log);
+
   let finalSteps = steps;
   if (gaps.size > 0) {
     const executorAddresses = new Set<Address>();
@@ -1570,10 +1630,10 @@ async function planTransferOnly(
       executorAddresses,
       log,
     );
+    await attachGasEstimates(gasTopUpSteps, gasCtx);
     finalSteps = [...gasTopUpSteps, ...steps];
   }
 
-  await attachGasEstimates(finalSteps, gasCtx);
   return finalSteps;
 }
 
@@ -1666,9 +1726,10 @@ export async function planConsolidation(
   const allChainIds = [...new Set([...sourceTokens.map((t) => t.chainId), destinationToken.chainId])];
   const gasCtx = await buildGasContext(allChainIds);
 
-  // Track per-(chain, wallet) gas deficits while building the pipeline so we can
-  // prepend a single gas-topup step at the end instead of failing planning.
-  const gaps: GasGaps = new Map();
+  // Native balances observed while drafting (reused by reconcileGasGaps) and
+  // planning-side simulation artifacts (Delora quote calldata per swap step).
+  const balances: NativeBalances = new Map();
+  const artifacts = emptyPlanArtifacts();
 
   // Find a suitable intermediate wallet using gas estimation
   const intermediateWallet = await resolveIntermediateWallet(
@@ -1676,7 +1737,7 @@ export async function planConsolidation(
     destinationToken,
     connectedWallets,
     gasCtx,
-    gaps,
+    balances,
     isRailgun,
   );
   // The intermediate target is a plain public token spec — drop the railgun
@@ -1684,8 +1745,15 @@ export async function planConsolidation(
   const { railgunAddress, ...publicDestination } = destinationToken;
   const intermediateToken = { ...publicDestination, walletAddress: intermediateWallet };
 
-  // Build consolidation pipeline (gas-adjusted; missing gas is recorded into `gaps`)
-  let { steps, tokens } = await processChainWalletSwaps(sourceTokens, intermediateToken, gasCtx, gaps, log);
+  // Build consolidation pipeline (native amounts gas-adjusted per wallet)
+  let { steps, tokens } = await processChainWalletSwaps(
+    sourceTokens,
+    intermediateToken,
+    gasCtx,
+    balances,
+    artifacts,
+    log,
+  );
   ({ steps, tokens } = await createBridgeSteps(steps, tokens, intermediateToken, log));
   ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, intermediateToken));
 
@@ -1699,7 +1767,8 @@ export async function planConsolidation(
     hasBridges,
     needsFinalTransfer,
     isRailgun,
-    gaps,
+    balances,
+    artifacts,
     log,
   ));
 
@@ -1709,7 +1778,12 @@ export async function planConsolidation(
     ({ steps, tokens } = await createFinalTransfer(steps, tokens, destinationToken, log));
   }
 
-  // If any (chain, wallet) couldn't cover its own gas, prepend a gas-topup step
+  // Attach per-step gas estimates (batched eth_simulateV1 with ladder
+  // fallback), then derive gas deficits from the measured numbers.
+  await attachGasEstimates(steps, gasCtx, artifacts);
+  const gaps = await reconcileGasGaps(steps, balances, log);
+
+  // If any (chain, wallet) can't cover its own gas, prepend a gas-topup step
   // funded preferentially from the destination wallet, falling back to the
   // richest executor balance across all supported chains.
   const executorAddresses = new Set<Address>();
@@ -1720,10 +1794,10 @@ export async function planConsolidation(
     }
   }
   const gasTopUpSteps = await createGasTopUpSteps(gaps, intermediateWallet, destinationToken, executorAddresses, log);
-  steps = [...gasTopUpSteps, ...steps];
-
-  // Attach per-step gas estimates for UI display
-  await attachGasEstimates(steps, gasCtx);
+  if (gasTopUpSteps.length > 0) {
+    await attachGasEstimates(gasTopUpSteps, gasCtx, artifacts);
+    steps = [...gasTopUpSteps, ...steps];
+  }
 
   // Validate plan constraints
   const attestationSteps = steps.filter((s) => s.type === "attestation");
