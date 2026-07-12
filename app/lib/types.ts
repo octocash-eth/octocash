@@ -19,9 +19,9 @@ export type TransactionType =
   | "gas-topup" // Send native token (Gas.zip, Delora fallback) to refuel destination chains
   | "gas-topup-wait" // Wait for refuel delivery on destination chains
   | "shield" // Deposit ERC20 into Railgun, credited to a private 0zk address
-  | "gnosis-bridge" // Omnibridge USDC between Gnosis and mainnet (either direction)
-  | "gnosis-wait" // Wait for AMB signatures (egress) or USDC.e delivery (ingress)
-  | "gnosis-claim"; // executeSignatures on mainnet to release Omnibridge USDC
+  | "gnosis-bridge" // Omnibridge relay between Gnosis and mainnet (either direction; USDC or a direct-route token)
+  | "gnosis-wait" // Wait for AMB signatures (egress) or token delivery (ingress)
+  | "gnosis-claim"; // executeSignatures on mainnet to release the Omnibridge token
 
 /**
  * Execution status of a transaction step

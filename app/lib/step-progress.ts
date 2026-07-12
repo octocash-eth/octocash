@@ -38,14 +38,15 @@ export function attestationStageMessage(received: number, total: number): string
 
 /**
  * Friendly line for an Omnibridge wait. Exit = Gnosis→mainnet signature
- * collection on the AMB; enter = watching for the validators to mint USDC.e
- * on Gnosis (delivery is confirmed by the receiver's balance — ground truth).
+ * collection on the AMB; enter = watching for the validators to mint the
+ * bridged token (USDC.e or the destination token's twin) on Gnosis
+ * (delivery is confirmed by the receiver's balance — ground truth).
  */
 export function omnibridgeStageMessage(direction: "exit" | "enter", ready: number, total: number): string {
   if (direction === "exit") {
     if (total <= 1) return "Waiting for Omnibridge signatures…";
     return `Omnibridge messages signed ${ready}/${total}`;
   }
-  if (total <= 1) return "Waiting for USDC on Gnosis…";
+  if (total <= 1) return "Waiting for delivery on Gnosis…";
   return `Omnibridge deliveries received ${ready}/${total}`;
 }

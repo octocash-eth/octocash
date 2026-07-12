@@ -688,13 +688,43 @@ export function buildBridgeSimOps(
 }
 
 /**
- * Builds the Omnibridge SimOps for a `gnosis-bridge` step: on Gnosis the
- * egress triple (approve transmuter, unwrap USDC.e, `transferAndCall` into the
- * home mediator), on mainnet the ingress pair (approve, `relayTokensAndCall`
- * through the transmuter). All calldata is known at planning time, so
+ * Builds the Omnibridge SimOps for a `gnosis-bridge` step. The USDC route: on
+ * Gnosis the egress triple (approve transmuter, unwrap USDC.e,
+ * `transferAndCall` into the home mediator), on mainnet the ingress pair
+ * (approve, `relayTokensAndCall` through the transmuter). A direct-route
+ * token (non-USDC, registered on the bridge itself) is the pair approve +
+ * `relayTokens` on either side. All calldata is known at planning time, so
  * `eth_simulateV1` can measure the real cost.
+ *
+ * @param token - Token sent into the bridge on `chainId`; defaults to that
+ *   side's USDC.
  */
-export function buildOmnibridgeSimOps(chainId: number, receiver: Address, amount: bigint): SimOp[] {
+export function buildOmnibridgeSimOps(chainId: number, receiver: Address, amount: bigint, token?: Address): SimOp[] {
+  const usdc = USDC_ADDRESSES[chainId as keyof typeof USDC_ADDRESSES];
+  const bridgedToken = token ?? usdc;
+  if (!isAddressEqual(bridgedToken, usdc)) {
+    const mediator = chainId === gnosis.id ? HOME_OMNIBRIDGE : FOREIGN_OMNIBRIDGE;
+    return [
+      {
+        op: "erc20-approval",
+        call: {
+          to: bridgedToken,
+          data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [mediator, amount] }),
+        },
+      },
+      {
+        op: "omnibridge-relay",
+        call: {
+          to: mediator,
+          data: encodeFunctionData({
+            abi: parseAbi(["function relayTokens(address token, address receiver, uint256 value)"]),
+            functionName: "relayTokens",
+            args: [bridgedToken, receiver, amount],
+          }),
+        },
+      },
+    ];
+  }
   if (chainId === gnosis.id) {
     return [
       {
@@ -780,7 +810,12 @@ function buildStepSimOps(step: TransactionStep, artifacts: PlanArtifacts): SimOp
 
     case "gnosis-bridge": {
       const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
-      return buildOmnibridgeSimOps(step.chainId, step.outputToken.walletAddress, totalAmount);
+      return buildOmnibridgeSimOps(
+        step.chainId,
+        step.outputToken.walletAddress,
+        totalAmount,
+        step.inputTokens[0]?.token,
+      );
     }
 
     case "transfer": {
@@ -1100,12 +1135,17 @@ function getStepOperations(step: TransactionStep): OperationType[] {
       return ["cctp-approval", "cctp-burn"];
     case "claim":
       return ["cctp-claim"];
-    case "gnosis-bridge":
-      // Egress: approve + transmuter withdraw + transferAndCall; ingress:
-      // approve + relayTokensAndCall (matches buildOmnibridgeSimOps).
-      return step.chainId === gnosis.id
+    case "gnosis-bridge": {
+      // USDC egress: approve + transmuter withdraw + transferAndCall; USDC
+      // ingress and direct-route tokens on either side: approve + relay
+      // (matches buildOmnibridgeSimOps).
+      const inputToken = step.inputTokens[0]?.token;
+      const isUsdcEgress =
+        step.chainId === gnosis.id && (!inputToken || isAddressEqual(inputToken, USDC_ADDRESSES[gnosis.id] as Address));
+      return isUsdcEgress
         ? ["erc20-approval", "omnibridge-relay", "omnibridge-relay"]
         : ["erc20-approval", "omnibridge-relay"];
+    }
     case "gnosis-claim":
       // One executeSignatures per AMB message (one message per bridge step).
       return step.inputTokens.map(() => "omnibridge-claim" as OperationType);

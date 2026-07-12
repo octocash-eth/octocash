@@ -3790,12 +3790,16 @@ describe("gnosis omnibridge steps", () => {
       type: "gnosis-wait",
       status: "pending",
       chainId: GNOSIS,
-      inputTokens: [makeToken(USDCE_GNOSIS, 500000n, GNOSIS, { provenance: "gb-in-1" })],
+      inputTokens: [
+        makeToken(USDCE_GNOSIS, 300000n, GNOSIS, { provenance: "gb-in-1" }),
+        makeToken(USDCE_GNOSIS, 200000n, GNOSIS, { provenance: "gb-in-2" }),
+      ],
       outputToken: makeToken(USDCE_GNOSIS, 500000n, GNOSIS, { provenance: "gw-in-1" }),
     };
     mockState.plan = [waitStep];
     mockState.results = {
       "gb-in-1": { stepId: "gb-in-1", status: "success", chainId: 1, transactionHash: "0xd1" },
+      "gb-in-2": { stepId: "gb-in-2", status: "success", chainId: 1, transactionHash: "0xd2" },
     };
     mockState.metadata = { omnibridge: { deliveries } };
 
@@ -3805,6 +3809,33 @@ describe("gnosis omnibridge steps", () => {
     expect(finalState.status).toBe("completed");
     expect(finalState.results["gw-in-1"].status).toBe("success");
     expect(finalState.results["gw-in-1"].actualOutput?.amount).toBe(500000n);
+  });
+
+  test("gnosis-wait ingress only waits on deliveries from its own bridge steps (mixed-leg plans)", async () => {
+    // Two legs share the deliveries bucket; this wait belongs to the leg
+    // that deposited 0xd1 — the other leg's 0xd2 must not be counted.
+    const own = makeDelivery("300000", "0xd1");
+    const other = makeDelivery("200000", "0xd2");
+
+    const waitStep: TransactionStep = {
+      id: "gw-in-1",
+      type: "gnosis-wait",
+      status: "pending",
+      chainId: GNOSIS,
+      inputTokens: [makeToken(USDCE_GNOSIS, 300000n, GNOSIS, { provenance: "gb-in-1" })],
+      outputToken: makeToken(USDCE_GNOSIS, 300000n, GNOSIS, { provenance: "gw-in-1" }),
+    };
+    mockState.plan = [waitStep];
+    mockState.results = {
+      "gb-in-1": { stepId: "gb-in-1", status: "success", chainId: 1, transactionHash: "0xd1" },
+    };
+    mockState.metadata = { omnibridge: { deliveries: [own, other] } };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(waitForOmnibridgeDelivery).toHaveBeenCalledWith([own], undefined, expect.any(Function));
+    expect(finalState.results["gw-in-1"].status).toBe("success");
+    expect(finalState.results["gw-in-1"].actualOutput?.amount).toBe(300000n);
   });
 
   test("gnosis-wait ingress fails when no deliveries are stored in metadata", async () => {

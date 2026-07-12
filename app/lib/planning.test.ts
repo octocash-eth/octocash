@@ -3351,5 +3351,314 @@ describe("planConsolidation", () => {
         perOperation: [],
       });
     });
+
+    describe("direct Omnibridge token routes", () => {
+      const GNO_MAINNET = "0x6810e776880C02933D47DB1b9fc05908e5386b96" as Address;
+      const DAI_MAINNET = "0x6B175474E89094C44Da98b954EedeAC495271d0F" as Address;
+
+      /**
+       * Public client whose Omnibridge mediator registry knows exactly one
+       * pair: GNO on mainnet <-> GNO on Gnosis (minPerTx 0). Every other
+       * token resolves to the zero address, i.e. "not registered".
+       */
+      const mockOmnibridgeRegistry = () => {
+        vi.mocked(getPublicClient).mockReturnValue({
+          getCode: vi.fn().mockResolvedValue("0x"),
+          readContract: vi.fn(async ({ functionName, args }: { functionName: string; args: readonly unknown[] }) => {
+            if (functionName === "minPerTx") return 0n;
+            if (functionName === "bridgedTokenAddress" && args[0] === GNO_MAINNET) return GNO_GNOSIS;
+            if (functionName === "nativeTokenAddress" && args[0] === GNO_GNOSIS) return GNO_MAINNET;
+            return zeroAddress;
+          }),
+        } as unknown as ReturnType<typeof getPublicClient>);
+      };
+
+      test("egress Gnosis → GNO on mainnet: everything swaps to GNO on Gnosis and bridges GNO → GNO, no mainnet swap", async () => {
+        mockOmnibridgeRegistry();
+        const sourceTokens: TokenAmount[] = [
+          { token: WBTC_GNOSIS, amount: 50000n, chainId: 100, walletAddress: WALLET, symbol: "WBTC", decimals: 8 },
+          { token: GNO_GNOSIS, amount: 10n ** 18n, chainId: 100, walletAddress: WALLET, symbol: "GNO", decimals: 18 },
+        ];
+        const destinationToken = {
+          token: GNO_MAINNET,
+          chainId: 1,
+          walletAddress: WALLET,
+          symbol: "GNO",
+          decimals: 18,
+        };
+
+        // WBTC → 2 GNO on Gnosis; the pre-existing GNO needs no swap.
+        vi.mocked(getSwapQuote).mockImplementation(async (_input, output) => ({
+          ...output,
+          amount: 2n * 10n ** 18n,
+        }));
+
+        const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+        expect(result.map((s: TransactionStep) => s.type)).toEqual([
+          "swap",
+          "gnosis-bridge",
+          "gnosis-wait",
+          "gnosis-claim",
+        ]);
+        expect(result.map((s: TransactionStep) => s.chainId)).toEqual([100, 100, 1, 1]);
+
+        const [swapStep, gnosisBridge, , gnosisClaim] = result;
+        // The Gnosis-side swap targets GNO's Gnosis twin, not USDC.e.
+        expect(swapStep.outputToken.token).toBe(GNO_GNOSIS);
+
+        // One bridge relays the swap output + the pre-existing GNO at 1:1.
+        expect(gnosisBridge.inputTokens).toHaveLength(2);
+        expect(gnosisBridge.inputTokens.every((t) => t.token === GNO_GNOSIS)).toBe(true);
+        expect(gnosisBridge.inputTokens[0].provenance).toBe(swapStep.id);
+        expect(gnosisBridge.outputToken.token).toBe(GNO_MAINNET);
+        expect(gnosisBridge.outputToken.chainId).toBe(1);
+        expect(gnosisBridge.outputToken.amount).toBe(3n * 10n ** 18n); // fee-free 1:1
+
+        // The claim releases the destination token itself — the plan ends here.
+        expect(gnosisClaim.outputToken.token).toBe(GNO_MAINNET);
+        expect(gnosisClaim.outputToken.amount).toBe(3n * 10n ** 18n);
+        expect(getBridgeFee).not.toHaveBeenCalled();
+      });
+
+      test("ingress mainnet → GNO on Gnosis: DAI + USDC swap to GNO on mainnet and bridge GNO → GNO", async () => {
+        mockOmnibridgeRegistry();
+        const sourceTokens: TokenAmount[] = [
+          {
+            token: DAI_MAINNET,
+            amount: 30n * 10n ** 18n,
+            chainId: 1,
+            walletAddress: WALLET,
+            symbol: "DAI",
+            decimals: 18,
+          },
+          { token: USDC_ADDRESS, amount: 20_000_000n, chainId: 1, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+          { token: GNO_MAINNET, amount: 10n ** 18n, chainId: 1, walletAddress: WALLET, symbol: "GNO", decimals: 18 },
+        ];
+        const destinationToken = {
+          token: GNO_GNOSIS,
+          chainId: 100,
+          walletAddress: WALLET,
+          symbol: "GNO",
+          decimals: 18,
+        };
+
+        vi.mocked(getSwapQuote).mockImplementation(async (input, output) => {
+          const first = Array.isArray(input) ? input[0] : input;
+          return { ...output, amount: first.token === DAI_MAINNET ? 3n * 10n ** 17n : 2n * 10n ** 17n };
+        });
+
+        const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+        expect(result.map((s: TransactionStep) => s.type)).toEqual(["swap", "swap", "gnosis-bridge", "gnosis-wait"]);
+
+        // Both swaps run on mainnet and target GNO — value never routes through USDC.
+        const swaps = result.filter((s: TransactionStep) => s.type === "swap");
+        for (const swap of swaps) {
+          expect(swap.chainId).toBe(1);
+          expect(swap.outputToken.token).toBe(GNO_MAINNET);
+        }
+
+        // The deposit combines both swap outputs with the untouched GNO.
+        const gnosisBridge = result.find((s: TransactionStep) => s.type === "gnosis-bridge") as TransactionStep;
+        expect(gnosisBridge.chainId).toBe(1);
+        expect(gnosisBridge.inputTokens).toHaveLength(3);
+        expect(gnosisBridge.inputTokens.every((t) => t.token === GNO_MAINNET)).toBe(true);
+        expect(gnosisBridge.outputToken.token).toBe(GNO_GNOSIS);
+        expect(gnosisBridge.outputToken.chainId).toBe(100);
+        expect(gnosisBridge.outputToken.amount).toBe(15n * 10n ** 17n); // 0.3 + 0.2 + 1.0 GNO
+
+        const gnosisWait = result.find((s: TransactionStep) => s.type === "gnosis-wait") as TransactionStep;
+        expect(gnosisWait.chainId).toBe(100);
+        expect(gnosisWait.outputToken.token).toBe(GNO_GNOSIS);
+        expect(getBridgeFee).not.toHaveBeenCalled();
+      });
+
+      test("ingress Base → GNO on Gnosis: no mainnet assets, so USDC rides to Gnosis and swaps there (never on mainnet)", async () => {
+        mockOmnibridgeRegistry();
+        const sourceTokens: TokenAmount[] = [
+          { token: USDC_BASE, amount: 30_000_000n, chainId: 8453, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+        ];
+        const destinationToken = {
+          token: GNO_GNOSIS,
+          chainId: 100,
+          walletAddress: WALLET,
+          symbol: "GNO",
+          decimals: 18,
+        };
+
+        vi.mocked(getBridgeFee).mockResolvedValue(0n);
+        vi.mocked(getSwapQuote).mockImplementation(async (_input, output) => ({
+          ...output,
+          amount: 3n * 10n ** 17n,
+        }));
+
+        const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+        expect(result.map((s: TransactionStep) => s.type)).toEqual([
+          "bridge",
+          "attestation",
+          "claim",
+          "gnosis-bridge",
+          "gnosis-wait",
+          "swap",
+        ]);
+        // The only swap runs on Gnosis (USDC.e → GNO), never on mainnet.
+        expect(result.map((s: TransactionStep) => s.chainId)).toEqual([8453, 1, 1, 1, 100, 100]);
+
+        const [, , claim, gnosisBridge, gnosisWait, finalSwap] = result;
+        // The deposit relays the claimed USDC through the transmuter.
+        expect(gnosisBridge.inputTokens[0].provenance).toBe(claim.id);
+        expect(gnosisBridge.inputTokens[0].token).toBe(USDC_ADDRESS);
+        expect(gnosisBridge.outputToken.token).toBe(USDC_GNOSIS);
+        // The final swap converts the delivered USDC.e on Gnosis.
+        expect(finalSwap.inputTokens[0].provenance).toBe(gnosisWait.id);
+        expect(finalSwap.inputTokens[0].token).toBe(USDC_GNOSIS);
+        expect(finalSwap.outputToken.token).toBe(GNO_GNOSIS);
+      });
+
+      test("mixed ingress mainnet DAI + Base USDC → GNO on Gnosis: direct leg for mainnet assets, USDC leg for CCTP value", async () => {
+        mockOmnibridgeRegistry();
+        const sourceTokens: TokenAmount[] = [
+          {
+            token: DAI_MAINNET,
+            amount: 30n * 10n ** 18n,
+            chainId: 1,
+            walletAddress: WALLET,
+            symbol: "DAI",
+            decimals: 18,
+          },
+          { token: USDC_BASE, amount: 20_000_000n, chainId: 8453, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+        ];
+        const destinationToken = {
+          token: GNO_GNOSIS,
+          chainId: 100,
+          walletAddress: WALLET,
+          symbol: "GNO",
+          decimals: 18,
+        };
+
+        vi.mocked(getBridgeFee).mockResolvedValue(0n);
+        vi.mocked(getSwapQuote).mockImplementation(async (input, output) => {
+          const first = Array.isArray(input) ? input[0] : input;
+          // DAI → 0.3 GNO; claimed USDC → 0.2 GNO (both on mainnet).
+          return { ...output, amount: first.token === DAI_MAINNET ? 3n * 10n ** 17n : 2n * 10n ** 17n };
+        });
+
+        const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+        const types = result.map((s: TransactionStep) => s.type);
+
+        // One token flavor bridges: mainnet DAI swaps to GNO up front, and
+        // the CCTP-claimed hub USDC hub-swaps to GNO so it can join the same
+        // deposit. Exactly one gnosis-bridge and one gnosis-wait (all value
+        // sits on one wallet here).
+        expect(types.filter((t) => t === "gnosis-bridge")).toHaveLength(1);
+        expect(types.filter((t) => t === "gnosis-wait")).toHaveLength(1);
+
+        const claim = result.find((s: TransactionStep) => s.type === "claim") as TransactionStep;
+        const swaps = result.filter((s: TransactionStep) => s.type === "swap");
+        // Both swaps run on mainnet and target GNO; no swap on Gnosis.
+        expect(swaps).toHaveLength(2);
+        for (const swap of swaps) {
+          expect(swap.chainId).toBe(1);
+          expect(swap.outputToken.token).toBe(GNO_MAINNET);
+        }
+        const hubSwap = swaps.find((s) => s.inputTokens[0].provenance === claim.id) as TransactionStep;
+        expect(hubSwap.inputTokens[0].token).toBe(USDC_ADDRESS);
+
+        // The single deposit combines the DAI swap output and the hub swap
+        // output and mints GNO on Gnosis 1:1.
+        const gnosisBridge = result.find((s: TransactionStep) => s.type === "gnosis-bridge") as TransactionStep;
+        expect(gnosisBridge.inputTokens).toHaveLength(2);
+        expect(gnosisBridge.inputTokens.every((t) => t.token === GNO_MAINNET)).toBe(true);
+        expect(gnosisBridge.outputToken.token).toBe(GNO_GNOSIS);
+        expect(gnosisBridge.outputToken.amount).toBe(5n * 10n ** 17n);
+
+        const gnosisWait = result.find((s: TransactionStep) => s.type === "gnosis-wait") as TransactionStep;
+        expect(gnosisWait.outputToken.token).toBe(GNO_GNOSIS);
+        expect(gnosisWait.outputToken.amount).toBe(5n * 10n ** 17n);
+      });
+
+      test("ingress from two mainnet wallets: one gnosis-bridge per wallet, all delivering to the same wallet, one wait", async () => {
+        mockOmnibridgeRegistry();
+        const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+        const sourceTokens: TokenAmount[] = [
+          { token: GNO_MAINNET, amount: 10n ** 18n, chainId: 1, walletAddress: WALLET, symbol: "GNO", decimals: 18 },
+          {
+            token: DAI_MAINNET,
+            amount: 30n * 10n ** 18n,
+            chainId: 1,
+            walletAddress: WALLET_2,
+            symbol: "DAI",
+            decimals: 18,
+          },
+        ];
+        const destinationToken = {
+          token: GNO_GNOSIS,
+          chainId: 100,
+          walletAddress: WALLET,
+          symbol: "GNO",
+          decimals: 18,
+        };
+
+        vi.mocked(getSwapQuote).mockImplementation(async (_input, output) => ({
+          ...output,
+          amount: 3n * 10n ** 17n,
+        }));
+
+        const result = await planConsolidation(sourceTokens, destinationToken, [WALLET, WALLET_2]);
+
+        // Mirrors CCTP: each wallet deposits its own GNO, both deliveries
+        // converge on the intermediate wallet under a single wait.
+        const gnosisBridges = result.filter((s: TransactionStep) => s.type === "gnosis-bridge");
+        expect(gnosisBridges).toHaveLength(2);
+        for (const bridge of gnosisBridges) {
+          expect(bridge.outputToken.token).toBe(GNO_GNOSIS);
+          expect(bridge.outputToken.walletAddress).toBe(WALLET);
+        }
+        expect(gnosisBridges.map((s) => s.inputTokens[0].walletAddress).sort()).toEqual([WALLET, WALLET_2].sort());
+
+        const waits = result.filter((s: TransactionStep) => s.type === "gnosis-wait");
+        expect(waits).toHaveLength(1);
+        expect(waits[0].inputTokens).toHaveLength(2);
+        expect(waits[0].outputToken.amount).toBe(10n ** 18n + 3n * 10n ** 17n);
+      });
+
+      test("falls back to the USDC route when the destination token has no Omnibridge counterpart", async () => {
+        mockOmnibridgeRegistry(); // registry knows only GNO — WBTC resolves to zero
+        const sourceTokens: TokenAmount[] = [
+          { token: WBTC_GNOSIS, amount: 50000n, chainId: 100, walletAddress: WALLET, symbol: "WBTC", decimals: 8 },
+        ];
+        const destinationToken = {
+          token: WBTC_ADDRESS,
+          chainId: 1,
+          walletAddress: WALLET,
+          symbol: "WBTC",
+          decimals: 8,
+        };
+
+        vi.mocked(getSwapQuote).mockImplementation(async (_input, output) => ({
+          ...output,
+          amount: output.token === WBTC_ADDRESS ? 49000n : 50_000_000n,
+        }));
+
+        const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+        // USDC.e exits via the transmuter route and a mainnet swap finishes the job.
+        expect(result.map((s: TransactionStep) => s.type)).toEqual([
+          "swap",
+          "gnosis-bridge",
+          "gnosis-wait",
+          "gnosis-claim",
+          "swap",
+        ]);
+        const [gnosisSwap, gnosisBridge, , gnosisClaim, finalSwap] = result;
+        expect(gnosisSwap.outputToken.token).toBe(USDC_GNOSIS);
+        expect(gnosisBridge.outputToken.token).toBe(USDC_ADDRESS);
+        expect(finalSwap.chainId).toBe(1);
+        expect(finalSwap.inputTokens[0].provenance).toBe(gnosisClaim.id);
+        expect(finalSwap.outputToken.token).toBe(WBTC_ADDRESS);
+      });
+    });
   });
 });

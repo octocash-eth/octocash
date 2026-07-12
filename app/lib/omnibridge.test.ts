@@ -36,6 +36,7 @@ import {
   type OmnibridgeDelivery,
   OmnibridgeTimeoutError,
   packSignatures,
+  resolveOmnibridgeTokenPair,
   retrieveOmnibridgeClaims,
   waitForOmnibridgeDelivery,
 } from "./omnibridge";
@@ -43,6 +44,10 @@ import { buildERC20ApprovalCalls, getTokenBalance } from "./tokens";
 
 const RECEIVER = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" as Address;
 const AMOUNT = 1_000_000n; // 1 USDC
+
+/** GNO on both sides — the canonical direct-route Omnibridge pair. */
+const GNO_ON_MAINNET = "0x6810e776880C02933D47DB1b9fc05908e5386b96" as Address;
+const GNO_ON_GNOSIS = "0x9C58BAcC331c9aa871AFD802DB6379a98e80CEdb" as Address;
 
 const APPROVE_CALL: Call = { to: USDC[gnosis.id], data: "0xapprove" as Hex };
 
@@ -139,6 +144,24 @@ describe("omnibridge", () => {
       expect(bridge.args?.[1]).toBe(AMOUNT);
       expect((bridge.args?.[2] as Hex).toLowerCase()).toBe(RECEIVER.toLowerCase());
     });
+
+    test("relays a non-USDC token directly into the home Omnibridge (no transmuter)", async () => {
+      const tokenIn = makeToken(GNO_ON_GNOSIS, AMOUNT, gnosis.id, { walletAddress: WALLET });
+
+      const calls = await getGnosisEgressCalls(tokenIn, RECEIVER);
+
+      expect(buildERC20ApprovalCalls).toHaveBeenCalledWith(tokenIn, HOME_OMNIBRIDGE);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toBe(APPROVE_CALL);
+
+      expect(calls[1].to).toBe(HOME_OMNIBRIDGE);
+      const relay = decodeFunctionData({
+        abi: parseAbi(["function relayTokens(address token, address receiver, uint256 value)"]),
+        data: calls[1].data as Hex,
+      });
+      expect(relay.functionName).toBe("relayTokens");
+      expect(relay.args).toEqual([GNO_ON_GNOSIS, RECEIVER, AMOUNT]);
+    });
   });
 
   describe("getMainnetIngressCalls", () => {
@@ -163,6 +186,81 @@ describe("omnibridge", () => {
         AMOUNT,
         encodeAbiParameters([{ type: "address" }], [RECEIVER]),
       ]);
+    });
+
+    test("relays a non-USDC token with plain relayTokens (no transmuter payload)", async () => {
+      const tokenIn = makeToken(GNO_ON_MAINNET, AMOUNT, mainnet.id, { walletAddress: WALLET });
+
+      const calls = await getMainnetIngressCalls(tokenIn, RECEIVER);
+
+      expect(buildERC20ApprovalCalls).toHaveBeenCalledWith(tokenIn, FOREIGN_OMNIBRIDGE);
+      expect(calls).toHaveLength(2);
+      expect(calls[1].to).toBe(FOREIGN_OMNIBRIDGE);
+      const relay = decodeFunctionData({
+        abi: parseAbi(["function relayTokens(address token, address receiver, uint256 value)"]),
+        data: calls[1].data as Hex,
+      });
+      expect(relay.functionName).toBe("relayTokens");
+      expect(relay.args).toEqual([GNO_ON_MAINNET, RECEIVER, AMOUNT]);
+    });
+  });
+
+  describe("resolveOmnibridgeTokenPair", () => {
+    test("maps a mainnet-native token to its bridged Gnosis twin", async () => {
+      const readContract = vi.fn(({ functionName }: { functionName: string }) => {
+        if (functionName === "bridgedTokenAddress") return Promise.resolve(GNO_ON_GNOSIS);
+        return Promise.resolve("0x0000000000000000000000000000000000000000");
+      });
+      mockClient({ readContract });
+
+      const pair = await resolveOmnibridgeTokenPair(GNO_ON_MAINNET, mainnet.id);
+
+      expect(pair).toEqual({ gnosisToken: GNO_ON_GNOSIS, mainnetToken: GNO_ON_MAINNET });
+      expect(readContract).toHaveBeenCalledWith(
+        expect.objectContaining({ address: HOME_OMNIBRIDGE, functionName: "bridgedTokenAddress" }),
+      );
+    });
+
+    test("maps a bridged Gnosis token back to its native mainnet address", async () => {
+      const readContract = vi.fn(({ functionName }: { functionName: string }) => {
+        if (functionName === "nativeTokenAddress") return Promise.resolve(GNO_ON_MAINNET);
+        return Promise.resolve("0x0000000000000000000000000000000000000000");
+      });
+      mockClient({ readContract });
+
+      const pair = await resolveOmnibridgeTokenPair(GNO_ON_GNOSIS, gnosis.id);
+
+      expect(pair).toEqual({ gnosisToken: GNO_ON_GNOSIS, mainnetToken: GNO_ON_MAINNET });
+    });
+
+    test("returns null for an unregistered token", async () => {
+      const readContract = vi.fn().mockResolvedValue("0x0000000000000000000000000000000000000000");
+      mockClient({ readContract });
+
+      await expect(resolveOmnibridgeTokenPair(GNO_ON_MAINNET, mainnet.id)).resolves.toBeNull();
+      // Both directions probed before giving up.
+      expect(readContract).toHaveBeenCalledTimes(2);
+    });
+
+    test("returns null for the USDC pair so the transmuter route keeps handling it", async () => {
+      const readContract = vi.fn(({ functionName }: { functionName: string }) => {
+        if (functionName === "bridgedTokenAddress") return Promise.resolve(USDC_ON_XDAI);
+        return Promise.resolve("0x0000000000000000000000000000000000000000");
+      });
+      mockClient({ readContract });
+
+      await expect(resolveOmnibridgeTokenPair(USDC[mainnet.id], mainnet.id)).resolves.toBeNull();
+    });
+
+    test("returns null for native tokens and unsupported chains", async () => {
+      const readContract = vi.fn();
+      mockClient({ readContract });
+
+      await expect(
+        resolveOmnibridgeTokenPair("0x0000000000000000000000000000000000000000", mainnet.id),
+      ).resolves.toBeNull();
+      await expect(resolveOmnibridgeTokenPair(GNO_ON_MAINNET, 8453)).resolves.toBeNull();
+      expect(readContract).not.toHaveBeenCalled();
     });
   });
 
@@ -198,6 +296,7 @@ describe("omnibridge", () => {
       expect(delivery).toEqual({
         txHash: "0xdeposithash",
         toAddress: RECEIVER,
+        tokenAddress: USDC[gnosis.id],
         baselineUnits: "5000000",
         minDeliveredUnits: "1000000",
       });
@@ -462,6 +561,14 @@ describe("omnibridge", () => {
         [0, 1],
         [1, 1],
       ]);
+    });
+
+    test("watches the delivery's own token when tokenAddress is set (direct route)", async () => {
+      vi.mocked(getTokenBalance).mockResolvedValue(2_000_000n);
+
+      await expect(waitForOmnibridgeDelivery([{ ...delivery, tokenAddress: GNO_ON_GNOSIS }])).resolves.toBeUndefined();
+
+      expect(getTokenBalance).toHaveBeenCalledWith(gnosis.id, RECEIVER, GNO_ON_GNOSIS);
     });
 
     test("resolves on the first poll when the balance already covers the delivery (idempotent retry)", async () => {

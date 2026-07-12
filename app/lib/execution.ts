@@ -3,9 +3,10 @@ import { type Call, encodeFunctionData, formatUnits, getAddress, isAddressEqual,
 import { estimateGas, waitForTransactionReceipt } from "viem/actions";
 import { gnosis, mainnet } from "viem/chains";
 import { tokenMessenger } from "~/data/cctp-contracts";
-import { FOREIGN_OMNIBRIDGE, USDC_ON_XDAI } from "~/data/omnibridge-contracts";
+import { FOREIGN_OMNIBRIDGE, HOME_OMNIBRIDGE, USDC_ON_XDAI } from "~/data/omnibridge-contracts";
 import { BPS_DENOMINATOR, RAILGUN_PROXY, RAILGUN_SHIELD_FEE_BPS } from "~/data/railgun";
 import { chains, transports } from "~/data/supported-chains";
+import { USDC } from "~/data/token-contracts";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import { deriveSwapOutputAmount, executeDeloraSwap, getSwapQuote, SLIPPAGE_LIMIT } from "./delora";
 import { createTransactionError } from "./errors";
@@ -637,10 +638,14 @@ async function tryReconcileFromChain(
     }
     case "gnosis-bridge": {
       // Same defensive discriminator as "bridge": the recorded hash must point
-      // at the bridging call — the egress `transferAndCall` on the legacy USDC
-      // token, or the ingress `relayTokensAndCall` on the foreign Omnibridge —
-      // never at a preceding approve or transmuter withdraw.
-      const expectedTo = step.chainId === gnosis.id ? USDC_ON_XDAI : FOREIGN_OMNIBRIDGE;
+      // at the bridging call — the USDC egress `transferAndCall` on the legacy
+      // USDC token, the direct-route egress `relayTokens` on the home
+      // Omnibridge, or the ingress relay on the foreign Omnibridge — never at
+      // a preceding approve or transmuter withdraw.
+      const inputToken = step.inputTokens[0]?.token;
+      const isUsdcEgress = inputToken !== undefined && isAddressEqual(inputToken, USDC[gnosis.id]);
+      const expectedTo =
+        step.chainId === gnosis.id ? (isUsdcEgress ? USDC_ON_XDAI : HOME_OMNIBRIDGE) : FOREIGN_OMNIBRIDGE;
       const receiptTo = (receipt as { to?: Address | null }).to;
       if (receiptTo && !isAddressEqual(receiptTo, expectedTo)) {
         return { kind: "reverted" };
@@ -648,13 +653,14 @@ async function tryReconcileFromChain(
       const amount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
 
       // Ingress deposits normally persist their delivery record (pre-deposit
-      // USDC.e baseline) from executeOmnibridgeDeposit. When the executor died
-      // between broadcast and that write, reconcile must reconstruct it or the
-      // downstream gnosis-wait fails with "No Omnibridge deposits found" while
-      // the funds are in flight. The true baseline is unknowable after the
-      // fact; assume 0 so the wait completes once the receiver's balance
-      // covers the deposited amount — for a consolidation intermediate wallet
-      // that balance is overwhelmingly bridge-delivered funds.
+      // delivered-token baseline) from executeOmnibridgeDeposit. When the
+      // executor died between broadcast and that write, reconcile must
+      // reconstruct it or the downstream gnosis-wait fails with "No Omnibridge
+      // deposits found" while the funds are in flight. The true baseline is
+      // unknowable after the fact; assume 0 so the wait completes once the
+      // receiver's balance covers the deposited amount — for a consolidation
+      // intermediate wallet that balance is overwhelmingly bridge-delivered
+      // funds.
       let metadataPatch: StepResult["metadataPatch"];
       if (step.chainId !== gnosis.id) {
         const deliveries = state.metadata?.omnibridge?.deliveries ?? [];
@@ -667,6 +673,7 @@ async function tryReconcileFromChain(
                 {
                   txHash: hash,
                   toAddress: step.outputToken.walletAddress,
+                  tokenAddress: step.outputToken.token,
                   baselineUnits: "0",
                   minDeliveredUnits: amount.toString(),
                 },
@@ -1415,7 +1422,8 @@ async function executeStep(
       await validateInputBalances(step, state);
 
       if (step.chainId === gnosis.id) {
-        // Egress: unwrap USDC.e and burn it into the home Omnibridge.
+        // Egress: relay the token into the home Omnibridge (USDC.e is first
+        // unwrapped through the transmuter).
         const [bridgeTx] = await executeOmnibridgeBurn(combinedInput, step.outputToken, sendCalls, step.retryHints);
         return {
           stepId: step.id,
@@ -1426,8 +1434,9 @@ async function executeStep(
         };
       }
 
-      // Ingress: deposit mainnet USDC through the transmuter; persist the
-      // delivery record (with pre-deposit baseline) for the wait step.
+      // Ingress: deposit the mainnet token into the foreign Omnibridge (USDC
+      // routes through the transmuter); persist the delivery record (with
+      // pre-deposit baseline) for the wait step.
       const [depositTx, delivery] = await executeOmnibridgeDeposit(
         combinedInput,
         step.outputToken,
@@ -1476,10 +1485,22 @@ async function executeStep(
         };
       }
 
-      // Ingress: watch each receiver's USDC.e balance on Gnosis until the
-      // validators mint the deposits (no claim transaction exists).
-      const deliveries = state.metadata?.omnibridge?.deliveries;
-      if (!deliveries || deliveries.length === 0) {
+      // Ingress: watch each receiver's bridged-token balance on Gnosis until
+      // the validators mint the deposits (no claim transaction exists). The
+      // deliveries bucket is shared by every ingress leg, so restrict to the
+      // records produced by THIS step's own bridge transactions — a mixed
+      // plan runs one wait per bridged token (USDC.e + the direct-route
+      // token). An empty match falls back to the whole bucket so plans
+      // reconciled without step results still complete.
+      const allDeliveries = state.metadata?.omnibridge?.deliveries ?? [];
+      const ownBridgeTxs = new Set(
+        Array.from(getProvenanceSteps(step))
+          .map((stepId) => state.results[stepId]?.transactionHash)
+          .filter((tx): tx is string => !!tx),
+      );
+      const ownDeliveries = allDeliveries.filter((d) => ownBridgeTxs.has(d.txHash));
+      const deliveries = ownDeliveries.length > 0 ? ownDeliveries : allDeliveries;
+      if (deliveries.length === 0) {
         throw new Error("No Omnibridge deposits found to wait for");
       }
 
