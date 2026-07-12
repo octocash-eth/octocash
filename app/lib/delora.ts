@@ -47,9 +47,11 @@ const deloraQuoteUrl = () => `${deloraBaseUrl()}/v1/quotes`;
 
 /**
  * Slippage tolerance as a fraction (0.005 = 0.5%), enforced on-chain via the
- * quote's `minOutputAmount`.
+ * quote's `minOutputAmount`. Also reused as the quote-drift tolerance at
+ * execution time: a fresh quote that under-delivers the planned amount by more
+ * than this fraction pauses the plan instead of executing silently.
  */
-const SLIPPAGE_LIMIT = 0.005;
+export const SLIPPAGE_LIMIT = 0.005;
 
 /**
  * Fetch a swap quote (single input → single output) from Delora.
@@ -346,10 +348,26 @@ function sumTransfersToWallet(logs: Log[], tokenOut: TokenAmount): bigint {
 }
 
 /**
+ * One quoted swap leg retained for planning-time gas simulation: the deduped
+ * input it consumes, the executable call from the quote, the approval spender,
+ * and Delora's own gas-limit hint when present.
+ *
+ * Planning-time only — this calldata must never be executed (execution
+ * re-quotes via {@link buildDeloraCalls}), which is why legs travel as a
+ * side-channel next to the plan instead of on `TransactionStep`.
+ */
+export interface DeloraSwapLeg {
+  input: TokenAmount;
+  call: { to: Address; data: Hex; value: bigint };
+  approvalAddress: Address;
+  gasLimitHint?: bigint;
+}
+
+/**
  * Get a swap quote from Delora for planning purposes (T009)
  * @param input - The input token amount(s) - can be a single token or an array of tokens
  * @param outputToken - The output token address
- * @returns The estimated output token amount
+ * @returns The estimated output token amount plus the per-leg calldata/gas hints
  *
  * Delora quotes are single-input, so multi-token input is deduped per address
  * and quoted sequentially, summing the per-token `outputAmount`s. Planning
@@ -357,10 +375,10 @@ function sumTransfersToWallet(logs: Log[], tokenOut: TokenAmount): bigint {
  * request; arrays are still supported for same-address multi-provenance
  * entries and for robustness in `recalculatePlan`.
  */
-export async function getSwapQuote(
+export async function getSwapQuoteWithLegs(
   input: TokenAmount | TokenAmount[],
   outputToken: Omit<TokenAmount, "amount">,
-): Promise<TokenAmount> {
+): Promise<{ output: TokenAmount; legs: DeloraSwapLeg[] }> {
   const inputTokens = Array.isArray(input) ? input : [input];
 
   // Validate all inputs are on the same chain
@@ -380,6 +398,7 @@ export async function getSwapQuote(
 
   try {
     let outputAmount = 0n;
+    const legs: DeloraSwapLeg[] = [];
     for (const token of dedupeSwapInputs(inputTokens)) {
       // Nothing to swap for this address; a zero-amount quote would be rejected.
       if (token.amount <= 0n) continue;
@@ -387,10 +406,23 @@ export async function getSwapQuote(
       // integrator fee (deducted from the input side), so it's used as-is.
       const quote = await fetchSwapQuote(token, outputToken);
       outputAmount += BigInt(quote.outputAmount);
+      legs.push({
+        input: token,
+        call: {
+          to: quote.calldata.to,
+          data: quote.calldata.data,
+          value: BigInt(quote.calldata.value ?? "0x0"),
+        },
+        approvalAddress: quote.approvalAddress ?? quote.calldata.to,
+        gasLimitHint: quote.gas?.gasLimit ? BigInt(quote.gas.gasLimit) : undefined,
+      });
     }
     return {
-      ...outputToken,
-      amount: outputAmount,
+      output: {
+        ...outputToken,
+        amount: outputAmount,
+      },
+      legs,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Delora quote failed";
@@ -404,6 +436,19 @@ export async function getSwapQuote(
     }
     throw new Error(`ExternalAPIError: ${message}`);
   }
+}
+
+/**
+ * Amount-only variant of {@link getSwapQuoteWithLegs} for callers that don't
+ * need the calldata/gas legs (e.g. `recalculatePlan` and quote refreshes at
+ * execution time).
+ */
+export async function getSwapQuote(
+  input: TokenAmount | TokenAmount[],
+  outputToken: Omit<TokenAmount, "amount">,
+): Promise<TokenAmount> {
+  const { output } = await getSwapQuoteWithLegs(input, outputToken);
+  return output;
 }
 
 /** Whether a quote failure is Delora's HTTP 429 / RATE_LIMIT rejection. */

@@ -28,6 +28,9 @@ const makeMockClient = () => ({
   // (e.g. `swap = 500_000n`) stable. Tests that exercise the simulated
   // path override this with `mockResolvedValueOnce`.
   estimateGas: vi.fn().mockRejectedValue(new Error("revert")),
+  // simulateCalls (eth_simulateV1 batch) defaults to unavailable so the
+  // fallback ladder is exercised; batch tests override per call.
+  simulateCalls: vi.fn().mockRejectedValue(new Error("method eth_simulateV1 not supported")),
   getGasPrice: vi.fn().mockResolvedValue(5_000_000_000n),
 });
 
@@ -54,10 +57,12 @@ import { getPublicClient } from "./public-client";
 
 const mockGetPublicClient = vi.mocked(getPublicClient);
 
+import type { DeloraSwapLeg } from "./delora";
 import {
   attachGasEstimates,
   buildGasContext,
   buildStepGasEstimate,
+  emptyPlanArtifacts,
   estimateChainGasCosts,
   estimateDestinationChainOperations,
   estimateOperationsForChainWallet,
@@ -79,6 +84,7 @@ beforeEach(() => {
     reward: [[5_000_000_000n], [5_000_000_000n]],
   });
   mockClient.estimateGas.mockReset().mockRejectedValue(new Error("revert"));
+  mockClient.simulateCalls.mockReset().mockRejectedValue(new Error("method eth_simulateV1 not supported"));
   mockClient.getGasPrice.mockReset().mockResolvedValue(5_000_000_000n);
   mockGetPublicClient.mockReturnValue(mockClient as unknown as ReturnType<typeof getPublicClient>);
 });
@@ -261,18 +267,20 @@ describe("gas-estimation", () => {
 
   describe("buildStepGasEstimate", () => {
     test("falls back to static budget when simulation reverts", async () => {
-      // Default mock: estimateGas rejects ⇒ all ops fall back to GAS_BUDGETS.
+      // Default mock: simulateCalls + estimateGas reject ⇒ all ops fall back
+      // to GAS_BUDGETS with the 30% unit buffer applied per op.
       // swap step has 1 erc20-approval (USDC input) + 1 "swap" op.
-      // 65_000 + 500_000 = 565_000 units; * 20 gwei * 1.3 = 14_690_000_000_000_000 wei
+      // 65_000 × 1.3 + 500_000 × 1.3 = 734_500 units; × 20 gwei = 14_690_000_000_000_000 wei
       const estimate = await buildStepGasEstimate(swapStep, 20_000_000_000n, "ETH");
-      expect(estimate.gasUnits).toBe(565_000n);
+      expect(estimate.gasUnits).toBe(734_500n);
       expect(estimate.gasCostWei).toBe(14_690_000_000_000_000n);
       expect(estimate.nativeSymbol).toBe("ETH");
+      expect(estimate.source).toBe("budget");
     });
 
-    test("uses simulated gas when estimateGas succeeds (transfer step)", async () => {
-      // Native transfer simulates to 21_000 (real on-chain). With our mock we
-      // return 25_000 to verify the path actually consumes the simulated value.
+    test("uses estimateGas when the batch is unavailable (transfer step)", async () => {
+      // Native transfer estimates to 21_000 (real on-chain). With our mock we
+      // return 25_000 to verify the path actually consumes the estimated value.
       mockClient.estimateGas.mockResolvedValueOnce(25_000n);
       const transferStep: TransactionStep = {
         id: "t1",
@@ -283,32 +291,34 @@ describe("gas-estimation", () => {
         outputToken: baseToken({ token: ETH }),
       };
       const estimate = await buildStepGasEstimate(transferStep, 20_000_000_000n, "ETH");
-      // Simulated 25_000 instead of static 21_000.
-      expect(estimate.gasUnits).toBe(25_000n);
-      // 25_000 * 20gwei * 1.3 = 650_000_000_000_000
+      // Estimated 25_000 × 1.3 instead of static 21_000 × 1.3.
+      expect(estimate.gasUnits).toBe(32_500n);
+      // 32_500 * 20gwei = 650_000_000_000_000
       expect(estimate.gasCostWei).toBe(650_000_000_000_000n);
+      expect(estimate.source).toBe("estimate-gas");
     });
 
-    test("mixes simulated approvals with static swap budget", async () => {
-      // swap step → ops: [erc20-approval, swap]. Simulate the approval at 50k,
-      // swap-op returns null (no calldata at planning) and falls back to 500k.
+    test("mixes estimated approvals with static swap budget", async () => {
+      // swap step → ops: [erc20-approval, swap]. Estimate the approval at 50k,
+      // swap-op returns null (no retained calldata) and falls back to 500k.
       mockClient.estimateGas.mockResolvedValueOnce(50_000n);
       const estimate = await buildStepGasEstimate(swapStep, 20_000_000_000n, "ETH");
-      // 50_000 (simulated approval) + 500_000 (static swap) = 550_000
-      expect(estimate.gasUnits).toBe(550_000n);
+      // 50_000 × 1.3 (estimated approval) + 500_000 × 1.3 (static swap) = 715_000
+      expect(estimate.gasUnits).toBe(715_000n);
+      // The 500k budget dominates the total, so the badge reports "budget".
+      expect(estimate.source).toBe("budget");
     });
 
     test("preserves precision for large gas costs (static fallback path)", async () => {
       // 20 distinct inputs ⇒ swap step has 20 erc20-approvals + 20 swaps
-      // = 20 * (65k + 500k) = 11_300k static. With simulation reverting
-      // (default mock) we get exactly 11.3M units.
+      // = 20 * (65k + 500k) × 1.3 = 14_690k buffered units.
       const inputTokens = Array.from({ length: 20 }, (_, i) =>
         baseToken({ token: `0x${(i + 1).toString(16).padStart(40, "0")}` as Address }),
       ) as [TokenAmount, ...TokenAmount[]];
       const bigSwap: TransactionStep = { ...swapStep, inputTokens };
       const estimate = await buildStepGasEstimate(bigSwap, 100_000_000_000n, "ETH");
-      // 11_300_000 * 100 gwei * 1.3 = 1_469_000_000_000_000_000 wei (1.469 ETH)
-      expect(estimate.gasUnits).toBe(11_300_000n);
+      // 14_690_000 * 100 gwei = 1_469_000_000_000_000_000 wei (1.469 ETH)
+      expect(estimate.gasUnits).toBe(14_690_000n);
       expect(estimate.gasCostWei).toBe(1_469_000_000_000_000_000n);
     });
   });
@@ -421,14 +431,14 @@ describe("gas-estimation", () => {
       await attachGasEstimates(steps, ctx);
 
       expect(steps[0].estimatedGas?.gasCostWei).toBeGreaterThan(0n);
-      // Two per-token swaps (USDC + native) + 1 erc20-approval = 1000k + 65k
-      expect(steps[0].estimatedGas?.gasUnits).toBe(1_065_000n);
-      // bridge = cctp-approval + cctp-burn = 65k + 200k = 265k
-      expect(steps[1].estimatedGas?.gasUnits).toBe(265_000n);
-      // claim = cctp-claim = 300k
-      expect(steps[2].estimatedGas?.gasUnits).toBe(300_000n);
-      // native transfer = 21k
-      expect(steps[3].estimatedGas?.gasUnits).toBe(21_000n);
+      // Two per-token swaps (USDC + native) + 1 erc20-approval = (1000k + 65k) × 1.3
+      expect(steps[0].estimatedGas?.gasUnits).toBe(1_384_500n);
+      // bridge = cctp-approval + cctp-burn = (65k + 200k) × 1.3
+      expect(steps[1].estimatedGas?.gasUnits).toBe(344_500n);
+      // claim = cctp-claim = 300k × 1.3
+      expect(steps[2].estimatedGas?.gasUnits).toBe(390_000n);
+      // native transfer = 21k × 1.3
+      expect(steps[3].estimatedGas?.gasUnits).toBe(27_300n);
     });
 
     test("skips attestation steps", async () => {
@@ -481,7 +491,166 @@ describe("gas-estimation", () => {
       ];
 
       await attachGasEstimates(steps, ctx);
-      expect(steps[0].estimatedGas?.gasUnits).toBe(21_000n);
+      expect(steps[0].estimatedGas?.gasUnits).toBe(27_300n);
+    });
+  });
+
+  describe("attachGasEstimates (batched eth_simulateV1)", () => {
+    const ctx = {
+      maxFeePerGas: { 1: 20_000_000_000n },
+      nativeSymbol: { 1: "ETH" },
+    };
+
+    const nativeTransferStep = (id: string, amount = 100n): TransactionStep => ({
+      id,
+      type: "transfer",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [baseToken({ token: ETH, amount })],
+      outputToken: baseToken({ token: ETH, amount }),
+    });
+
+    test("uses batch gasUsed with the 25% simulated buffer", async () => {
+      mockClient.simulateCalls.mockResolvedValueOnce({
+        results: [{ status: "success", gasUsed: 21_000n }],
+      });
+      const steps = [nativeTransferStep("t1")];
+
+      await attachGasEstimates(steps, ctx);
+
+      // 21_000 × 1.25 = 26_250
+      expect(steps[0].estimatedGas?.gasUnits).toBe(26_250n);
+      expect(steps[0].estimatedGas?.gasCostWei).toBe(26_250n * 20_000_000_000n);
+      expect(steps[0].estimatedGas?.source).toBe("simulated");
+    });
+
+    test("groups same-(chain, wallet) steps into a single batch", async () => {
+      mockClient.simulateCalls.mockResolvedValueOnce({
+        results: [
+          { status: "success", gasUsed: 21_000n },
+          { status: "success", gasUsed: 30_000n },
+        ],
+      });
+      const steps = [nativeTransferStep("t1"), nativeTransferStep("t2")];
+
+      await attachGasEstimates(steps, ctx);
+
+      expect(mockClient.simulateCalls).toHaveBeenCalledTimes(1);
+      expect(steps[0].estimatedGas?.gasUnits).toBe(26_250n); // 21_000 × 1.25
+      expect(steps[1].estimatedGas?.gasUnits).toBe(37_500n); // 30_000 × 1.25
+    });
+
+    test("simulates swap steps through retained Delora legs", async () => {
+      const artifacts = emptyPlanArtifacts();
+      const leg: DeloraSwapLeg = {
+        input: baseToken(),
+        call: { to: "0x2222222222222222222222222222222222222222" as Address, data: "0xdeadbeef", value: 0n },
+        approvalAddress: "0x3333333333333333333333333333333333333333" as Address,
+        gasLimitHint: 400_000n,
+      };
+      artifacts.swapLegs.set("s1", [leg]);
+      mockClient.simulateCalls.mockResolvedValueOnce({
+        results: [
+          { status: "success", gasUsed: 46_000n }, // approval
+          { status: "success", gasUsed: 200_000n }, // swap
+        ],
+      });
+      const steps = [{ ...swapStep }];
+
+      await attachGasEstimates(steps, ctx, artifacts);
+
+      // (46_000 + 200_000) × 1.25 = 307_500 — far below the 565k budget path.
+      expect(steps[0].estimatedGas?.gasUnits).toBe(307_500n);
+      expect(steps[0].estimatedGas?.source).toBe("simulated");
+      // Batch executed the approval + the verbatim quote calldata.
+      const params = mockClient.simulateCalls.mock.calls[0][0];
+      expect(params.calls).toHaveLength(2);
+      expect(params.calls[1]).toMatchObject({ to: leg.call.to, data: "0xdeadbeef" });
+    });
+
+    test("falls back to the Delora gasLimit hint from a failed call onward", async () => {
+      const artifacts = emptyPlanArtifacts();
+      artifacts.swapLegs.set("s1", [
+        {
+          input: baseToken(),
+          call: { to: "0x2222222222222222222222222222222222222222" as Address, data: "0xdeadbeef", value: 0n },
+          approvalAddress: "0x3333333333333333333333333333333333333333" as Address,
+          gasLimitHint: 400_000n,
+        },
+      ]);
+      mockClient.simulateCalls.mockResolvedValueOnce({
+        results: [
+          { status: "success", gasUsed: 46_000n },
+          { status: "failure", error: new Error("execution reverted") },
+        ],
+      });
+      const steps = [{ ...swapStep }];
+
+      await attachGasEstimates(steps, ctx, artifacts);
+
+      // approval 46_000 × 1.25 + swap hint 400_000 × 1.15 = 57_500 + 460_000
+      expect(steps[0].estimatedGas?.gasUnits).toBe(517_500n);
+      expect(steps[0].estimatedGas?.source).toBe("delora-hint");
+    });
+
+    test("overrides the sender's native balance and the wallet's USDC balance slot", async () => {
+      mockClient.simulateCalls.mockResolvedValueOnce({
+        results: [{ status: "success", gasUsed: 21_000n }],
+      });
+
+      await attachGasEstimates([nativeTransferStep("t1")], ctx);
+
+      const params = mockClient.simulateCalls.mock.calls[0][0];
+      expect(params.account).toBe(WALLET);
+      expect(params.stateOverrides[0]).toMatchObject({ address: WALLET, balance: 2n ** 96n });
+      // Mainnet USDC balance slot forced to max (bit 255 kept clear).
+      expect(params.stateOverrides[1].address).toBe(USDC);
+      expect(params.stateOverrides[1].stateDiff[0].value).toBe(`0x7${"f".repeat(63)}`);
+    });
+
+    test("measureOpsGas prices buffered batch units at the given fee", async () => {
+      const { measureOpsGas } = await import("./gas-estimation");
+      mockClient.simulateCalls.mockResolvedValueOnce({
+        results: [{ status: "success", gasUsed: 100_000n }],
+      });
+
+      const cost = await measureOpsGas(
+        1,
+        WALLET,
+        [{ op: "swap", call: { to: USDC, data: "0x" }, hint: 400_000n }],
+        20_000_000_000n,
+      );
+
+      // 100_000 × 1.25 (simulated) × 20 gwei
+      expect(cost).toBe(125_000n * 20_000_000_000n);
+    });
+
+    test("measureOpsGas falls back to hints/budgets without a step context", async () => {
+      const { measureOpsGas } = await import("./gas-estimation");
+      // Default simulateCalls mock rejects → ladder. No step means the
+      // estimate-gas rung is skipped: swap uses its hint, claim its budget.
+      const cost = await measureOpsGas(
+        1,
+        WALLET,
+        [{ op: "swap", call: { to: USDC, data: "0x" }, hint: 400_000n }, { op: "cctp-claim" }],
+        1n,
+      );
+
+      // 400_000 × 1.15 (hint) + 300_000 × 1.3 (budget) = 460_000 + 390_000
+      expect(cost).toBe(850_000n);
+      expect(mockClient.estimateGas).not.toHaveBeenCalled();
+    });
+
+    test("degrades to the ladder when the whole batch throws", async () => {
+      // Default simulateCalls mock rejects (RPC without eth_simulateV1);
+      // estimateGas succeeds for the transfer.
+      mockClient.estimateGas.mockResolvedValueOnce(21_000n);
+      const steps = [nativeTransferStep("t1")];
+
+      await attachGasEstimates(steps, ctx);
+
+      expect(steps[0].estimatedGas?.gasUnits).toBe(27_300n); // 21_000 × 1.3
+      expect(steps[0].estimatedGas?.source).toBe("estimate-gas");
     });
   });
 });

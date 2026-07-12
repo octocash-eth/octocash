@@ -1,9 +1,10 @@
-import type { Address, Block, Chain, Hex } from "viem";
+import type { Address, Block, Chain, Hex, StateOverride } from "viem";
 import {
   encodeAbiParameters,
   encodeFunctionData,
   erc20Abi,
   formatUnits,
+  getAddress,
   isAddressEqual,
   keccak256,
   pad,
@@ -14,8 +15,9 @@ import {
 import { chainIdToDomain, tokenMessenger } from "~/data/cctp-contracts";
 import { chains } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
+import type { DeloraSwapLeg } from "./delora";
 import { getPublicClient, retryOnRateLimit } from "./public-client";
-import type { TransactionStep } from "./types";
+import type { GasEstimateSource, StepGasEstimate, TransactionStep } from "./types";
 
 // Note: native-token USD pricing is intentionally not handled here. Gas costs are
 // tracked in native wei; fiat conversion belongs at the UI layer (see
@@ -34,11 +36,13 @@ export type OperationType =
   | "shield";
 
 /**
- * Per-operation gas unit budgets used as a fallback whenever live simulation is
- * unavailable (e.g. Delora swaps whose calldata isn't built until execution, CCTP
- * claims that need an attestation, or RPCs that don't support `eth_estimateGas`
- * with state overrides). Conservative upper bounds derived from observed
- * mainnet/L2 traces; the SAFETY_BUFFER_PCT below is the second line of defense.
+ * Per-operation gas unit budgets: the terminal rung of the estimation ladder,
+ * used when neither the `eth_simulateV1` batch, a Delora `gasLimit` hint, nor
+ * per-op `eth_estimateGas` produced a figure (CCTP claims need an attestation,
+ * shields need a wallet signature, gas-topup legs are quoted at execution, and
+ * some RPCs lack the simulation methods). Conservative upper bounds derived
+ * from observed mainnet/L2 traces; the unit buffers are the second line of
+ * defense.
  */
 const GAS_BUDGETS: Record<OperationType, bigint> = {
   "erc20-approval": 65_000n,
@@ -59,6 +63,25 @@ const GAS_BUDGETS: Record<OperationType, bigint> = {
 
 /** Multiplier applied to raw gas cost. 130 = +30%. */
 const SAFETY_BUFFER_PCT = 130n;
+
+/**
+ * Per-source gas-unit buffers, in percent. Simulated `gasUsed` can sit below
+ * the required gas *limit* (EIP-150 63/64 retention in deep call trees, and
+ * SSTORE refunds — e.g. allowance-clearing swaps — applied post-execution),
+ * so even measured values keep a cushion. Delora's `gasLimit` hint is already
+ * a limit with the provider's own margin, so it gets the smallest buffer.
+ * Estimate-gas and static budgets keep today's 30%.
+ */
+const UNIT_BUFFER_PCT: Record<GasEstimateSource, bigint> = {
+  simulated: 125n,
+  "delora-hint": 115n,
+  "estimate-gas": 130n,
+  budget: 130n,
+};
+
+function bufferUnits(units: bigint, source: GasEstimateSource): bigint {
+  return (units * UNIT_BUFFER_PCT[source]) / 100n;
+}
 
 /**
  * Multiplier applied to the predicted next-block baseFee. EIP-1559 caps the
@@ -410,10 +433,12 @@ async function simulateOperationGas(
       case "cctp-claim":
       case "gas-topup-leg":
       case "shield":
-        // Calldata not available at planning time — Delora quotes are fetched
-        // at execution, CCTP claim needs the attestation message, the
-        // gas-topup leg's LI.FI `transactionRequest` is quoted at execution,
-        // and the shield note requires a wallet signature at execution.
+        // Not simulatable as a lone eth_estimateGas call: swaps need their
+        // approval mined first (they're covered by the eth_simulateV1 batch
+        // upstream via the retained quote calldata), CCTP claim needs the
+        // attestation message, the gas-topup leg's LI.FI `transactionRequest`
+        // is quoted at execution, and the shield note requires a wallet
+        // signature at execution.
         return null;
 
       case "transfer-native": {
@@ -542,28 +567,325 @@ async function simulateOperationGas(
 }
 
 /**
- * Builds a {@link StepGasEstimate} for a single step. Calls
- * {@link simulateOperationGas} for each operation type and falls back to
- * {@link GAS_BUDGETS} when simulation isn't possible (Delora swaps, CCTP claim,
- * or revert). The 30% {@link SAFETY_BUFFER_PCT} layers on top of either
- * source so reserved native always exceeds actual cost.
+ * Planning-time side-channel artifacts keyed by step id. Swap legs carry the
+ * Delora quote calldata + gas hints already fetched during planning so the
+ * gas simulation can execute them; they must never reach execution (which
+ * re-quotes via `buildDeloraCalls`) or be persisted with the plan.
+ */
+export interface PlanArtifacts {
+  swapLegs: Map<string, DeloraSwapLeg[]>;
+}
+
+export function emptyPlanArtifacts(): PlanArtifacts {
+  return { swapLegs: new Map() };
+}
+
+/**
+ * Native balance forced onto the sender during batch simulation so
+ * value-carrying calls succeed even on wallets that will only be refueled by
+ * a gas-topup step at execution time. 2^96 wei (~79 billion ETH) exceeds any
+ * plausible plan amount.
+ */
+const SIM_NATIVE_BALANCE = 2n ** 96n;
+
+/**
+ * One operation inside an `eth_simulateV1` batch. Ops without a `call` (CCTP
+ * claim, shield, gas-topup legs — calldata genuinely unknowable at planning
+ * time) skip the batch and resolve through the fallback ladder directly.
+ */
+export interface SimOp {
+  op: OperationType;
+  call?: { to: Address; data?: Hex; value?: bigint };
+  /** Delora quote `gasLimit` fallback (swap ops only). */
+  hint?: bigint;
+}
+
+interface OpGasResult {
+  op: OperationType;
+  units: bigint;
+  source: GasEstimateSource;
+}
+
+/**
+ * Builds SimOps for a set of Delora swap legs: each ERC20 leg gets an approval
+ * call (to the quote's spender) before the verbatim quote calldata; the leg's
+ * `gasLimit` hint rides along as the first fallback rung.
+ */
+export function buildSwapLegSimOps(legs: DeloraSwapLeg[]): SimOp[] {
+  const ops: SimOp[] = [];
+  for (const leg of legs) {
+    if (!isAddressEqual(leg.input.token, zeroAddress)) {
+      ops.push({
+        op: "erc20-approval",
+        call: {
+          to: leg.input.token,
+          data: encodeFunctionData({
+            abi: erc20Abi,
+            functionName: "approve",
+            args: [leg.approvalAddress, leg.input.amount],
+          }),
+        },
+      });
+    }
+    ops.push({ op: "swap", call: leg.call, hint: leg.gasLimitHint });
+  }
+  return ops;
+}
+
+/**
+ * Builds approve + `depositForBurn` SimOps for a CCTP bridge of `amount` USDC.
+ * Falls back to call-less budget ops when chain data is missing.
+ */
+export function buildBridgeSimOps(
+  chainId: number,
+  destChainId: number,
+  mintRecipient: Address,
+  amount: bigint,
+): SimOp[] {
+  const usdc = USDC_ADDRESSES[chainId as keyof typeof USDC_ADDRESSES];
+  const spender = tokenMessenger[chainId];
+  const destDomain = chainIdToDomain[destChainId];
+  const destChain = chains[destChainId as keyof typeof chains] as Chain | undefined;
+  const multicall3 = destChain?.contracts?.multicall3?.address;
+  if (!usdc || !spender || destDomain === undefined || !multicall3) {
+    return [{ op: "cctp-approval" }, { op: "cctp-burn" }];
+  }
+  return [
+    {
+      op: "cctp-approval",
+      call: {
+        to: usdc,
+        data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [spender, amount] }),
+      },
+    },
+    {
+      op: "cctp-burn",
+      call: {
+        to: spender,
+        data: encodeFunctionData({
+          abi: depositForBurnAbi,
+          functionName: "depositForBurn",
+          args: [amount, destDomain, pad(mintRecipient), usdc, pad(multicall3 as Address), 0n, 1000],
+        }),
+      },
+    },
+  ];
+}
+
+/**
+ * Builds the ordered simulate-able operations for one step. Swap steps use the
+ * Delora legs retained in {@link PlanArtifacts} (approval + verbatim quote
+ * calldata); bridge steps encode approve + `depositForBurn`; transfers and the
+ * shield approval encode directly. Everything else resolves via the ladder.
+ */
+function buildStepSimOps(step: TransactionStep, artifacts: PlanArtifacts): SimOp[] {
+  switch (step.type) {
+    case "swap": {
+      const legs = artifacts.swapLegs.get(step.id);
+      if (!legs || legs.length === 0) {
+        // No retained quote (e.g. estimating a persisted/re-built plan) —
+        // resolve through the ladder only.
+        return getStepOperations(step).map((op) => ({ op }));
+      }
+      return buildSwapLegSimOps(legs);
+    }
+
+    case "bridge": {
+      const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+      return buildBridgeSimOps(step.chainId, step.outputToken.chainId, step.outputToken.walletAddress, totalAmount);
+    }
+
+    case "transfer": {
+      const first = step.inputTokens[0];
+      if (!first) return [];
+      const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+      const recipient = step.outputToken.walletAddress;
+      if (isAddressEqual(first.token, zeroAddress)) {
+        return [{ op: "transfer-native", call: { to: recipient, value: totalAmount } }];
+      }
+      return [
+        {
+          op: "transfer-erc20",
+          call: {
+            to: first.token,
+            data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [recipient, totalAmount] }),
+          },
+        },
+      ];
+    }
+
+    case "shield": {
+      const first = step.inputTokens[0];
+      if (!first) return [];
+      const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+      return [
+        {
+          op: "erc20-approval",
+          call: {
+            to: first.token,
+            data: encodeFunctionData({
+              abi: erc20Abi,
+              functionName: "approve",
+              args: [APPROVAL_SIM_SPENDER, totalAmount],
+            }),
+          },
+        },
+        // The shield note requires a wallet signature at execution — budget only.
+        { op: "shield" },
+      ];
+    }
+
+    default:
+      // claim (attestation calldata unknown), gas-topup (LI.FI transaction
+      // quoted at execution), and wait steps: ladder/budget only.
+      return getStepOperations(step).map((op) => ({ op }));
+  }
+}
+
+/**
+ * Resolves gas units for the ordered steps of one (chain, wallet) group: one
+ * `eth_simulateV1` batch covers every op with a call — state materializes
+ * across calls, so a swap's USDC output funds the subsequent CCTP burn — then
+ * the fallback ladder (Delora `gasLimit` hint → per-op `eth_estimateGas` →
+ * static budget) covers the rest.
+ *
+ * State overrides: the sender's native balance is forced high (gas-poor
+ * wallets are refueled before real execution but must still simulate), and
+ * the wallet's USDC balance slot is forced to max — mid-plan USDC (bridged
+ * funds on the destination chain, quoted-vs-simulated swap output drift on
+ * source chains) doesn't exist at simulation time but will at execution.
+ * Allowances are NOT overridden: approvals execute inside the batch.
+ *
+ * Failure policy mirrors `simulateSwapDelivery`: a failed call inside the
+ * batch invalidates the simulated state, so that call and everything after it
+ * fall down the ladder; a thrown batch (RPC without `eth_simulateV1`) degrades
+ * the whole group — never the plan.
+ */
+async function resolveGroupOpGas(
+  chainId: number,
+  wallet: Address,
+  entries: { step?: TransactionStep; simOps: SimOp[] }[],
+): Promise<OpGasResult[][]> {
+  const calls: NonNullable<SimOp["call"]>[] = [];
+  const positions: { entryIdx: number; opIdx: number }[] = [];
+  entries.forEach(({ simOps }, entryIdx) => {
+    simOps.forEach((simOp, opIdx) => {
+      if (simOp.call) {
+        calls.push(simOp.call);
+        positions.push({ entryIdx, opIdx });
+      }
+    });
+  });
+
+  // Simulated units per (entry, op); null resolves through the ladder below.
+  const simulated: (bigint | null)[][] = entries.map(({ simOps }) => simOps.map(() => null));
+
+  if (calls.length > 0) {
+    try {
+      const client = getPublicClient(chainId);
+      const stateOverrides: StateOverride = [{ address: wallet, balance: SIM_NATIVE_BALANCE }];
+      const usdc = USDC_ADDRESSES[chainId as keyof typeof USDC_ADDRESSES];
+      if (usdc) {
+        stateOverrides.push({
+          address: usdc,
+          stateDiff: [{ slot: erc20BalanceSlot(wallet, USDC_BALANCES_SLOT), value: MAX_BALANCE_HEX }],
+        });
+      }
+      const { results } = await retryOnRateLimit(() =>
+        client.simulateCalls({ account: wallet, calls, stateOverrides }),
+      );
+      for (let i = 0; i < results.length && i < positions.length; i++) {
+        const result = results[i] as { status: "success" | "failure"; gasUsed?: bigint };
+        if (result.status !== "success" || result.gasUsed === undefined) {
+          // Post-failure simulated state is unreliable — everything from this
+          // call onward falls down the ladder; earlier results are kept.
+          break;
+        }
+        const { entryIdx, opIdx } = positions[i];
+        simulated[entryIdx][opIdx] = result.gasUsed;
+      }
+    } catch (error) {
+      console.warn(`[gas] eth_simulateV1 unavailable on chain ${chainId}; falling back to estimateGas/budgets.`, error);
+    }
+  }
+
+  return Promise.all(
+    entries.map(({ step, simOps }, entryIdx) =>
+      Promise.all(
+        simOps.map(async (simOp, opIdx): Promise<OpGasResult> => {
+          const units = simulated[entryIdx][opIdx];
+          if (units !== null) return { op: simOp.op, units, source: "simulated" };
+          if (simOp.hint !== undefined) return { op: simOp.op, units: simOp.hint, source: "delora-hint" };
+          const estimated = step ? await simulateOperationGas(chainId, simOp.op, { step }) : null;
+          if (estimated !== null) return { op: simOp.op, units: estimated, source: "estimate-gas" };
+          return { op: simOp.op, units: GAS_BUDGETS[simOp.op], source: "budget" };
+        }),
+      ),
+    ),
+  );
+}
+
+/**
+ * Measures the buffered gas cost of an ad-hoc operation sequence for one
+ * wallet — used by planning to make capping/dust decisions BEFORE the steps
+ * (and their calldata-bearing artifacts) are turned into a plan. Same batch +
+ * ladder machinery as {@link attachGasEstimates}, minus the per-op
+ * `eth_estimateGas` rung (there is no step context to derive it from).
+ */
+export async function measureOpsGas(
+  chainId: number,
+  wallet: Address,
+  simOps: SimOp[],
+  maxFeePerGas: bigint,
+): Promise<bigint> {
+  if (simOps.length === 0) return 0n;
+  const [opResults] = await resolveGroupOpGas(chainId, wallet, [{ simOps }]);
+  const gasUnits = opResults.reduce((sum, r) => sum + bufferUnits(r.units, r.source), 0n);
+  return gasUnits * maxFeePerGas;
+}
+
+/**
+ * Sums per-op buffered units into a {@link StepGasEstimate}. The estimate's
+ * `source` reports where the largest contribution came from — the number the
+ * user should trust least dominates the badge.
+ */
+function assembleStepEstimate(opResults: OpGasResult[], maxFeePerGas: bigint, nativeSymbol: string): StepGasEstimate {
+  let gasUnits = 0n;
+  let source: GasEstimateSource = "budget";
+  let dominant = -1n;
+  for (const r of opResults) {
+    const buffered = bufferUnits(r.units, r.source);
+    gasUnits += buffered;
+    if (buffered > dominant) {
+      dominant = buffered;
+      source = r.source;
+    }
+  }
+  return { gasUnits, maxFeePerGas, gasCostWei: gasUnits * maxFeePerGas, nativeSymbol, source };
+}
+
+/**
+ * Builds a {@link StepGasEstimate} for a single step: batch-simulates the
+ * step's own call sequence and resolves the rest via the ladder. Buffers are
+ * applied per op according to the source of its gas units.
  */
 export async function buildStepGasEstimate(
   step: TransactionStep,
   maxFeePerGas: bigint,
   nativeSymbol: string,
-): Promise<{
-  gasUnits: bigint;
-  maxFeePerGas: bigint;
-  gasCostWei: bigint;
-  nativeSymbol: string;
-}> {
-  const ops = getStepOperations(step);
-  const sims = await Promise.all(ops.map((op) => simulateOperationGas(step.chainId, op, { step })));
-  const gasUnits = ops.reduce((sum, op, i) => sum + (sims[i] ?? GAS_BUDGETS[op]), 0n);
-  const gasCostWei = (gasUnits * maxFeePerGas * SAFETY_BUFFER_PCT) / 100n;
-
-  return { gasUnits, maxFeePerGas, gasCostWei, nativeSymbol };
+  artifacts: PlanArtifacts = emptyPlanArtifacts(),
+): Promise<StepGasEstimate> {
+  const simOps = buildStepSimOps(step, artifacts);
+  const wallet = step.inputTokens[0]?.walletAddress;
+  if (!wallet) {
+    return assembleStepEstimate(
+      simOps.map((s) => ({ op: s.op, units: GAS_BUDGETS[s.op], source: "budget" as const })),
+      maxFeePerGas,
+      nativeSymbol,
+    );
+  }
+  const [opResults] = await resolveGroupOpGas(step.chainId, wallet, [{ step, simOps }]);
+  return assembleStepEstimate(opResults, maxFeePerGas, nativeSymbol);
 }
 
 /**
@@ -627,19 +949,44 @@ export async function buildGasContext(chainIds: number[]): Promise<GasContext> {
 }
 
 /**
- * Determines per-step operations and attaches gas estimates to already-created steps.
- * Runs `eth_estimateGas` for every simulatable op in parallel and falls back to
- * static budgets where simulation isn't possible.
+ * Attaches per-step gas estimates. Steps are grouped by (chain, executing
+ * wallet) in plan order and each group runs as ONE `eth_simulateV1` batch —
+ * fewer RPC calls than the previous per-op `eth_estimateGas` fan-out, and the
+ * sequential state lets ops that were previously unsimulatable (Delora swaps
+ * needing their approval, CCTP burns consuming swap output) return measured
+ * gas. Ops without calldata and RPCs without `eth_simulateV1` degrade down
+ * the ladder to `eth_estimateGas` / static budgets — never fail the plan.
  */
-export async function attachGasEstimates(steps: TransactionStep[], gasCtx: GasContext): Promise<void> {
+export async function attachGasEstimates(
+  steps: TransactionStep[],
+  gasCtx: GasContext,
+  artifacts: PlanArtifacts = emptyPlanArtifacts(),
+): Promise<void> {
+  const groups = new Map<
+    string,
+    { chainId: number; wallet: Address; entries: { step: TransactionStep; simOps: SimOp[] }[] }
+  >();
+  for (const step of steps) {
+    if (step.type === "attestation" || step.type === "gas-topup-wait") continue;
+    const wallet = step.inputTokens[0]?.walletAddress;
+    if (!wallet) continue;
+    const key = `${step.chainId}:${getAddress(wallet)}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { chainId: step.chainId, wallet, entries: [] };
+      groups.set(key, group);
+    }
+    group.entries.push({ step, simOps: buildStepSimOps(step, artifacts) });
+  }
+
   await Promise.all(
-    steps.map(async (step) => {
-      if (step.type === "attestation" || step.type === "gas-topup-wait") return;
-
-      const fee = gasCtx.maxFeePerGas[step.chainId] ?? 0n;
-      const symbol = gasCtx.nativeSymbol[step.chainId] ?? "ETH";
-
-      step.estimatedGas = await buildStepGasEstimate(step, fee, symbol);
+    [...groups.values()].map(async ({ chainId, wallet, entries }) => {
+      const fee = gasCtx.maxFeePerGas[chainId] ?? 0n;
+      const symbol = gasCtx.nativeSymbol[chainId] ?? "ETH";
+      const opResults = await resolveGroupOpGas(chainId, wallet, entries);
+      entries.forEach(({ step }, i) => {
+        step.estimatedGas = assembleStepEstimate(opResults[i], fee, symbol);
+      });
     }),
   );
 }

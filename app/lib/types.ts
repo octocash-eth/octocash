@@ -61,6 +61,13 @@ export type DestinationToken = Omit<TokenAmount, "amount"> & {
 };
 
 /**
+ * Where a step's gas-unit figure came from, strongest to weakest:
+ * `simulated` (eth_simulateV1 batch), `delora-hint` (quote's own gasLimit),
+ * `estimate-gas` (per-op eth_estimateGas), `budget` (static upper bound).
+ */
+export type GasEstimateSource = "simulated" | "delora-hint" | "estimate-gas" | "budget";
+
+/**
  * Estimated gas cost for a single transaction step.
  * Cost is tracked in native wei only; fiat conversion happens at the UI layer
  * via the shared token-price provider.
@@ -70,6 +77,8 @@ export interface StepGasEstimate {
   maxFeePerGas: bigint;
   gasCostWei: bigint;
   nativeSymbol: string;
+  /** Source of the largest per-op contribution; absent on estimates from older persisted plans. */
+  source?: GasEstimateSource;
 }
 
 /**
