@@ -108,11 +108,11 @@ export default function PrivacyPolicy() {
               the amount are submitted on-chain to the Railgun smart contract to execute the shield.
             </li>
             <li>
-              <strong>LI.FI</strong> (LI.FI GmbH) — bridge aggregator used to route cross-chain native gas top-ups when
-              a source or destination wallet lacks gas. Receives your wallet address, source and destination chain IDs,
-              native token amounts, source-chain transaction hashes (for status polling), and IP address. LI.FI may
-              further share this data with the underlying bridge it selects (e.g. Across, Relay, or Gas.zip), each of
-              which operates under its own privacy policy.
+              <strong>Gas.zip</strong> — a gas refuel bridge used to route cross-chain native gas top-ups when a source
+              or destination wallet lacks gas. Receives your wallet address, the recipient address, source and
+              destination chain IDs, native token amounts, and IP address to generate deposit quotes. When Gas.zip
+              cannot serve a chain pair, the same data is sent to Delora instead, which routes the top-up through its
+              underlying bridges, each operating under its own privacy policy.
             </li>
           </ul>
           <h3>Data services</h3>

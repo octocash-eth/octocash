@@ -48,8 +48,9 @@ export default function TermsOfService() {
           <p>
             When any wallet involved in the consolidation — whether on a source chain or the destination chain — does
             not hold sufficient native gas to execute its share of the consolidation, the Service may route a small
-            native-token top-up to that wallet through LI.FI, a bridge aggregator. LI.FI in turn routes the top-up
-            through fast underlying bridges such as Across, Relay, and Gas.zip.
+            native-token top-up to that wallet through Gas.zip, a gas refuel bridge purpose-built for delivering small
+            amounts of native gas across chains. When Gas.zip cannot serve a chain pair, the top-up falls back to
+            Delora&apos;s cross-chain routing.
           </p>
           <p>
             You may also optionally route consolidated funds to a private Railgun address by shielding an ERC20 token
@@ -124,9 +125,9 @@ export default function TermsOfService() {
               private (0zk) address;
             </li>
             <li>
-              <strong>LI.FI</strong> — bridge aggregator used to route cross-chain native gas top-ups when a source or
-              destination wallet lacks gas; LI.FI in turn relies on third-party bridges including Across, Relay, and
-              Gas.zip;
+              <strong>Gas.zip</strong> — a gas refuel bridge used to route cross-chain native gas top-ups when a source
+              or destination wallet lacks gas; when Gas.zip cannot serve a chain pair, the top-up is routed through
+              Delora&apos;s cross-chain routing instead;
             </li>
             <li>
               <strong>Fermyon Cloud</strong> — hosts token icon assets served by the Service.
@@ -158,9 +159,9 @@ export default function TermsOfService() {
             </li>
             <li>
               <strong>Gas top-up bridge fees</strong> — when a source or destination wallet lacks native gas, an
-              additional bridge fee charged by LI.FI and the underlying bridge (Across, Relay, or Gas.zip) applies to
-              the top-up amount. This fee is only incurred when a top-up is required and is shown before you approve the
-              transaction.
+              additional fee charged by the refuel provider (Gas.zip, or Delora and its underlying bridge when Gas.zip
+              is unavailable) applies to the top-up amount. This fee is only incurred when a top-up is required and is
+              shown before you approve the transaction.
             </li>
           </ul>
           <p>
