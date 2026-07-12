@@ -1,5 +1,5 @@
 import { type Address, formatUnits, getAddress, isAddressEqual, zeroAddress } from "viem";
-import { mainnet } from "viem/chains";
+import { gnosis, mainnet } from "viem/chains";
 import { RAILGUN_SUPPORTED_CHAINS } from "~/data/railgun";
 import { chains, transports } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
@@ -11,6 +11,7 @@ import {
   attachGasEstimates,
   buildBridgeSimOps,
   buildGasContext,
+  buildOmnibridgeSimOps,
   buildSwapLegSimOps,
   emptyPlanArtifacts,
   estimateChainGasCosts,
@@ -100,7 +101,13 @@ async function reconcileGasGaps(
   const groups = new Map<string, { chainId: number; wallet: Address; gasWei: bigint; nativeSpendWei: bigint }>();
 
   for (const step of steps) {
-    if (step.type === "attestation" || step.type === "gas-topup" || step.type === "gas-topup-wait") continue;
+    if (
+      step.type === "attestation" ||
+      step.type === "gas-topup" ||
+      step.type === "gas-topup-wait" ||
+      step.type === "gnosis-wait"
+    )
+      continue;
     const wallet = step.inputTokens[0]?.walletAddress;
     if (!wallet) continue;
     const key = gapKey(step.chainId, wallet);
@@ -182,6 +189,55 @@ function throwNativeAmountTooSmall(chainId: number, walletAddress: Address, amou
   );
 }
 
+/** Absolute floor for value routed through the Gnosis<->mainnet hop: $10 (USDC, 6 decimals). */
+export const GNOSIS_ROUTE_MIN_USDC = 10_000_000n;
+
+/**
+ * The mainnet hop's gas must not exceed 1/N of the routed value (N = 5 ⇒ 20%).
+ * Together with the absolute floor this keeps Gnosis routes from spending more
+ * on Ethereum gas than the dust they rescue is worth.
+ */
+const GNOSIS_HOP_MAX_GAS_SHARE = 5n;
+
+/**
+ * Rejects a Gnosis route whose mainnet hop (Omnibridge claim and/or CCTP leg)
+ * would eat too much of the routed value. Runs where the route's real USDC
+ * total is known — inside the egress/ingress step creators — and is a hard
+ * reject, consistent with the dust policy elsewhere in planning. When the ETH
+ * price is unavailable the absolute $10 floor still applies.
+ */
+async function assertGnosisRouteWorthIt(
+  totalUsdc: bigint,
+  hopOps: OperationType[],
+  gasCtx: GasContext,
+  direction: "from" | "to",
+  log: (...args: unknown[]) => void,
+): Promise<void> {
+  let minUsdc = GNOSIS_ROUTE_MIN_USDC;
+  let hopGasUsd = 0;
+  try {
+    const hopGas = await estimateChainGasCosts(mainnet.id, hopOps, gasCtx.maxFeePerGas[mainnet.id]);
+    const priceMap = await fetchDeloraPrices([{ chainId: mainnet.id, token: zeroAddress }]);
+    const ethUsd = priceMap.get(deloraPriceKey(mainnet.id, zeroAddress)) ?? 0;
+    hopGasUsd = ethUsd * Number(formatUnits(hopGas.totalGasCost, 18));
+    const gasFloorUsdc = BigInt(Math.ceil(hopGasUsd * 1e6)) * GNOSIS_HOP_MAX_GAS_SHARE;
+    if (gasFloorUsdc > minUsdc) minUsdc = gasFloorUsdc;
+  } catch (error) {
+    log(`⚠️ [DEBUG] Gnosis route gas floor unavailable, using absolute floor only: ${String(error)}`);
+  }
+
+  if (totalUsdc < minUsdc) {
+    const total = formatUnits(totalUsdc, 6);
+    const min = formatUnits(minUsdc, 6);
+    const gasNote = hopGasUsd > 0 ? ` costing ~$${hopGasUsd.toFixed(2)} in gas` : "";
+    throw new Error(
+      `PlanningError: Consolidating $${total} ${direction === "from" ? "from" : "to"} Gnosis requires an ` +
+        `Ethereum mainnet hop${gasNote}, which isn't worth it below ~$${min}. ` +
+        `Add more value or ${direction === "from" ? "deselect the Gnosis tokens" : "choose a different destination chain"}.`,
+    );
+  }
+}
+
 /**
  * EIP-7702 designation prefix. An EOA that has authorized a delegate has
  * bytecode of the form `0xef0100 || <20-byte delegate address>` (23 bytes
@@ -224,20 +280,23 @@ async function assertEoaWallets(
     });
   }
 
-  const checks = await Promise.all(
-    Array.from(pairs.values()).map(async ({ address, chainId }) => {
-      const code = await getPublicClient(chainId).getCode({ address });
-      const hasCode = code !== undefined && code !== "0x";
-      const is7702 = hasCode && code.toLowerCase().startsWith(EIP7702_DELEGATION_PREFIX);
-      return { address, chainId, isContract: hasCode && !is7702 };
-    }),
-  );
+  await Promise.all(Array.from(pairs.values()).map(({ address, chainId }) => assertEoaOnChain(address, chainId)));
+}
 
-  const contract = checks.find((c) => c.isContract);
-  if (contract) {
-    const chainName = chains[contract.chainId as keyof typeof chains]?.name ?? `chain ${contract.chainId}`;
+/**
+ * Throws when `address` is a (non-EIP-7702) contract on `chainId`. Also used
+ * standalone for the intermediate wallet on mainnet when a plan routes through
+ * the Gnosis<->mainnet Omnibridge hop — the hop's claim/burn steps execute on
+ * mainnet, a chain `assertEoaWallets` may not otherwise cover.
+ */
+async function assertEoaOnChain(address: Address, chainId: number): Promise<void> {
+  const code = await getPublicClient(chainId).getCode({ address });
+  const hasCode = code !== undefined && code !== "0x";
+  const is7702 = hasCode && code.toLowerCase().startsWith(EIP7702_DELEGATION_PREFIX);
+  if (hasCode && !is7702) {
+    const chainName = chains[chainId as keyof typeof chains]?.name ?? `chain ${chainId}`;
     throw new Error(
-      `PlanningError: Smart-account wallets are not supported. ${contract.address} is a contract on ${chainName}.`,
+      `PlanningError: Smart-account wallets are not supported. ${address} is a contract on ${chainName}.`,
     );
   }
 }
@@ -270,7 +329,9 @@ function predictIntermediateDestinationOps(
   const destChainId = destinationToken.chainId;
   const destChainUsdc = USDC_ADDRESSES[destChainId as keyof typeof USDC_ADDRESSES] as Address | undefined;
   const destIsNative = isAddressEqual(destinationToken.token, zeroAddress);
-  const hasBridges = sourceTokens.some((t) => t.chainId !== destChainId);
+  // When the destination is Gnosis the CCTP claim runs on the mainnet hub, not
+  // on the destination chain, so it doesn't count toward dest-chain ops.
+  const hasBridges = destChainId !== gnosis.id && sourceTokens.some((t) => t.chainId !== destChainId);
 
   const candidateDestSources = sourceTokens.filter(
     (t) => t.chainId === destChainId && isAddressEqual(t.walletAddress, candidate),
@@ -811,8 +872,11 @@ async function processChainWalletSwaps(
         const totalUsdc =
           quoted.reduce((sum, q) => sum + q.output.amount, 0n) + usdcAlreadyHere.reduce((sum, t) => sum + t.amount, 0n);
         if (totalUsdc > 0n) {
+          // Gnosis sources exit through the Omnibridge, not CCTP.
           simOps.push(
-            ...buildBridgeSimOps(chainId, destinationToken.chainId, destinationToken.walletAddress, totalUsdc),
+            ...(chainId === gnosis.id
+              ? buildOmnibridgeSimOps(chainId, destinationToken.walletAddress, totalUsdc)
+              : buildBridgeSimOps(chainId, destinationToken.chainId, destinationToken.walletAddress, totalUsdc)),
           );
         }
         const measuredGasWei = await measureOpsGas(chainId, walletAddress, simOps, gasCtx.maxFeePerGas[chainId]);
@@ -1004,6 +1068,204 @@ function createAttestationAndClaimSteps(
 }
 
 /**
+ * Creates the Gnosis egress leg (source Gnosis, destination elsewhere): per
+ * Gnosis wallet one `gnosis-bridge` step burning its USDC.e into the
+ * Omnibridge toward a single mainnet hub wallet, then exactly one
+ * `gnosis-wait` (AMB signature collection) and one `gnosis-claim`
+ * (executeSignatures on mainnet, releasing native mainnet USDC).
+ *
+ * The claim output is a mainnet USDC token, so the downstream CCTP stages
+ * treat it like any other source USDC: `createBridgeSteps` burns it toward the
+ * destination chain (or passes it through when the destination IS mainnet).
+ *
+ * @returns Tokens with the Gnosis entries replaced by the claim output
+ */
+async function createGnosisEgressSteps(
+  steps: TransactionStep[],
+  tokens: TokenAmount[],
+  hubWallet: Address,
+  destinationChainId: number,
+  gasCtx: GasContext,
+  log: (...args: unknown[]) => void,
+): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
+  const gnosisTokens = tokens.filter((t) => t.chainId === gnosis.id);
+  if (gnosisTokens.length === 0) return { steps, tokens };
+  const otherTokens = tokens.filter((t) => t.chainId !== gnosis.id);
+  const mainnetUSDC = USDC_ADDRESSES[mainnet.id] as Address;
+
+  const totalAmount = gnosisTokens.reduce((sum, t) => sum + t.amount, 0n);
+  const hopOps: OperationType[] = ["omnibridge-claim"];
+  if (destinationChainId !== mainnet.id) hopOps.push("cctp-approval", "cctp-burn");
+  await assertGnosisRouteWorthIt(totalAmount, hopOps, gasCtx, "from", log);
+
+  const bridgeOutputs: TokenAmount[] = [];
+  for (const walletTokens of groupTokensByChainAndWallet(gnosisTokens)) {
+    // Swap outputs first (with provenance), then pre-existing USDC.e —
+    // mirrors createBridgeSteps' dependency ordering.
+    const inputTokens: TokenAmount[] = [];
+    for (const token of walletTokens) {
+      if (token.provenance) inputTokens.unshift(token);
+      else inputTokens.push(token);
+    }
+    const amount = inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+
+    const stepId = `step-${steps.length + 1}`;
+    const bridgeOutput: TokenAmount = {
+      token: mainnetUSDC,
+      amount, // Omnibridge is fee-free 1:1
+      chainId: mainnet.id,
+      walletAddress: hubWallet,
+      symbol: "USDC",
+      decimals: 6,
+      provenance: stepId,
+    };
+    steps.push({
+      id: stepId,
+      type: "gnosis-bridge",
+      status: "pending",
+      chainId: gnosis.id,
+      inputTokens: inputTokens as [TokenAmount, ...TokenAmount[]],
+      outputToken: bridgeOutput,
+    });
+    bridgeOutputs.push(bridgeOutput);
+
+    log(
+      `🔍 [DEBUG] Added gnosis-bridge step ${stepId} for wallet ${walletTokens[0].walletAddress}: amount=${amount.toString()} -> ${hubWallet} on mainnet`,
+    );
+  }
+
+  const waitStepId = `step-${steps.length + 1}`;
+  steps.push({
+    id: waitStepId,
+    type: "gnosis-wait",
+    status: "pending",
+    chainId: mainnet.id,
+    inputTokens: [...bridgeOutputs] as [TokenAmount, ...TokenAmount[]],
+    outputToken: {
+      token: mainnetUSDC,
+      amount: totalAmount,
+      chainId: mainnet.id,
+      walletAddress: hubWallet,
+      symbol: "USDC",
+      decimals: 6,
+      provenance: waitStepId,
+    },
+  });
+
+  const claimStepId = `step-${steps.length + 1}`;
+  const claimOutput: TokenAmount = {
+    token: mainnetUSDC,
+    amount: totalAmount,
+    chainId: mainnet.id,
+    walletAddress: hubWallet,
+    symbol: "USDC",
+    decimals: 6,
+    provenance: claimStepId,
+  };
+  steps.push({
+    id: claimStepId,
+    type: "gnosis-claim",
+    status: "pending",
+    chainId: mainnet.id,
+    inputTokens: [...bridgeOutputs] as [TokenAmount, ...TokenAmount[]],
+    outputToken: claimOutput,
+  });
+
+  log(`🔍 [DEBUG] Added gnosis-wait ${waitStepId} + gnosis-claim ${claimStepId}: total=${totalAmount.toString()}`);
+
+  return { steps, tokens: [...otherTokens, claimOutput] };
+}
+
+/**
+ * Creates the Gnosis ingress leg (destination Gnosis): per mainnet wallet
+ * holding USDC (the CCTP claim output at the hub wallet plus any mainnet
+ * source USDC) one `gnosis-bridge` step depositing into the Omnibridge via
+ * the USDCTransmuter, then exactly one `gnosis-wait` that balance-watches the
+ * minted USDC.e on Gnosis — there is no claim transaction in this direction.
+ *
+ * @returns Tokens with the mainnet entries replaced by the wait output
+ *   (USDC.e at the intermediate wallet, ready for `createFinalSwaps`)
+ */
+async function createGnosisIngressSteps(
+  steps: TransactionStep[],
+  tokens: TokenAmount[],
+  intermediateWallet: Address,
+  gasCtx: GasContext,
+  log: (...args: unknown[]) => void,
+): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
+  const mainnetTokens = tokens.filter((t) => t.chainId === mainnet.id);
+  if (mainnetTokens.length === 0) return { steps, tokens };
+  const otherTokens = tokens.filter((t) => t.chainId !== mainnet.id);
+  const gnosisUSDC = USDC_ADDRESSES[gnosis.id] as Address;
+
+  const totalAmount = mainnetTokens.reduce((sum, t) => sum + t.amount, 0n);
+  const hadCctpBridges = steps.some((s) => s.type === "bridge");
+  const hopOps: OperationType[] = [
+    ...(hadCctpBridges ? (["cctp-claim"] as OperationType[]) : []),
+    "erc20-approval",
+    "omnibridge-relay",
+  ];
+  await assertGnosisRouteWorthIt(totalAmount, hopOps, gasCtx, "to", log);
+
+  const bridgeOutputs: TokenAmount[] = [];
+  for (const walletTokens of groupTokensByChainAndWallet(mainnetTokens)) {
+    const inputTokens: TokenAmount[] = [];
+    for (const token of walletTokens) {
+      if (token.provenance) inputTokens.unshift(token);
+      else inputTokens.push(token);
+    }
+    const amount = inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+
+    const stepId = `step-${steps.length + 1}`;
+    const bridgeOutput: TokenAmount = {
+      token: gnosisUSDC,
+      amount, // Omnibridge is fee-free 1:1
+      chainId: gnosis.id,
+      walletAddress: intermediateWallet,
+      symbol: "USDC.e",
+      decimals: 6,
+      provenance: stepId,
+    };
+    steps.push({
+      id: stepId,
+      type: "gnosis-bridge",
+      status: "pending",
+      chainId: mainnet.id,
+      inputTokens: inputTokens as [TokenAmount, ...TokenAmount[]],
+      outputToken: bridgeOutput,
+    });
+    bridgeOutputs.push(bridgeOutput);
+
+    log(
+      `🔍 [DEBUG] Added gnosis-bridge (ingress) step ${stepId} for wallet ${walletTokens[0].walletAddress}: amount=${amount.toString()} -> ${intermediateWallet} on Gnosis`,
+    );
+  }
+
+  const waitStepId = `step-${steps.length + 1}`;
+  const waitOutput: TokenAmount = {
+    token: gnosisUSDC,
+    amount: totalAmount,
+    chainId: gnosis.id,
+    walletAddress: intermediateWallet,
+    symbol: "USDC.e",
+    decimals: 6,
+    provenance: waitStepId,
+  };
+  steps.push({
+    id: waitStepId,
+    type: "gnosis-wait",
+    status: "pending",
+    chainId: gnosis.id,
+    inputTokens: [...bridgeOutputs] as [TokenAmount, ...TokenAmount[]],
+    outputToken: waitOutput,
+  });
+
+  log(`🔍 [DEBUG] Added gnosis-wait ${waitStepId} (ingress delivery watch): total=${totalAmount.toString()}`);
+
+  return { steps, tokens: [...otherTokens, waitOutput] };
+}
+
+/**
  * Creates final swap steps to convert remaining tokens to the destination token on destination chain
  *
  * This is the last phase in consolidation when the destination token is not USDC.
@@ -1094,6 +1356,11 @@ async function createFinalSwaps(
       const simOps: SimOp[] = [];
       if (hasBridges && isIntermediateWallet) {
         simOps.push({ op: "cctp-claim" });
+      }
+      // A Gnosis egress into a mainnet destination puts the Omnibridge claim
+      // on this same wallet+chain — reserve its gas too.
+      if (isIntermediateWallet && steps.some((s) => s.type === "gnosis-claim" && s.chainId === destChainId)) {
+        simOps.push({ op: "omnibridge-claim" });
       }
       simOps.push(...quoted.flatMap((q) => buildSwapLegSimOps(q.legs)));
       if (needsFinalTransfer && isIntermediateWallet) {
@@ -1723,8 +1990,22 @@ export async function planConsolidation(
     }
   }
 
+  // Gnosis has no CCTP: its bridge leg routes through Ethereum mainnet via the
+  // Omnibridge (egress when Gnosis is a source, ingress when it's the
+  // destination), so those plans also need mainnet gas data and an EOA hub.
+  const isGnosisDest = destinationToken.chainId === gnosis.id;
+  const sourceHasGnosis = sourceTokens.some((t) => t.chainId === gnosis.id);
+  const needsMainnetHub =
+    (sourceHasGnosis && !isGnosisDest) || (isGnosisDest && sourceTokens.some((t) => t.chainId !== gnosis.id));
+
   // Build gas context for all involved chains (fetches gas prices + native token prices)
-  const allChainIds = [...new Set([...sourceTokens.map((t) => t.chainId), destinationToken.chainId])];
+  const allChainIds = [
+    ...new Set([
+      ...sourceTokens.map((t) => t.chainId),
+      destinationToken.chainId,
+      ...(needsMainnetHub ? [mainnet.id] : []),
+    ]),
+  ];
   const gasCtx = await buildGasContext(allChainIds);
 
   // Native balances observed while drafting (reused by reconcileGasGaps) and
@@ -1746,6 +2027,12 @@ export async function planConsolidation(
   const { railgunAddress, ...publicDestination } = destinationToken;
   const intermediateToken = { ...publicDestination, walletAddress: intermediateWallet };
 
+  // The Omnibridge hop's mainnet steps (claim/deposit/burn) are signed by the
+  // intermediate wallet on mainnet — a chain assertEoaWallets may not cover.
+  if (needsMainnetHub) {
+    await assertEoaOnChain(intermediateWallet, mainnet.id);
+  }
+
   // Build consolidation pipeline (native amounts gas-adjusted per wallet)
   let { steps, tokens } = await processChainWalletSwaps(
     sourceTokens,
@@ -1755,10 +2042,50 @@ export async function planConsolidation(
     artifacts,
     log,
   );
-  ({ steps, tokens } = await createBridgeSteps(steps, tokens, intermediateToken, log));
-  ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, intermediateToken));
 
-  const hasBridges = steps.some((s) => s.type === "bridge");
+  if (sourceHasGnosis && !isGnosisDest) {
+    // Egress: Gnosis USDC.e exits through the Omnibridge to mainnet USDC at
+    // the hub wallet; the claim output then joins the CCTP stages below.
+    ({ steps, tokens } = await createGnosisEgressSteps(
+      steps,
+      tokens,
+      intermediateWallet,
+      destinationToken.chainId,
+      gasCtx,
+      log,
+    ));
+  }
+
+  if (isGnosisDest) {
+    // Ingress: the CCTP stages run unchanged but converge on a mainnet hub
+    // token instead of the (CCTP-less) Gnosis destination; the Omnibridge then
+    // carries the hub USDC to Gnosis. Gnosis-held tokens stay aside — they're
+    // already on the destination chain and have no CCTP route.
+    const gnosisHeldTokens = tokens.filter((t) => t.chainId === gnosis.id);
+    const hubToken: DestinationToken = {
+      token: USDC_ADDRESSES[mainnet.id] as Address,
+      chainId: mainnet.id,
+      walletAddress: intermediateWallet,
+      symbol: "USDC",
+      decimals: 6,
+    };
+    ({ steps, tokens } = await createBridgeSteps(
+      steps,
+      tokens.filter((t) => t.chainId !== gnosis.id),
+      hubToken,
+      log,
+    ));
+    ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, hubToken));
+    ({ steps, tokens } = await createGnosisIngressSteps(steps, tokens, intermediateWallet, gasCtx, log));
+    tokens = [...tokens, ...gnosisHeldTokens];
+  } else {
+    ({ steps, tokens } = await createBridgeSteps(steps, tokens, intermediateToken, log));
+    ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, intermediateToken));
+  }
+
+  // Whether the intermediate wallet performs a CCTP claim on the destination
+  // chain (false when the destination is Gnosis — that claim runs on mainnet).
+  const hasBridges = !isGnosisDest && steps.some((s) => s.type === "bridge");
   const needsFinalTransfer = !isRailgun && !isAddressEqual(intermediateWallet, destinationToken.walletAddress);
   ({ steps, tokens } = await createFinalSwaps(
     steps,
@@ -1804,6 +2131,12 @@ export async function planConsolidation(
   const attestationSteps = steps.filter((s) => s.type === "attestation");
   if (attestationSteps.length > 1) {
     throw new Error("PlanningError: Plans must contain at most one attestation step");
+  }
+  // Same rationale for the Omnibridge leg: its claims/deliveries live in a
+  // single metadata bucket. Egress and ingress legs are mutually exclusive
+  // within one plan, so this holds by construction.
+  if (steps.filter((s) => s.type === "gnosis-wait").length > 1) {
+    throw new Error("PlanningError: Plans must contain at most one gnosis-wait step");
   }
 
   log(

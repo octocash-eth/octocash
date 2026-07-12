@@ -1,4 +1,4 @@
-import { arbitrum, base, linea, mainnet, optimism, polygon, unichain } from "viem/chains";
+import { arbitrum, base, gnosis, linea, mainnet, optimism, polygon, unichain } from "viem/chains";
 
 export const USDC: Record<number, `0x${string}`> = {
   [mainnet.id]: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
@@ -8,6 +8,8 @@ export const USDC: Record<number, `0x${string}`> = {
   [polygon.id]: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
   [unichain.id]: "0x078D782b760474a361dDA0AF3839290b0EF57AD6",
   [linea.id]: "0x176211869cA2b568f2A7D4EE941E073a821EE1ff",
+  // USDC.e — canonical bridged USDC on Gnosis (no native Circle USDC there).
+  [gnosis.id]: "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0",
 };
 
 export const WBTC: Record<number, `0x${string}`> = {
@@ -32,6 +34,10 @@ export const ETH: Record<number, `0x${string}`> = {
 
 export const POL: Record<number, `0x${string}`> = {
   [polygon.id]: "0x0000000000000000000000000000000000000000",
+};
+
+export const XDAI: Record<number, `0x${string}`> = {
+  [gnosis.id]: "0x0000000000000000000000000000000000000000",
 };
 
 /**

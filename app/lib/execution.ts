@@ -1,7 +1,9 @@
 import type { Account, Address, Chain, Hex, HttpTransport, WalletClient } from "viem";
 import { type Call, encodeFunctionData, formatUnits, getAddress, isAddressEqual, parseAbi, zeroAddress } from "viem";
 import { estimateGas, waitForTransactionReceipt } from "viem/actions";
+import { gnosis, mainnet } from "viem/chains";
 import { tokenMessenger } from "~/data/cctp-contracts";
+import { FOREIGN_OMNIBRIDGE, USDC_ON_XDAI } from "~/data/omnibridge-contracts";
 import { BPS_DENOMINATOR, RAILGUN_PROXY, RAILGUN_SHIELD_FEE_BPS } from "~/data/railgun";
 import { chains, transports } from "~/data/supported-chains";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
@@ -15,6 +17,13 @@ import {
   type OperationType,
 } from "./gas-estimation";
 import { type GasRefuelRecord, getGasRefuelQuote, waitForRefuelDelivery } from "./gas-refuel";
+import {
+  executeOmnibridgeBurn,
+  executeOmnibridgeClaim,
+  executeOmnibridgeDeposit,
+  retrieveOmnibridgeClaims,
+  waitForOmnibridgeDelivery,
+} from "./omnibridge";
 import { getPublicClient, retryOnRateLimit } from "./public-client";
 import { prepareSendCalls, SendCallsError } from "./send-calls";
 import { getTokenBalance } from "./tokens";
@@ -112,14 +121,24 @@ export class InsufficientInputBalanceError extends Error {
  */
 export type StepProgressEvent =
   | { kind: "refuel"; stepId: string; txHash: string; fromChainId: number; toChainId: number; delivered: boolean }
-  | { kind: "attestation"; stepId: string; received: number; total: number };
+  | { kind: "attestation"; stepId: string; received: number; total: number }
+  // Omnibridge wait: "exit" = AMB signature collection (Gnosis -> mainnet),
+  // "enter" = USDC.e delivery watch on Gnosis (mainnet -> Gnosis).
+  | { kind: "omnibridge"; stepId: string; direction: "exit" | "enter"; ready: number; total: number };
 
 export interface ExecuteOptions {
   onStepProgress?: (event: StepProgressEvent) => void;
 }
 
 export async function validateInputBalances(step: TransactionStep, _state: ConsolidationState): Promise<void> {
-  if (step.type === "claim" || step.type === "attestation") return;
+  // Wait/claim steps consume in-flight bridge outputs, not wallet-held funds.
+  if (
+    step.type === "claim" ||
+    step.type === "attestation" ||
+    step.type === "gnosis-wait" ||
+    step.type === "gnosis-claim"
+  )
+    return;
 
   const required = new Map<string, { chainId: number; wallet: Address; token: Address; amount: bigint }>();
   for (const input of step.inputTokens) {
@@ -306,6 +325,11 @@ export async function* executeConsolidationPlan(
           transactionHash: outcome.result.transactionHash,
           executedAt: Date.now(),
         };
+        // A reconciled step can carry metadata too (e.g. a reconstructed
+        // Omnibridge delivery record) — apply it like the normal path does.
+        if (outcome.result.metadataPatch) {
+          workingState.metadata = { ...workingState.metadata, ...outcome.result.metadataPatch };
+        }
         if (outcome.result.actualOutput) {
           const { plan } = await recalculatePlan(workingState, i, outcome.result.actualOutput);
           workingState.plan = plan;
@@ -611,6 +635,76 @@ async function tryReconcileFromChain(
         },
       };
     }
+    case "gnosis-bridge": {
+      // Same defensive discriminator as "bridge": the recorded hash must point
+      // at the bridging call — the egress `transferAndCall` on the legacy USDC
+      // token, or the ingress `relayTokensAndCall` on the foreign Omnibridge —
+      // never at a preceding approve or transmuter withdraw.
+      const expectedTo = step.chainId === gnosis.id ? USDC_ON_XDAI : FOREIGN_OMNIBRIDGE;
+      const receiptTo = (receipt as { to?: Address | null }).to;
+      if (receiptTo && !isAddressEqual(receiptTo, expectedTo)) {
+        return { kind: "reverted" };
+      }
+      const amount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+
+      // Ingress deposits normally persist their delivery record (pre-deposit
+      // USDC.e baseline) from executeOmnibridgeDeposit. When the executor died
+      // between broadcast and that write, reconcile must reconstruct it or the
+      // downstream gnosis-wait fails with "No Omnibridge deposits found" while
+      // the funds are in flight. The true baseline is unknowable after the
+      // fact; assume 0 so the wait completes once the receiver's balance
+      // covers the deposited amount — for a consolidation intermediate wallet
+      // that balance is overwhelmingly bridge-delivered funds.
+      let metadataPatch: StepResult["metadataPatch"];
+      if (step.chainId !== gnosis.id) {
+        const deliveries = state.metadata?.omnibridge?.deliveries ?? [];
+        if (!deliveries.some((d) => d.txHash === hash)) {
+          metadataPatch = {
+            omnibridge: {
+              ...state.metadata?.omnibridge,
+              deliveries: [
+                ...deliveries,
+                {
+                  txHash: hash,
+                  toAddress: step.outputToken.walletAddress,
+                  baselineUnits: "0",
+                  minDeliveredUnits: amount.toString(),
+                },
+              ],
+            },
+          };
+        }
+      }
+
+      return {
+        kind: "success",
+        result: {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          transactionHash: hash,
+          actualOutput: { ...step.outputToken, amount, provenance: step.id },
+          ...(metadataPatch ? { metadataPatch } : {}),
+        },
+      };
+    }
+    case "gnosis-claim": {
+      const claims = state.metadata?.omnibridge?.claims;
+      const amount =
+        claims && claims.length > 0
+          ? claims.reduce((sum, claim) => sum + BigInt(claim.amount), 0n)
+          : step.outputToken.amount;
+      return {
+        kind: "success",
+        result: {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          transactionHash: hash,
+          actualOutput: { ...step.outputToken, amount, provenance: step.id },
+        },
+      };
+    }
     case "shield": {
       // Same defensive discriminator as "bridge": the recorded hash must point
       // at the RailgunSmartWallet shield call, not the preceding ERC20 approve.
@@ -800,7 +894,8 @@ function remainingChainStepsForWallet(
     if (!foundCurrent) continue;
     if (planStep.chainId !== currentStep.chainId) continue;
     if (planStep.status === "success" || planStep.status === "skipped") continue;
-    if (planStep.type === "attestation" || planStep.type === "gas-topup-wait") continue;
+    if (planStep.type === "attestation" || planStep.type === "gas-topup-wait" || planStep.type === "gnosis-wait")
+      continue;
     const stepWallet = planStep.inputTokens[0]?.walletAddress;
     if (!stepWallet || !isAddressEqual(stepWallet, wallet)) continue;
     remaining.push(planStep);
@@ -851,6 +946,19 @@ export function estimateRemainingChainOps(currentStep: TransactionStep, state: C
       }
       case "shield":
         ops.push("erc20-approval", "shield");
+        break;
+      case "gnosis-bridge":
+        // Egress: approve + transmuter withdraw + transferAndCall; ingress:
+        // approve + relayTokensAndCall.
+        if (planStep.chainId === gnosis.id) {
+          ops.push("erc20-approval", "omnibridge-relay", "omnibridge-relay");
+        } else {
+          ops.push("erc20-approval", "omnibridge-relay");
+        }
+        break;
+      case "gnosis-claim":
+        // One executeSignatures per AMB message (one message per bridge step).
+        for (const _ of planStep.inputTokens) ops.push("omnibridge-claim");
         break;
     }
   }
@@ -1286,6 +1394,128 @@ async function executeStep(
       };
     }
 
+    case "gnosis-bridge": {
+      // Validate all input tokens are homogeneous before combining (same
+      // token/chain/wallet — mirrors the CCTP bridge case).
+      const first = step.inputTokens[0];
+      for (const token of step.inputTokens) {
+        if (
+          !isAddressEqual(token.token, first.token) ||
+          token.chainId !== first.chainId ||
+          !isAddressEqual(token.walletAddress, first.walletAddress)
+        ) {
+          throw new Error(`Cannot combine heterogeneous input tokens for gnosis-bridge step ${step.id}`);
+        }
+      }
+
+      const nonZeroTokens = filterZeroAmounts(step.inputTokens, step.id, "gnosis-bridge");
+      const totalAmount = nonZeroTokens.reduce((sum, t) => sum + t.amount, 0n);
+      const combinedInput = { ...nonZeroTokens[0], amount: totalAmount };
+
+      await validateInputBalances(step, state);
+
+      if (step.chainId === gnosis.id) {
+        // Egress: unwrap USDC.e and burn it into the home Omnibridge.
+        const [bridgeTx] = await executeOmnibridgeBurn(combinedInput, step.outputToken, sendCalls, step.retryHints);
+        return {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          actualOutput: { ...step.outputToken, amount: totalAmount, provenance: step.id },
+          transactionHash: bridgeTx,
+        };
+      }
+
+      // Ingress: deposit mainnet USDC through the transmuter; persist the
+      // delivery record (with pre-deposit baseline) for the wait step.
+      const [depositTx, delivery] = await executeOmnibridgeDeposit(
+        combinedInput,
+        step.outputToken,
+        sendCalls,
+        step.retryHints,
+      );
+      return {
+        stepId: step.id,
+        status: "success",
+        chainId: step.chainId,
+        actualOutput: { ...step.outputToken, amount: totalAmount, provenance: step.id },
+        transactionHash: depositTx,
+        metadataPatch: {
+          omnibridge: {
+            ...state.metadata?.omnibridge,
+            deliveries: [...(state.metadata?.omnibridge?.deliveries ?? []), delivery],
+          },
+        },
+      };
+    }
+
+    case "gnosis-wait": {
+      if (step.chainId === mainnet.id) {
+        // Egress: wait for the home AMB validators to sign the bridge
+        // messages, then persist the signed claims for the gnosis-claim step.
+        const bridgeStepIds = getProvenanceSteps(step);
+        const bridgeTxs = Array.from(bridgeStepIds)
+          .map((stepId) => state.results[stepId]?.transactionHash)
+          .filter((tx): tx is string => !!tx);
+
+        if (bridgeTxs.length === 0) {
+          throw new Error("No Omnibridge transactions found for signature collection");
+        }
+
+        const claims = await retrieveOmnibridgeClaims(bridgeTxs, undefined, (ready, total) =>
+          opts?.onStepProgress?.({ kind: "omnibridge", stepId: step.id, direction: "exit", ready, total }),
+        );
+
+        const actualAmount = claims.reduce((sum, claim) => sum + BigInt(claim.amount), 0n);
+        return {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          actualOutput: { ...step.outputToken, amount: actualAmount, provenance: step.id },
+          metadataPatch: { omnibridge: { ...state.metadata?.omnibridge, claims } },
+        };
+      }
+
+      // Ingress: watch each receiver's USDC.e balance on Gnosis until the
+      // validators mint the deposits (no claim transaction exists).
+      const deliveries = state.metadata?.omnibridge?.deliveries;
+      if (!deliveries || deliveries.length === 0) {
+        throw new Error("No Omnibridge deposits found to wait for");
+      }
+
+      await waitForOmnibridgeDelivery(deliveries, undefined, (ready, total) =>
+        opts?.onStepProgress?.({ kind: "omnibridge", stepId: step.id, direction: "enter", ready, total }),
+      );
+
+      const deliveredAmount = deliveries.reduce((sum, d) => sum + BigInt(d.minDeliveredUnits), 0n);
+      return {
+        stepId: step.id,
+        status: "success",
+        chainId: step.chainId,
+        actualOutput: { ...step.outputToken, amount: deliveredAmount, provenance: step.id },
+      };
+    }
+
+    case "gnosis-claim": {
+      const claims = state.metadata?.omnibridge?.claims;
+      if (!claims || claims.length === 0) {
+        throw new Error("No Omnibridge claims found");
+      }
+
+      // executeSignatures on the mainnet AMB; already-relayed messages are
+      // filtered inside, so retries are safe.
+      const [claimTx] = await executeOmnibridgeClaim(claims, step.outputToken, sendCalls, step.retryHints);
+
+      const actualAmount = claims.reduce((sum, claim) => sum + BigInt(claim.amount), 0n);
+      return {
+        stepId: step.id,
+        status: "success",
+        chainId: step.chainId,
+        actualOutput: { ...step.outputToken, amount: actualAmount, provenance: step.id },
+        transactionHash: claimTx,
+      };
+    }
+
     case "gas-topup-wait": {
       const refuels = state.metadata?.gasRefuels;
 
@@ -1443,6 +1673,16 @@ async function calculateStepOutput(
       return {
         ...step.outputToken,
         amount: totalClaimAmount,
+      };
+    }
+    case "gnosis-bridge":
+    case "gnosis-wait":
+    case "gnosis-claim": {
+      // The Omnibridge is fee-free 1:1: every leg outputs the sum of its inputs.
+      const totalAmount = updatedInputs.reduce((sum, t) => sum + t.amount, 0n);
+      return {
+        ...step.outputToken,
+        amount: totalAmount,
       };
     }
     case "transfer": {

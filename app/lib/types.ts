@@ -1,6 +1,7 @@
 import type { Address } from "viem";
 import type { Attestation } from "./cctp";
 import type { GasRefuelRecord } from "./gas-refuel";
+import type { OmnibridgeClaim, OmnibridgeDelivery } from "./omnibridge";
 
 // ============================================================================
 // Transaction Step Types (T001)
@@ -17,7 +18,10 @@ export type TransactionType =
   | "transfer" // Simple transfer (same token, same chain)
   | "gas-topup" // Send native token (Gas.zip, Delora fallback) to refuel destination chains
   | "gas-topup-wait" // Wait for refuel delivery on destination chains
-  | "shield"; // Deposit ERC20 into Railgun, credited to a private 0zk address
+  | "shield" // Deposit ERC20 into Railgun, credited to a private 0zk address
+  | "gnosis-bridge" // Omnibridge USDC between Gnosis and mainnet (either direction)
+  | "gnosis-wait" // Wait for AMB signatures (egress) or USDC.e delivery (ingress)
+  | "gnosis-claim"; // executeSignatures on mainnet to release Omnibridge USDC
 
 /**
  * Execution status of a transaction step
@@ -178,6 +182,10 @@ export interface ConsolidationState {
   metadata?: {
     attestations?: Attestation[];
     gasRefuels?: GasRefuelRecord[];
+    omnibridge?: {
+      claims?: OmnibridgeClaim[];
+      deliveries?: OmnibridgeDelivery[];
+    };
   };
 
   createdAt: number; // Timestamp
@@ -212,6 +220,7 @@ export const ERROR_CODES = {
   TIMEOUT: "TIMEOUT",
   TX_NOT_BROADCAST: "TX_NOT_BROADCAST",
   ATTESTATION_TIMEOUT: "ATTESTATION_TIMEOUT",
+  OMNIBRIDGE_TIMEOUT: "OMNIBRIDGE_TIMEOUT",
   GAS_TOPUP_TIMEOUT: "GAS_TOPUP_TIMEOUT",
   PLANNING_ERROR: "PLANNING_ERROR",
   UNSUPPORTED_ROUTE: "UNSUPPORTED_ROUTE",

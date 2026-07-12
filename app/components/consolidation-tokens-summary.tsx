@@ -123,7 +123,8 @@ function getFinalTokens(
       step.status === "success" &&
       step.type !== "attestation" &&
       step.type !== "gas-topup" &&
-      step.type !== "gas-topup-wait",
+      step.type !== "gas-topup-wait" &&
+      step.type !== "gnosis-wait",
   );
   const finalSteps = findFinalSteps(successfulSteps);
 

@@ -32,8 +32,15 @@ vi.mock("./gas-refuel", () => ({
 }));
 vi.mock("./gas-estimation", () => ({
   buildGasContext: vi.fn().mockResolvedValue({
-    maxFeePerGas: { 1: 20000000000n, 10: 1000000n, 137: 50000000000n, 42161: 100000000n },
-    nativeSymbol: { 1: "ETH", 10: "ETH", 137: "POL", 42161: "ETH" },
+    maxFeePerGas: {
+      1: 20000000000n,
+      10: 1000000n,
+      100: 1500000000n,
+      137: 50000000000n,
+      8453: 10000000n,
+      42161: 100000000n,
+    },
+    nativeSymbol: { 1: "ETH", 10: "ETH", 100: "XDAI", 137: "POL", 8453: "ETH", 42161: "ETH" },
   }),
   estimateChainGasCosts: vi.fn().mockResolvedValue({
     totalGasCost: 100000000000000n, // 0.0001 ETH - small enough to not interfere with tests
@@ -47,7 +54,7 @@ vi.mock("./gas-estimation", () => ({
   // estimateChainGasCosts mock's 0.0001 ETH magnitude).
   attachGasEstimates: vi.fn(async (steps: TransactionStep[]) => {
     for (const step of steps) {
-      if (step.type === "attestation" || step.type === "gas-topup-wait") continue;
+      if (step.type === "attestation" || step.type === "gas-topup-wait" || step.type === "gnosis-wait") continue;
       step.estimatedGas = {
         gasUnits: 5000n,
         maxFeePerGas: 20000000000n,
@@ -64,6 +71,7 @@ vi.mock("./gas-estimation", () => ({
   measureOpsGas: vi.fn().mockResolvedValue(500000000000000n), // 0.0005 ETH
   buildSwapLegSimOps: vi.fn(() => []),
   buildBridgeSimOps: vi.fn(() => []),
+  buildOmnibridgeSimOps: vi.fn(() => []),
   emptyPlanArtifacts: () => ({ swapLegs: new Map() }),
   formatGasCostNative: vi.fn((wei: bigint) => (Number(wei) / 1e18).toString()),
 }));
@@ -3021,6 +3029,327 @@ describe("planConsolidation", () => {
           [WALLET],
         ),
       ).rejects.toThrow(/bound to chain 1/);
+    });
+  });
+
+  describe("gnosis routes", () => {
+    // Gnosis has no CCTP: egress/ingress hop through Ethereum mainnet via the
+    // Omnibridge (gnosis-bridge / gnosis-wait / gnosis-claim steps).
+    const USDC_GNOSIS = "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0" as Address; // USDC.e
+    const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as Address;
+    const USDC_ARBITRUM = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831" as Address;
+    const WBTC_GNOSIS = "0x8e5bBbb09Ed1ebdE8674Cda39A0c169401db4252" as Address;
+    const WBTC_BASE = "0x0555E30da8f98308EdB960aa94C0Db47230d2B9c" as Address;
+    const GNO_GNOSIS = "0x9C58BAcC331c9aa871AFD802DB6379a98e80CEdb" as Address;
+
+    test("egress Gnosis → mainnet: swap, gnosis-bridge, gnosis-wait, gnosis-claim — no CCTP steps", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: WBTC_GNOSIS, amount: 50000n, chainId: 100, walletAddress: WALLET, symbol: "WBTC", decimals: 8 },
+      ];
+
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      // Swap WBTC → USDC.e on Gnosis ($50, above the $10 hop floor)
+      vi.mocked(getSwapQuote).mockResolvedValue({
+        token: USDC_GNOSIS,
+        amount: 50_000_000n,
+        chainId: 100,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      });
+
+      const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+      expect(result.map((s: TransactionStep) => s.type)).toEqual([
+        "swap",
+        "gnosis-bridge",
+        "gnosis-wait",
+        "gnosis-claim",
+      ]);
+      expect(result.map((s: TransactionStep) => s.chainId)).toEqual([100, 100, 1, 1]);
+
+      const [swapStep, gnosisBridge, , gnosisClaim] = result;
+      // The Omnibridge burn consumes the swap output at 1:1 into mainnet USDC at the hub wallet.
+      expect(gnosisBridge.inputTokens[0].provenance).toBe(swapStep.id);
+      expect(gnosisBridge.outputToken.token).toBe(USDC_ADDRESS);
+      expect(gnosisBridge.outputToken.chainId).toBe(1);
+      expect(gnosisBridge.outputToken.walletAddress).toBe(WALLET);
+      expect(gnosisBridge.outputToken.amount).toBe(50_000_000n); // fee-free 1:1
+      // Claim releases mainnet USDC — which IS the destination, so the plan ends here.
+      expect(gnosisClaim.outputToken.token).toBe(USDC_ADDRESS);
+      expect(gnosisClaim.outputToken.provenance).toBe(gnosisClaim.id);
+
+      // No CCTP anywhere: mainnet destination is reached by the Omnibridge alone.
+      expect(getBridgeFee).not.toHaveBeenCalled();
+    });
+
+    test("egress Gnosis + Optimism → Arbitrum: Omnibridge hop feeds a mainnet CCTP bridge", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: USDC_GNOSIS, amount: 50_000_000n, chainId: 100, walletAddress: WALLET, symbol: "USDC.e", decimals: 6 },
+        { token: USDC_OPTIMISM, amount: 20_000_000n, chainId: 10, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+      ];
+
+      const destinationToken = {
+        token: USDC_ARBITRUM,
+        chainId: 42161,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+      const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+      const types = result.map((s: TransactionStep) => s.type);
+
+      // Both sources are already USDC → no swaps; exactly one CCTP claim pipeline.
+      expect(types.filter((t) => t === "gnosis-bridge")).toHaveLength(1);
+      expect(types.filter((t) => t === "gnosis-wait")).toHaveLength(1);
+      expect(types.filter((t) => t === "gnosis-claim")).toHaveLength(1);
+      expect(types.filter((t) => t === "bridge")).toHaveLength(2);
+      expect(types.filter((t) => t === "attestation")).toHaveLength(1);
+      expect(types.filter((t) => t === "claim")).toHaveLength(1);
+      expect(result).toHaveLength(7);
+
+      // The gnosis triple is contiguous and precedes the CCTP bridges.
+      const gnosisBridgeIdx = types.indexOf("gnosis-bridge");
+      expect(types.slice(gnosisBridgeIdx, gnosisBridgeIdx + 3)).toEqual([
+        "gnosis-bridge",
+        "gnosis-wait",
+        "gnosis-claim",
+      ]);
+      expect(gnosisBridgeIdx + 2).toBeLessThan(types.indexOf("bridge"));
+
+      const gnosisBridge = result.find((s: TransactionStep) => s.type === "gnosis-bridge") as TransactionStep;
+      const gnosisClaim = result.find((s: TransactionStep) => s.type === "gnosis-claim") as TransactionStep;
+      expect(gnosisBridge.chainId).toBe(100);
+      expect(gnosisClaim.chainId).toBe(1);
+
+      // The claim output re-enters the normal CCTP flow: a mainnet bridge burns it.
+      const bridges = result.filter((s: TransactionStep) => s.type === "bridge");
+      const mainnetBridge = bridges.find((s) => s.chainId === 1);
+      const optimismBridge = bridges.find((s) => s.chainId === 10);
+      expect(mainnetBridge).toBeDefined();
+      expect(optimismBridge).toBeDefined();
+      expect(mainnetBridge?.inputTokens[0].provenance).toBe(gnosisClaim.id);
+      expect(mainnetBridge?.inputTokens[0].amount).toBe(50_000_000n);
+
+      // One attestation + one claim on the destination chain cover BOTH bridges.
+      const attestation = result.find((s: TransactionStep) => s.type === "attestation");
+      const claim = result.find((s: TransactionStep) => s.type === "claim");
+      expect(attestation?.chainId).toBe(42161);
+      expect(claim?.chainId).toBe(42161);
+      expect(attestation?.inputTokens).toHaveLength(2);
+      expect(claim?.outputToken.amount).toBe(70_000_000n);
+
+      // CCTP is never quoted for Gnosis itself — only for Optimism and the mainnet hub.
+      const feeSourceChains = vi.mocked(getBridgeFee).mock.calls.map((c) => c[1]);
+      expect(feeSourceChains).not.toContain(100);
+    });
+
+    test("ingress Base → Gnosis: CCTP converges on a mainnet hub, then the Omnibridge carries USDC.e home", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: WBTC_BASE, amount: 30000n, chainId: 8453, walletAddress: WALLET, symbol: "WBTC", decimals: 8 },
+      ];
+
+      // Destination is USDC.e itself, so the plan ends at the delivery watch.
+      const destinationToken = {
+        token: USDC_GNOSIS,
+        chainId: 100,
+        walletAddress: WALLET,
+        symbol: "USDC.e",
+        decimals: 6,
+      };
+
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      // Swap WBTC → USDC on Base ($30, above the hop floor)
+      vi.mocked(getSwapQuote).mockResolvedValue({
+        token: USDC_BASE,
+        amount: 30_000_000n,
+        chainId: 8453,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      });
+
+      const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+      expect(result.map((s: TransactionStep) => s.type)).toEqual([
+        "swap",
+        "bridge",
+        "attestation",
+        "claim",
+        "gnosis-bridge",
+        "gnosis-wait",
+      ]);
+      expect(result.map((s: TransactionStep) => s.chainId)).toEqual([8453, 8453, 1, 1, 1, 100]);
+
+      const [, bridge, , claim, gnosisBridge, gnosisWait] = result;
+      // The CCTP leg targets the mainnet hub, not the (CCTP-less) Gnosis destination.
+      expect(bridge.outputToken.chainId).toBe(1);
+      expect(bridge.outputToken.walletAddress).toBe(WALLET);
+      expect(claim.outputToken.chainId).toBe(1);
+      expect(claim.outputToken.walletAddress).toBe(WALLET);
+      // The Omnibridge deposit consumes the CCTP claim output and mints USDC.e on Gnosis.
+      expect(gnosisBridge.inputTokens[0].provenance).toBe(claim.id);
+      expect(gnosisBridge.outputToken.chainId).toBe(100);
+      expect(gnosisBridge.outputToken.token).toBe(USDC_GNOSIS);
+      expect(gnosisBridge.outputToken.amount).toBe(30_000_000n); // fee-free 1:1
+      expect(gnosisWait.outputToken.walletAddress).toBe(WALLET);
+    });
+
+    test("ingress mainnet + Base → Gnosis: mainnet USDC skips CCTP and joins the Omnibridge deposit", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: USDC_ADDRESS, amount: 30_000_000n, chainId: 1, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+        { token: USDC_BASE, amount: 20_000_000n, chainId: 8453, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+      ];
+
+      const destinationToken = {
+        token: USDC_GNOSIS,
+        chainId: 100,
+        walletAddress: WALLET,
+        symbol: "USDC.e",
+        decimals: 6,
+      };
+
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+      const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+      expect(result.map((s: TransactionStep) => s.type)).toEqual([
+        "bridge",
+        "attestation",
+        "claim",
+        "gnosis-bridge",
+        "gnosis-wait",
+      ]);
+
+      // Only Base gets a CCTP bridge; the mainnet USDC is already on the hub chain.
+      const bridges = result.filter((s: TransactionStep) => s.type === "bridge");
+      expect(bridges).toHaveLength(1);
+      expect(bridges[0].chainId).toBe(8453);
+      expect(bridges[0].inputTokens.every((t) => t.token !== USDC_ADDRESS)).toBe(true);
+
+      // The mainnet source USDC rides the Omnibridge deposit alongside the claim output.
+      const claim = result.find((s: TransactionStep) => s.type === "claim") as TransactionStep;
+      const gnosisBridge = result.find((s: TransactionStep) => s.type === "gnosis-bridge") as TransactionStep;
+      expect(gnosisBridge.chainId).toBe(1);
+      expect(gnosisBridge.inputTokens).toHaveLength(2);
+      const claimedInput = gnosisBridge.inputTokens.find((t) => t.provenance === claim.id);
+      const existingInput = gnosisBridge.inputTokens.find((t) => !t.provenance);
+      expect(claimedInput?.amount).toBe(20_000_000n);
+      expect(existingInput?.token).toBe(USDC_ADDRESS);
+      expect(existingInput?.amount).toBe(30_000_000n);
+
+      const gnosisWait = result.find((s: TransactionStep) => s.type === "gnosis-wait");
+      expect(gnosisWait?.chainId).toBe(100);
+      expect(gnosisWait?.outputToken.amount).toBe(50_000_000n);
+    });
+
+    test("Gnosis → Gnosis: pure same-chain plan, no Omnibridge or CCTP steps", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: USDC_GNOSIS, amount: 15_000_000n, chainId: 100, walletAddress: WALLET, symbol: "USDC.e", decimals: 6 },
+        { token: GNO_GNOSIS, amount: 10n ** 18n, chainId: 100, walletAddress: WALLET, symbol: "GNO", decimals: 18 },
+      ];
+
+      const destinationToken = {
+        token: WBTC_GNOSIS,
+        chainId: 100,
+        walletAddress: WALLET,
+        symbol: "WBTC",
+        decimals: 8,
+      };
+
+      vi.mocked(getSwapQuote).mockResolvedValue({
+        token: WBTC_GNOSIS,
+        amount: 8000n,
+        chainId: 100,
+        walletAddress: WALLET,
+        symbol: "WBTC",
+        decimals: 8,
+      });
+
+      const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+
+      expect(result.length).toBeGreaterThan(0);
+      for (const step of result) {
+        expect(["swap", "transfer"]).toContain(step.type);
+        expect(step.chainId).toBe(100);
+      }
+      expect(getBridgeFee).not.toHaveBeenCalled();
+    });
+
+    test("egress below the $10 absolute floor is rejected", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: USDC_GNOSIS, amount: 5_000_000n, chainId: 100, walletAddress: WALLET, symbol: "USDC.e", decimals: 6 },
+      ];
+
+      const destinationToken = {
+        token: USDC_ARBITRUM,
+        chainId: 42161,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(
+        /PlanningError.*Gnosis/,
+      );
+    });
+
+    test("gas-share floor: expensive mainnet hop raises the minimum (rejects $20, plans $60)", async () => {
+      const { fetchDeloraPrices } = await import("./api/delora");
+      const { estimateChainGasCosts } = await import("./gas-estimation");
+
+      // ETH at $4000, hop gas 0.0025 ETH → $10 hop gas → floor = $10 × 5 = $50.
+      vi.mocked(fetchDeloraPrices).mockResolvedValue(new Map([[`1:${zeroAddress}` as const, 4000]]));
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 2_500_000_000_000_000n, // 0.0025 ETH
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+      const destinationToken = {
+        token: USDC_ARBITRUM,
+        chainId: 42161,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+      const gnosisUsdc = (amount: bigint): TokenAmount[] => [
+        { token: USDC_GNOSIS, amount, chainId: 100, walletAddress: WALLET, symbol: "USDC.e", decimals: 6 },
+      ];
+
+      // $20 is above the absolute $10 floor but below the $50 gas-share floor.
+      await expect(planConsolidation(gnosisUsdc(20_000_000n), destinationToken, [WALLET])).rejects.toThrow(
+        /PlanningError.*Gnosis/,
+      );
+
+      // $60 clears the $50 floor and plans normally.
+      const plan = await planConsolidation(gnosisUsdc(60_000_000n), destinationToken, [WALLET]);
+      const types = plan.map((s: TransactionStep) => s.type);
+      expect(types).toContain("gnosis-bridge");
+      expect(types).toContain("gnosis-wait");
+      expect(types).toContain("gnosis-claim");
+      expect(types).toContain("bridge");
+
+      // Restore defaults for subsequent tests.
+      vi.mocked(fetchDeloraPrices).mockResolvedValue(new Map());
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
     });
   });
 });

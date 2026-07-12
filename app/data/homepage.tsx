@@ -19,7 +19,7 @@ export const FEATURES_CONTENT = {
   cards: [
     {
       title: "Seven Seas, One View",
-      description: "See all your tokens across 7 chains. No more wallet hopping.",
+      description: "See all your tokens across 8 chains. No more wallet hopping.",
       imageSrc: "/decorations/feature-card-1-light.svg",
       imageSrcDark: "/decorations/feature-card-1-dark.svg",
       imageAlt: "Multi-chain illustration",
@@ -49,7 +49,8 @@ export const FEATURES_CONTENT = {
     description: (
       <>
         Behind the magic: <strong>Circle's CCTPv2</strong> handles the bridges, <strong>Delora</strong> powers the
-        swaps. Both proven protocols trusted by the industry.
+        swaps, and the <strong>Gnosis Omnibridge</strong> carries treasures to and from Gnosis Chain. All proven
+        protocols trusted by the industry.
       </>
     ),
   },

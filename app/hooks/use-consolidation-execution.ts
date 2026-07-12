@@ -4,7 +4,7 @@ import { useWalletClient } from "wagmi";
 import { chains } from "~/data/supported-chains";
 import { executeConsolidationPlan, type StepProgressEvent } from "~/lib/execution";
 import { getNativeBalance } from "~/lib/gas";
-import { attestationStageMessage, chainNameOf, refuelStageMessage } from "~/lib/step-progress";
+import { attestationStageMessage, chainNameOf, omnibridgeStageMessage, refuelStageMessage } from "~/lib/step-progress";
 import type { ConsolidationState } from "~/lib/types";
 import { useConsolidationRecords } from "./use-consolidation-records";
 
@@ -25,9 +25,12 @@ export interface StepLiveProgress {
 export type LiveProgress = Record<string, StepLiveProgress>;
 
 /** Step types that have an observable wait we surface progress for. */
-const WAIT_STEP_TYPES = new Set(["gas-topup-wait", "attestation"]);
-const defaultStageFor = (type: string): string =>
-  type === "attestation" ? "Waiting for Circle attestation…" : "Delivering gas…";
+const WAIT_STEP_TYPES = new Set(["gas-topup-wait", "attestation", "gnosis-wait"]);
+const defaultStageFor = (type: string): string => {
+  if (type === "attestation") return "Waiting for Circle attestation…";
+  if (type === "gnosis-wait") return "Waiting for the Omnibridge…";
+  return "Delivering gas…";
+};
 
 interface UseConsolidationExecutionOptions {
   state: ConsolidationState | null;
@@ -62,6 +65,8 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
         byTx[e.txHash] = { fromChainId: e.fromChainId, toChainId: e.toChainId, delivered: e.delivered };
         refuelsRef.current[e.stepId] = byTx;
         stage = refuelStageMessage(Object.values(byTx));
+      } else if (e.kind === "omnibridge") {
+        stage = omnibridgeStageMessage(e.direction, e.ready, e.total);
       } else {
         stage = attestationStageMessage(e.received, e.total);
       }

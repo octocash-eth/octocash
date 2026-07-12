@@ -25,6 +25,10 @@ export const ERROR_MESSAGES: Record<ErrorCode, [string, string]> = {
     "Bridge attestation not received within 20 minutes",
     "The money may be stuck in CCTPv2, use the history page to resume the transaction.",
   ],
+  [ERROR_CODES.OMNIBRIDGE_TIMEOUT]: [
+    "Omnibridge transfer not confirmed in time",
+    "The bridge may still be processing. Retry to keep waiting, or use the history page to resume.",
+  ],
   [ERROR_CODES.GAS_TOPUP_TIMEOUT]: [
     "Gas delivery timed out",
     "The gas refuel may still be processing. Retry to check again.",
@@ -83,6 +87,8 @@ export function createTransactionError(
     code = ERROR_CODES.RPC_ERROR;
   } else if (messageIncludes("ATTESTATION_TIMEOUT")) {
     code = ERROR_CODES.ATTESTATION_TIMEOUT;
+  } else if (messageIncludes("OMNIBRIDGE_TIMEOUT")) {
+    code = ERROR_CODES.OMNIBRIDGE_TIMEOUT;
   } else if (messageIncludes("GAS_TOPUP_TIMEOUT")) {
     code = ERROR_CODES.GAS_TOPUP_TIMEOUT;
   } else if (messageIncludes("TIMEOUT") || messageIncludes("timed out")) {

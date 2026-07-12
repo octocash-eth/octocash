@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { gnosis } from "viem/chains";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
@@ -13,6 +14,7 @@ import {
 import { Input } from "~/components/ui/input";
 import { blockExplorers, supportedChains } from "~/data/supported-chains";
 import { useCCTPClaim } from "~/hooks/use-cctp-claim";
+import { useOmnibridgeClaim } from "~/hooks/use-omnibridge-claim";
 
 // This maps the explorer URL (both Etherscan and Blockscout) to the chain ID.
 const explorerUrls: Array<[string, number]> = [
@@ -49,6 +51,7 @@ export function ManualClaimDialog({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { claim } = useCCTPClaim();
+  const { claim: claimOmnibridge } = useOmnibridgeClaim();
   const txUrlId = useId();
 
   // Tracks the in-flight claim so Cancel / dialog dismiss / unmount can
@@ -95,9 +98,14 @@ export function ManualClaimDialog({
       if (!tx || !chainId) {
         return;
       }
-      const { mintTx } = await claim(tx, chainId, controller.signal);
+      // Gnosis burns go through the Omnibridge (no CCTP there); everything
+      // else is a CCTP burn claimed via Circle attestations.
+      const claimTx =
+        chainId === gnosis.id
+          ? (await claimOmnibridge(tx, controller.signal)).claimTx
+          : (await claim(tx, chainId, controller.signal)).mintTx;
 
-      if (!mintTx) {
+      if (!claimTx) {
         setSubmitError("USDC was already claimed.");
         return;
       }

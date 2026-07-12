@@ -1,5 +1,5 @@
 import { http } from "viem";
-import { arbitrum, base, linea, mainnet, optimism, polygon, unichain } from "viem/chains";
+import { arbitrum, base, gnosis, linea, mainnet, optimism, polygon, unichain } from "viem/chains";
 
 export const chains = {
   [mainnet.id]: mainnet,
@@ -9,6 +9,7 @@ export const chains = {
   [polygon.id]: polygon,
   [unichain.id]: unichain,
   [linea.id]: linea,
+  [gnosis.id]: gnosis,
 };
 
 export const transports = import.meta.env.VITE_ALCHEMY_API_KEY
@@ -20,6 +21,7 @@ export const transports = import.meta.env.VITE_ALCHEMY_API_KEY
       [polygon.id]: http(`https://polygon-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
       [unichain.id]: http(`https://unichain-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
       [linea.id]: http(`https://linea-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
+      [gnosis.id]: http(`https://gnosis-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_API_KEY}`),
     }
   : import.meta.env.VITE_DRPC_API_KEY
     ? {
@@ -30,6 +32,7 @@ export const transports = import.meta.env.VITE_ALCHEMY_API_KEY
         [polygon.id]: http(`https://lb.drpc.live/polygon/${import.meta.env.VITE_DRPC_API_KEY}`),
         [unichain.id]: http(`https://lb.drpc.live/unichain/${import.meta.env.VITE_DRPC_API_KEY}`),
         [linea.id]: http(`https://lb.drpc.live/linea/${import.meta.env.VITE_DRPC_API_KEY}`),
+        [gnosis.id]: http(`https://lb.drpc.live/gnosis/${import.meta.env.VITE_DRPC_API_KEY}`),
       }
     : undefined;
 
@@ -49,6 +52,7 @@ export const blockExplorers = {
   [polygon.id]: "https://polygon.blockscout.com",
   [unichain.id]: "https://unichain.blockscout.com",
   [linea.id]: "https://explorer.linea.build",
+  [gnosis.id]: "https://gnosis.blockscout.com",
 };
 
 // Mapping of chain IDs to Zerion chain identifiers
@@ -60,4 +64,5 @@ export const chainIdToZerionId: Record<number, string> = {
   [polygon.id]: "polygon",
   [unichain.id]: "unichain",
   [linea.id]: "linea",
+  [gnosis.id]: "xdai",
 };

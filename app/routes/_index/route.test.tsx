@@ -314,12 +314,20 @@ describe("Section Components - Integration tests", () => {
       expect(screen.getByText(FEATURES_CONTENT.trustedTech.title)).toBeInTheDocument();
       expect(screen.getByText(/Circle's CCTPv2/)).toBeInTheDocument();
       expect(screen.getByText(/Delora/)).toBeInTheDocument();
+      expect(screen.getByText(/Gnosis Omnibridge/)).toBeInTheDocument();
     });
 
     test("renders trusted tech logos for light and dark modes", () => {
-      render(<FeaturesSection />);
-      const logos = screen.getAllByAltText("Circle CCTP and Delora logos");
-      expect(logos).toHaveLength(2); // One for light, one for dark
+      const { container } = render(<FeaturesSection />);
+      // The logos are decorative (alt="") with a light and a dark variant per
+      // provider, toggled via Tailwind's dark: classes.
+      const srcs = Array.from(container.querySelectorAll("img")).map((img) => img.getAttribute("src"));
+      for (const provider of ["circle", "delora"]) {
+        expect(srcs).toContain(`/other-icons/${provider}-light.webp`);
+        expect(srcs).toContain(`/other-icons/${provider}-dark.webp`);
+      }
+      expect(srcs).toContain("/other-icons/gnosis-light.webp");
+      expect(srcs).toContain("/other-icons/gnosis-dark.webp");
     });
 
     test("renders coral decoration", () => {

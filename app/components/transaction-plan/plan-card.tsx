@@ -195,6 +195,9 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
         </>
       );
     }
+    // A gnosis-bridge renders exactly like a CCTP bridge: source/destination
+    // chains and wallets are read from the step itself.
+    case "gnosis-bridge":
     case "bridge": {
       const inputToken = step.inputTokens[0];
       const destChain = step.outputToken.chainId
@@ -231,6 +234,16 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
           <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />
         </>
       );
+    case "gnosis-wait":
+      return (
+        <>
+          <span className="text-foreground">
+            {isPast ? "Waited for" : isExecuting ? "Waiting for" : "Wait for"} the Omnibridge
+          </span>{" "}
+          <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />
+        </>
+      );
+    case "gnosis-claim":
     case "claim": {
       const outputToken = result?.actualOutput ?? step.outputToken;
       return (

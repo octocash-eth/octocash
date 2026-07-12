@@ -79,6 +79,24 @@ export default function FeaturesSection() {
                 loading="lazy"
                 decoding="async"
               />
+              <img
+                src="/other-icons/gnosis-light.webp"
+                alt=""
+                width={784}
+                height={205}
+                className="h-12 w-auto dark:hidden"
+                loading="lazy"
+                decoding="async"
+              />
+              <img
+                src="/other-icons/gnosis-dark.webp"
+                alt=""
+                width={784}
+                height={205}
+                className="h-12 w-auto hidden dark:block"
+                loading="lazy"
+                decoding="async"
+              />
             </div>
           </CardContent>
         </Card>

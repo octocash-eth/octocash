@@ -3,7 +3,7 @@ import * as React from "react";
 import type { Address } from "viem";
 import { erc20Abi, getAddress, isAddress, isAddressEqual, zeroAddress } from "viem";
 import { usePublicClient } from "wagmi";
-import { ETH, POL, USDC, WBTC } from "~/data/token-contracts";
+import { ETH, POL, USDC, WBTC, XDAI } from "~/data/token-contracts";
 import { Combobox, type ComboboxOption } from "../combobox";
 import { TokenLabel } from "./token-label";
 
@@ -142,12 +142,14 @@ function useTokenMetadata(chainId: number, addresses: Address[]) {
 export function getDefaultTokenOptions(chainId: number): ComboboxOption[] {
   const tokens: Array<{ address: Address; symbol: string; name: string; decimals: number }> = [];
 
-  // Add USDC if available for this chain
+  // Add USDC if available for this chain (Gnosis has no native Circle USDC —
+  // its canonical token is the bridged USDC.e).
   if (USDC[chainId]) {
+    const isGnosis = chainId === 100;
     tokens.push({
       address: USDC[chainId],
-      symbol: "USDC",
-      name: "USD Coin",
+      symbol: isGnosis ? "USDC.e" : "USDC",
+      name: isGnosis ? "Bridged USDC" : "USD Coin",
       decimals: 6,
     });
   }
@@ -168,6 +170,16 @@ export function getDefaultTokenOptions(chainId: number): ComboboxOption[] {
       address: POL[chainId],
       symbol: "POL",
       name: "Polygon Token",
+      decimals: 18,
+    });
+  }
+
+  // Add xDAI if available for this chain (Gnosis native token)
+  if (XDAI[chainId]) {
+    tokens.push({
+      address: XDAI[chainId],
+      symbol: "XDAI",
+      name: "xDAI",
       decimals: 18,
     });
   }

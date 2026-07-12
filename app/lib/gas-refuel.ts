@@ -56,6 +56,7 @@ export interface GasRefuelRecord {
 const MIN_DELORA_TARGET_WEI: Record<string, bigint> = {
   ETH: 1_200_000_000_000_000n, // ~0.0012 ETH (≈ $1.8–5 across regimes)
   POL: 8_000_000_000_000_000_000n, // ~8 POL (≈ $1.2–5 across regimes)
+  XDAI: 1_500_000_000_000_000_000n, // ~1.5 xDAI (≈ $1.50, stable)
 };
 
 /**
@@ -67,6 +68,7 @@ const MIN_DELORA_TARGET_WEI: Record<string, bigint> = {
 const MIN_GASZIP_TARGET_WEI: Record<string, bigint> = {
   ETH: 200_000_000_000_000n, // ~0.0002 ETH (≈ $0.30–0.80 across regimes)
   POL: 2_000_000_000_000_000_000n, // ~2 POL    (≈ $0.30–1.00 across regimes)
+  XDAI: 400_000_000_000_000_000n, // ~0.4 xDAI (≈ $0.40, stable)
 };
 
 function flooredTarget(toChainId: number, targetWei: bigint, floors: Record<string, bigint>): bigint {

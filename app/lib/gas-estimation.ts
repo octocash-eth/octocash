@@ -12,7 +12,9 @@ import {
   parseAbiParameters,
   zeroAddress,
 } from "viem";
+import { gnosis, mainnet } from "viem/chains";
 import { chainIdToDomain, tokenMessenger } from "~/data/cctp-contracts";
+import { FOREIGN_OMNIBRIDGE, HOME_OMNIBRIDGE, USDC_ON_XDAI, USDC_TRANSMUTER } from "~/data/omnibridge-contracts";
 import { chains } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
 import type { DeloraSwapLeg } from "./delora";
@@ -33,7 +35,9 @@ export type OperationType =
   | "transfer-native"
   | "transfer-erc20"
   | "gas-topup-leg"
-  | "shield";
+  | "shield"
+  | "omnibridge-relay"
+  | "omnibridge-claim";
 
 /**
  * Per-operation gas unit budgets: the terminal rung of the estimation ladder,
@@ -60,6 +64,12 @@ const GAS_BUDGETS: Record<OperationType, bigint> = {
   // Railgun shield(): commitment hashing + merkle-tree insertion on-chain.
   // Observed single-ERC20 shields run ~350–500k; budget conservatively.
   shield: 600_000n,
+  // One Omnibridge bridging call: transmuter withdraw/deposit, transferAndCall
+  // into the home mediator, or relayTokensAndCall on the foreign mediator.
+  "omnibridge-relay": 350_000n,
+  // executeSignatures on the mainnet AMB (N validator sig checks + the token
+  // mediator's unlock). Observed claims run ~220-315k; budget with headroom.
+  "omnibridge-claim": 350_000n,
 };
 
 /** Multiplier applied to raw gas cost. 130 = +30%. */
@@ -113,6 +123,7 @@ const PRIORITY_FEE_PERCENTILE = 75;
 const PRIORITY_FEE_FLOOR: Record<number, bigint> = {
   1: 1_000_000_000n, // mainnet — 1 gwei
   137: 30_000_000_000n, // polygon — 30 gwei (validator min ≈ 25 gwei)
+  100: 1_000_000_000n, // gnosis — 1 gwei (xDAI ≈ $1, so this is negligible)
 };
 
 const PRIORITY_FEE_FLOOR_DEFAULT = 1n;
@@ -434,12 +445,15 @@ async function simulateOperationGas(
       case "cctp-claim":
       case "gas-topup-leg":
       case "shield":
+      case "omnibridge-relay":
+      case "omnibridge-claim":
         // Not simulatable as a lone eth_estimateGas call: swaps need their
         // approval mined first (they're covered by the eth_simulateV1 batch
         // upstream via the retained quote calldata), CCTP claim needs the
         // attestation message, the gas-topup leg's refuel transaction
-        // is quoted at execution, and the shield note requires a wallet
-        // signature at execution.
+        // is quoted at execution, the shield note requires a wallet
+        // signature at execution, and the Omnibridge ops likewise depend on
+        // in-batch approvals (relay) or unknown signature blobs (claim).
         return null;
 
       case "transfer-native": {
@@ -674,6 +688,74 @@ export function buildBridgeSimOps(
 }
 
 /**
+ * Builds the Omnibridge SimOps for a `gnosis-bridge` step: on Gnosis the
+ * egress triple (approve transmuter, unwrap USDC.e, `transferAndCall` into the
+ * home mediator), on mainnet the ingress pair (approve, `relayTokensAndCall`
+ * through the transmuter). All calldata is known at planning time, so
+ * `eth_simulateV1` can measure the real cost.
+ */
+export function buildOmnibridgeSimOps(chainId: number, receiver: Address, amount: bigint): SimOp[] {
+  if (chainId === gnosis.id) {
+    return [
+      {
+        op: "erc20-approval",
+        call: {
+          to: USDC_ADDRESSES[gnosis.id],
+          data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [USDC_TRANSMUTER, amount] }),
+        },
+      },
+      {
+        op: "omnibridge-relay",
+        call: {
+          to: USDC_TRANSMUTER,
+          data: encodeFunctionData({
+            abi: parseAbi(["function withdraw(uint256 amount)"]),
+            functionName: "withdraw",
+            args: [amount],
+          }),
+        },
+      },
+      {
+        op: "omnibridge-relay",
+        call: {
+          to: USDC_ON_XDAI,
+          data: encodeFunctionData({
+            abi: parseAbi(["function transferAndCall(address to, uint256 value, bytes data) returns (bool)"]),
+            functionName: "transferAndCall",
+            args: [HOME_OMNIBRIDGE, amount, receiver],
+          }),
+        },
+      },
+    ];
+  }
+  return [
+    {
+      op: "erc20-approval",
+      call: {
+        to: USDC_ADDRESSES[mainnet.id],
+        data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [FOREIGN_OMNIBRIDGE, amount] }),
+      },
+    },
+    {
+      op: "omnibridge-relay",
+      call: {
+        to: FOREIGN_OMNIBRIDGE,
+        data: encodeFunctionData({
+          abi: parseAbi(["function relayTokensAndCall(address token, address receiver, uint256 value, bytes data)"]),
+          functionName: "relayTokensAndCall",
+          args: [
+            USDC_ADDRESSES[mainnet.id],
+            USDC_TRANSMUTER,
+            amount,
+            encodeAbiParameters([{ type: "address" }], [receiver]),
+          ],
+        }),
+      },
+    },
+  ];
+}
+
+/**
  * Builds the ordered simulate-able operations for one step. Swap steps use the
  * Delora legs retained in {@link PlanArtifacts} (approval + verbatim quote
  * calldata); bridge steps encode approve + `depositForBurn`; transfers and the
@@ -694,6 +776,11 @@ function buildStepSimOps(step: TransactionStep, artifacts: PlanArtifacts): SimOp
     case "bridge": {
       const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
       return buildBridgeSimOps(step.chainId, step.outputToken.chainId, step.outputToken.walletAddress, totalAmount);
+    }
+
+    case "gnosis-bridge": {
+      const totalAmount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+      return buildOmnibridgeSimOps(step.chainId, step.outputToken.walletAddress, totalAmount);
     }
 
     case "transfer": {
@@ -737,8 +824,9 @@ function buildStepSimOps(step: TransactionStep, artifacts: PlanArtifacts): SimOp
     }
 
     default:
-      // claim (attestation calldata unknown), gas-topup (refuel transaction
-      // quoted at execution), and wait steps: ladder/budget only.
+      // claim / gnosis-claim (attestation and signature calldata unknown),
+      // gas-topup (refuel transaction quoted at execution), and wait steps:
+      // ladder/budget only.
       return getStepOperations(step).map((op) => ({ op }));
   }
 }
@@ -968,7 +1056,7 @@ export async function attachGasEstimates(
     { chainId: number; wallet: Address; entries: { step: TransactionStep; simOps: SimOp[] }[] }
   >();
   for (const step of steps) {
-    if (step.type === "attestation" || step.type === "gas-topup-wait") continue;
+    if (step.type === "attestation" || step.type === "gas-topup-wait" || step.type === "gnosis-wait") continue;
     const wallet = step.inputTokens[0]?.walletAddress;
     if (!wallet) continue;
     const key = `${step.chainId}:${getAddress(wallet)}`;
@@ -1012,6 +1100,17 @@ function getStepOperations(step: TransactionStep): OperationType[] {
       return ["cctp-approval", "cctp-burn"];
     case "claim":
       return ["cctp-claim"];
+    case "gnosis-bridge":
+      // Egress: approve + transmuter withdraw + transferAndCall; ingress:
+      // approve + relayTokensAndCall (matches buildOmnibridgeSimOps).
+      return step.chainId === gnosis.id
+        ? ["erc20-approval", "omnibridge-relay", "omnibridge-relay"]
+        : ["erc20-approval", "omnibridge-relay"];
+    case "gnosis-claim":
+      // One executeSignatures per AMB message (one message per bridge step).
+      return step.inputTokens.map(() => "omnibridge-claim" as OperationType);
+    case "gnosis-wait":
+      return [];
     case "transfer": {
       const firstToken = step.inputTokens[0];
       if (!firstToken) return [];

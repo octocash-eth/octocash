@@ -16,6 +16,7 @@ vi.mock("./delora", async () => {
   };
 });
 vi.mock("./cctp");
+vi.mock("./omnibridge");
 // Keep SendCallsError real so `instanceof` checks in the executor work;
 // only mock the runtime entrypoints.
 vi.mock("./send-calls", async () => {
@@ -48,6 +49,7 @@ vi.mock("./gas", () => ({
 }));
 
 import { estimateGas, waitForTransactionReceipt } from "viem/actions";
+import { FOREIGN_OMNIBRIDGE, USDC_ON_XDAI } from "~/data/omnibridge-contracts";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import { executeDeloraSwap, getSwapQuote } from "./delora";
 import {
@@ -60,6 +62,15 @@ import {
 import { getNativeBalance } from "./gas";
 import { estimateOperationsForChainWallet, type OperationType } from "./gas-estimation";
 import { getGasRefuelQuote, waitForRefuelDelivery } from "./gas-refuel";
+import {
+  executeOmnibridgeBurn,
+  executeOmnibridgeClaim,
+  executeOmnibridgeDeposit,
+  type OmnibridgeClaim,
+  type OmnibridgeDelivery,
+  retrieveOmnibridgeClaims,
+  waitForOmnibridgeDelivery,
+} from "./omnibridge";
 import { getPublicClient } from "./public-client";
 import { prepareSendCalls } from "./send-calls";
 
@@ -3446,6 +3457,28 @@ describe("validateInputBalances", () => {
     expect(readContract).not.toHaveBeenCalled();
   });
 
+  test("skips entirely for `gnosis-wait` and `gnosis-claim` steps (inputs are in-flight bridge outputs)", async () => {
+    const gnosisWait: TransactionStep = {
+      id: "gnosis-wait-1",
+      type: "gnosis-wait",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1_000_000n, 1, { walletAddress: WALLET })],
+      outputToken: makeToken(USDC_ADDRESS, 1n, 1),
+    };
+    const gnosisClaim: TransactionStep = {
+      ...gnosisWait,
+      id: "gnosis-claim-1",
+      type: "gnosis-claim",
+    };
+    const readContract = vi.fn().mockResolvedValue(0n);
+    vi.mocked(getPublicClient).mockReturnValue({ readContract } as never);
+
+    await expect(validateInputBalances(gnosisWait, baseState())).resolves.toBeUndefined();
+    await expect(validateInputBalances(gnosisClaim, baseState())).resolves.toBeUndefined();
+    expect(readContract).not.toHaveBeenCalled();
+  });
+
   test("propagates non-rate-limit RPC errors so the executor pauses instead of paying gas for a guaranteed revert", async () => {
     const step: TransactionStep = {
       id: "swap-rpc",
@@ -3562,4 +3595,571 @@ describe("planning/execution op estimator equivalence", () => {
       expect(sorted(executionOps)).toEqual(sorted(planningOps));
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Gnosis Omnibridge steps (gnosis-bridge / gnosis-wait / gnosis-claim)
+// ---------------------------------------------------------------------------
+
+describe("gnosis omnibridge steps", () => {
+  const USDC_MAINNET = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+  const USDCE_GNOSIS = "0x2a22f9C3b484c3629090FeED35F17Ff8F88f76F0" as Address;
+  const GNOSIS = 100;
+
+  const makeClaim = (amount: string, sourceTxHash = "0xgnosisburn"): OmnibridgeClaim => ({
+    messageId: `0x${"11".repeat(32)}`,
+    message: "0xdead",
+    signatures: "0xbeef",
+    amount,
+    sourceTxHash,
+  });
+
+  const makeDelivery = (minDeliveredUnits: string, txHash = "0xgnosisdeposit"): OmnibridgeDelivery => ({
+    txHash,
+    toAddress: WALLET,
+    baselineUnits: "0",
+    minDeliveredUnits,
+  });
+
+  let mockState: ConsolidationState;
+  let mockWalletClient: WalletClient<HttpTransport, Chain, Account>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    mockWalletClient = {
+      account: { address: WALLET } as Account,
+      chain: { id: 1 } as Chain,
+      switchChain: vi.fn(),
+      addChain: vi.fn(),
+    } as unknown as WalletClient<HttpTransport, Chain, Account>;
+
+    // Earlier suites replace the module-level getPublicClient implementation
+    // with per-test stubs (mockReturnValue survives vi.clearAllMocks). Restore
+    // the "wallet holds plenty" default so preflight balance checks pass.
+    vi.mocked(getPublicClient).mockImplementation(
+      () => ({ readContract: vi.fn().mockResolvedValue(2n ** 128n) }) as never,
+    );
+    vi.mocked(getNativeBalance).mockResolvedValue(2n ** 128n);
+
+    vi.mocked(getSwapQuote).mockImplementation(async (_inputs, outputToken) => {
+      const ot = outputToken as TokenAmount;
+      return { ...ot, amount: ot.amount ?? 0n };
+    });
+    vi.mocked(executeDeloraSwap).mockResolvedValue({ amount: 1000000n, transactionHash: "0xswap" });
+    vi.mocked(prepareSendCalls).mockReturnValue(vi.fn().mockResolvedValue(["0xtxhash", []]));
+
+    vi.mocked(executeOmnibridgeBurn).mockResolvedValue(["0xgnosisburn", GNOSIS]);
+    vi.mocked(executeOmnibridgeDeposit).mockResolvedValue(["0xgnosisdeposit", makeDelivery("1000000")]);
+    vi.mocked(retrieveOmnibridgeClaims).mockResolvedValue([makeClaim("1000000")]);
+    vi.mocked(waitForOmnibridgeDelivery).mockResolvedValue(undefined);
+    vi.mocked(executeOmnibridgeClaim).mockResolvedValue(["0xgnosisclaim", []]);
+
+    mockState = {
+      id: "test-gnosis",
+      plan: [],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_MAINNET, 0n, 1),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+  });
+
+  test("gnosis-bridge egress combines inputs and bridges via executeOmnibridgeBurn", async () => {
+    const step: TransactionStep = {
+      id: "gb-1",
+      type: "gnosis-bridge",
+      status: "pending",
+      chainId: GNOSIS,
+      inputTokens: [makeToken(USDCE_GNOSIS, 600000n, GNOSIS), makeToken(USDCE_GNOSIS, 400000n, GNOSIS)],
+      outputToken: makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gb-1" }),
+    };
+    mockState.plan = [step];
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.status).toBe("completed");
+    expect(executeOmnibridgeBurn).toHaveBeenCalledWith(
+      expect.objectContaining({ token: USDCE_GNOSIS, chainId: GNOSIS, amount: 1000000n }),
+      expect.objectContaining({ token: USDC_MAINNET, chainId: 1 }),
+      expect.any(Function),
+      undefined,
+    );
+    const result = finalState.results["gb-1"];
+    expect(result.status).toBe("success");
+    expect(result.transactionHash).toBe("0xgnosisburn");
+    expect(result.actualOutput?.amount).toBe(1000000n);
+    expect(result.actualOutput?.provenance).toBe("gb-1");
+  });
+
+  test("gnosis-bridge ingress appends the delivery record to existing metadata deliveries", async () => {
+    const existing = makeDelivery("111111", "0xolddeposit");
+    const fresh = makeDelivery("1000000", "0xnewdeposit");
+    vi.mocked(executeOmnibridgeDeposit).mockResolvedValueOnce(["0xnewdeposit", fresh]);
+
+    const step: TransactionStep = {
+      id: "gb-in-1",
+      type: "gnosis-bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_MAINNET, 1000000n, 1)],
+      outputToken: makeToken(USDCE_GNOSIS, 1000000n, GNOSIS, { provenance: "gb-in-1" }),
+    };
+    mockState.plan = [step];
+    mockState.metadata = { omnibridge: { deliveries: [existing] } };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.status).toBe("completed");
+    expect(executeOmnibridgeDeposit).toHaveBeenCalledWith(
+      expect.objectContaining({ token: USDC_MAINNET, chainId: 1, amount: 1000000n }),
+      expect.objectContaining({ token: USDCE_GNOSIS, chainId: GNOSIS }),
+      expect.any(Function),
+      undefined,
+    );
+    expect(finalState.results["gb-in-1"].status).toBe("success");
+    expect(finalState.results["gb-in-1"].transactionHash).toBe("0xnewdeposit");
+    const deliveries = finalState.metadata?.omnibridge?.deliveries;
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries?.[0]).toEqual(existing);
+    expect(deliveries?.[1]).toEqual(fresh);
+  });
+
+  test("gnosis-wait egress retrieves signed claims for every bridge tx and sums their amounts", async () => {
+    const claims = [makeClaim("600000", "0xgb1"), makeClaim("400000", "0xgb2")];
+    vi.mocked(retrieveOmnibridgeClaims).mockResolvedValueOnce(claims);
+
+    const waitStep: TransactionStep = {
+      id: "gw-1",
+      type: "gnosis-wait",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken(USDC_MAINNET, 600000n, 1, { provenance: "gb-1" }),
+        makeToken(USDC_MAINNET, 400000n, 1, { provenance: "gb-2" }),
+      ],
+      outputToken: makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gw-1" }),
+    };
+    mockState.plan = [waitStep];
+    mockState.results = {
+      "gb-1": { stepId: "gb-1", status: "success", chainId: GNOSIS, transactionHash: "0xgb1" },
+      "gb-2": { stepId: "gb-2", status: "success", chainId: GNOSIS, transactionHash: "0xgb2" },
+    };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(retrieveOmnibridgeClaims).toHaveBeenCalledWith(["0xgb1", "0xgb2"], undefined, expect.any(Function));
+    expect(finalState.results["gw-1"].status).toBe("success");
+    expect(finalState.results["gw-1"].actualOutput?.amount).toBe(1000000n);
+    expect(finalState.metadata?.omnibridge?.claims).toEqual(claims);
+  });
+
+  test("gnosis-wait egress fails when no Omnibridge transactions are found", async () => {
+    const waitStep: TransactionStep = {
+      id: "gw-1",
+      type: "gnosis-wait",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gb-1" })],
+      outputToken: makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gw-1" }),
+    };
+    mockState.plan = [waitStep];
+    // Bridge result exists but carries no transactionHash — nothing to wait on.
+    mockState.results = {
+      "gb-1": { stepId: "gb-1", status: "success", chainId: GNOSIS },
+    };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.status).toBe("paused");
+    expect(finalState.results["gw-1"].status).toBe("failed");
+    const details = finalState.results["gw-1"].error?.details;
+    expect(details).toBeInstanceOf(Error);
+    expect((details as Error).message).toContain("No Omnibridge transactions found");
+    expect(retrieveOmnibridgeClaims).not.toHaveBeenCalled();
+  });
+
+  test("gnosis-wait ingress waits on the stored deliveries and sums minDeliveredUnits", async () => {
+    const deliveries = [makeDelivery("300000", "0xd1"), makeDelivery("200000", "0xd2")];
+
+    const waitStep: TransactionStep = {
+      id: "gw-in-1",
+      type: "gnosis-wait",
+      status: "pending",
+      chainId: GNOSIS,
+      inputTokens: [makeToken(USDCE_GNOSIS, 500000n, GNOSIS, { provenance: "gb-in-1" })],
+      outputToken: makeToken(USDCE_GNOSIS, 500000n, GNOSIS, { provenance: "gw-in-1" }),
+    };
+    mockState.plan = [waitStep];
+    mockState.results = {
+      "gb-in-1": { stepId: "gb-in-1", status: "success", chainId: 1, transactionHash: "0xd1" },
+    };
+    mockState.metadata = { omnibridge: { deliveries } };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(waitForOmnibridgeDelivery).toHaveBeenCalledWith(deliveries, undefined, expect.any(Function));
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["gw-in-1"].status).toBe("success");
+    expect(finalState.results["gw-in-1"].actualOutput?.amount).toBe(500000n);
+  });
+
+  test("gnosis-wait ingress fails when no deliveries are stored in metadata", async () => {
+    const waitStep: TransactionStep = {
+      id: "gw-in-1",
+      type: "gnosis-wait",
+      status: "pending",
+      chainId: GNOSIS,
+      inputTokens: [makeToken(USDCE_GNOSIS, 500000n, GNOSIS)],
+      outputToken: makeToken(USDCE_GNOSIS, 500000n, GNOSIS, { provenance: "gw-in-1" }),
+    };
+    mockState.plan = [waitStep];
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.status).toBe("paused");
+    expect(finalState.results["gw-in-1"].status).toBe("failed");
+    const details = finalState.results["gw-in-1"].error?.details;
+    expect(details).toBeInstanceOf(Error);
+    expect((details as Error).message).toContain("No Omnibridge deposits found");
+    expect(waitForOmnibridgeDelivery).not.toHaveBeenCalled();
+  });
+
+  test("gnosis-claim executes the stored claims and sums their amounts", async () => {
+    const claims = [makeClaim("600000", "0xgb1"), makeClaim("400000", "0xgb2")];
+
+    const claimStep: TransactionStep = {
+      id: "gc-1",
+      type: "gnosis-claim",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_MAINNET, 1000000n, 1)],
+      outputToken: makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gc-1" }),
+    };
+    mockState.plan = [claimStep];
+    mockState.metadata = { omnibridge: { claims } };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(executeOmnibridgeClaim).toHaveBeenCalledWith(
+      claims,
+      expect.objectContaining({ token: USDC_MAINNET, chainId: 1 }),
+      expect.any(Function),
+      undefined,
+    );
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["gc-1"].status).toBe("success");
+    expect(finalState.results["gc-1"].transactionHash).toBe("0xgnosisclaim");
+    expect(finalState.results["gc-1"].actualOutput?.amount).toBe(1000000n);
+  });
+
+  test("gnosis-claim fails when no claims are stored in metadata", async () => {
+    const claimStep: TransactionStep = {
+      id: "gc-1",
+      type: "gnosis-claim",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_MAINNET, 1000000n, 1)],
+      outputToken: makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gc-1" }),
+    };
+    mockState.plan = [claimStep];
+    mockState.metadata = { omnibridge: { claims: [] } };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.status).toBe("paused");
+    expect(finalState.results["gc-1"].status).toBe("failed");
+    const details = finalState.results["gc-1"].error?.details;
+    expect(details).toBeInstanceOf(Error);
+    expect((details as Error).message).toContain("No Omnibridge claims found");
+    expect(executeOmnibridgeClaim).not.toHaveBeenCalled();
+  });
+
+  test("failed gnosis-bridge cascades skips through gnosis-wait and gnosis-claim", async () => {
+    const bridge: TransactionStep = {
+      id: "gb-1",
+      type: "gnosis-bridge",
+      status: "pending",
+      chainId: GNOSIS,
+      inputTokens: [makeToken(USDCE_GNOSIS, 1000000n, GNOSIS)],
+      outputToken: makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gb-1" }),
+    };
+    const wait: TransactionStep = {
+      id: "gw-1",
+      type: "gnosis-wait",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gb-1" })],
+      outputToken: makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gw-1" }),
+    };
+    const claim: TransactionStep = {
+      id: "gc-1",
+      type: "gnosis-claim",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gw-1" })],
+      outputToken: makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gc-1" }),
+    };
+    mockState.plan = [bridge, wait, claim];
+
+    vi.mocked(executeOmnibridgeBurn).mockRejectedValueOnce(new Error("Omnibridge burn failed"));
+
+    const { finalValue: finalState, skips } = await executeWithSkips(mockState, mockWalletClient);
+
+    expect(skips).toBe(1);
+    expect(finalState.status).toBe("partial");
+    expect(finalState.results["gb-1"].status).toBe("skipped");
+    expect(finalState.results["gw-1"].status).toBe("skipped");
+    expect(finalState.results["gw-1"].skipReason).toContain("gb-1");
+    expect(finalState.results["gc-1"].status).toBe("skipped");
+    expect(finalState.results["gc-1"].skipReason).toContain("gw-1");
+    expect(retrieveOmnibridgeClaims).not.toHaveBeenCalled();
+    expect(executeOmnibridgeClaim).not.toHaveBeenCalled();
+  });
+
+  test("reconciles an egress gnosis-bridge when the prior tx targeted the legacy USDC token", async () => {
+    const step: TransactionStep = {
+      id: "gb-1",
+      type: "gnosis-bridge",
+      status: "pending",
+      chainId: GNOSIS,
+      inputTokens: [makeToken(USDCE_GNOSIS, 600000n, GNOSIS), makeToken(USDCE_GNOSIS, 400000n, GNOSIS)],
+      outputToken: makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gb-1" }),
+      transactionHash: "0xpriorburn",
+    };
+    mockState.plan = [step];
+
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockResolvedValue({ status: "success", to: USDC_ON_XDAI, logs: [] }),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub for verify-before-retry
+    } as any);
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(executeOmnibridgeBurn).not.toHaveBeenCalled();
+    expect(finalState.results["gb-1"].status).toBe("success");
+    expect(finalState.results["gb-1"].transactionHash).toBe("0xpriorburn");
+    expect(finalState.results["gb-1"].actualOutput?.amount).toBe(1000000n);
+  });
+
+  test("egress gnosis-bridge retry does not falsely reconcile from a receipt to another contract", async () => {
+    // Mirrors the CCTP approve-hash bug: a stale hash pointing at (e.g.) the
+    // transmuter withdraw must be treated as unrelated — fresh broadcast with
+    // retryHints cleared, not a short-circuit success.
+    const step: TransactionStep = {
+      id: "gb-1",
+      type: "gnosis-bridge",
+      status: "pending",
+      chainId: GNOSIS,
+      inputTokens: [makeToken(USDCE_GNOSIS, 1000000n, GNOSIS)],
+      outputToken: makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gb-1" }),
+      transactionHash: "0xapprove",
+      retryHints: { nonce: 7, maxFeePerGas: 10000000000n, maxPriorityFeePerGas: 500000000n },
+    };
+    mockState.plan = [step];
+
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockResolvedValue({
+        status: "success",
+        to: "0x0392A2F5Ac47388945D8c84212469F545fAE52B2", // the transmuter, not the legacy USDC token
+        logs: [],
+      }),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub for verify-before-retry
+    } as any);
+
+    const burnRetryHintsSeen: unknown[] = [];
+    vi.mocked(executeOmnibridgeBurn).mockImplementationOnce(async (_in, _out, _send, retryHints) => {
+      burnRetryHintsSeen.push(retryHints);
+      return ["0xfreshburn", GNOSIS];
+    });
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(executeOmnibridgeBurn).toHaveBeenCalledTimes(1);
+    expect(finalState.results["gb-1"].status).toBe("success");
+    expect(finalState.results["gb-1"].transactionHash).toBe("0xfreshburn");
+    // Fresh nonce, not the leaked prior nonce.
+    expect(burnRetryHintsSeen[0]).toBeUndefined();
+  });
+
+  test("reconciles an ingress gnosis-bridge when the prior tx targeted the foreign Omnibridge", async () => {
+    const step: TransactionStep = {
+      id: "gb-in-1",
+      type: "gnosis-bridge",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_MAINNET, 700000n, 1), makeToken(USDC_MAINNET, 300000n, 1)],
+      outputToken: makeToken(USDCE_GNOSIS, 1000000n, GNOSIS, { provenance: "gb-in-1" }),
+      transactionHash: "0xpriordeposit",
+    };
+    mockState.plan = [step];
+
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockResolvedValue({ status: "success", to: FOREIGN_OMNIBRIDGE, logs: [] }),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub for verify-before-retry
+    } as any);
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(executeOmnibridgeDeposit).not.toHaveBeenCalled();
+    expect(finalState.results["gb-in-1"].status).toBe("success");
+    expect(finalState.results["gb-in-1"].transactionHash).toBe("0xpriordeposit");
+    expect(finalState.results["gb-in-1"].actualOutput?.amount).toBe(1000000n);
+  });
+
+  test("recalculation cascades actual swap output through gnosis-bridge, gnosis-wait, gnosis-claim", async () => {
+    const WXDAI = "0xe91D153E0b41518A2Ce8Dd3D7944Fa863463a97d" as Address;
+
+    const swap: TransactionStep = {
+      id: "step-1",
+      type: "swap",
+      status: "pending",
+      chainId: GNOSIS,
+      inputTokens: [makeToken(WXDAI, 2000000000000000000n, GNOSIS, { symbol: "WXDAI", decimals: 18 })],
+      outputToken: makeToken(USDCE_GNOSIS, 2000000n, GNOSIS, { provenance: "step-1" }),
+      quotedAt: Date.now(),
+    };
+    const bridge: TransactionStep = {
+      id: "step-2",
+      type: "gnosis-bridge",
+      status: "pending",
+      chainId: GNOSIS,
+      inputTokens: [makeToken(USDCE_GNOSIS, 2000000n, GNOSIS, { provenance: "step-1" })],
+      outputToken: makeToken(USDC_MAINNET, 2000000n, 1, { provenance: "step-2" }),
+    };
+    const wait: TransactionStep = {
+      id: "step-3",
+      type: "gnosis-wait",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_MAINNET, 2000000n, 1, { provenance: "step-2" })],
+      outputToken: makeToken(USDC_MAINNET, 2000000n, 1, { provenance: "step-3" }),
+    };
+    const claim: TransactionStep = {
+      id: "step-4",
+      type: "gnosis-claim",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_MAINNET, 2000000n, 1, { provenance: "step-3" })],
+      outputToken: makeToken(USDC_MAINNET, 2000000n, 1, { provenance: "step-4" }),
+    };
+    mockState.plan = [swap, bridge, wait, claim];
+
+    // Swap lands 2.5 USDC instead of the planned 2.0.
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 2500000n, transactionHash: "0xswap1" });
+    vi.mocked(retrieveOmnibridgeClaims).mockResolvedValueOnce([makeClaim("2500000")]);
+
+    const { values, finalValue: finalState } = await consumeGenerator(
+      executeConsolidationPlan(mockState, mockWalletClient),
+    );
+
+    // Right after the swap succeeds, every downstream Omnibridge leg reflects
+    // the new sum (fee-free 1:1 cascade).
+    const afterSwap = values.find((s) => s.results["step-1"]?.status === "success" && !s.results["step-2"]);
+    expect(afterSwap).toBeDefined();
+    expect(afterSwap?.plan[1].inputTokens[0].amount).toBe(2500000n);
+    expect(afterSwap?.plan[1].outputToken.amount).toBe(2500000n);
+    expect(afterSwap?.plan[2].inputTokens[0].amount).toBe(2500000n);
+    expect(afterSwap?.plan[2].outputToken.amount).toBe(2500000n);
+    expect(afterSwap?.plan[3].inputTokens[0].amount).toBe(2500000n);
+    expect(afterSwap?.plan[3].outputToken.amount).toBe(2500000n);
+
+    // The bridge burns the recalculated amount and the whole plan completes.
+    expect(executeOmnibridgeBurn).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2500000n }),
+      expect.anything(),
+      expect.any(Function),
+      undefined,
+    );
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-4"].actualOutput?.amount).toBe(2500000n);
+  });
+
+  test("gnosis-wait egress emits omnibridge exit progress via opts.onStepProgress", async () => {
+    const waitStep: TransactionStep = {
+      id: "gw-1",
+      type: "gnosis-wait",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [
+        makeToken(USDC_MAINNET, 600000n, 1, { provenance: "gb-1" }),
+        makeToken(USDC_MAINNET, 400000n, 1, { provenance: "gb-2" }),
+      ],
+      outputToken: makeToken(USDC_MAINNET, 1000000n, 1, { provenance: "gw-1" }),
+    };
+    mockState.plan = [waitStep];
+    mockState.results = {
+      "gb-1": { stepId: "gb-1", status: "success", chainId: GNOSIS, transactionHash: "0xgb1" },
+      "gb-2": { stepId: "gb-2", status: "success", chainId: GNOSIS, transactionHash: "0xgb2" },
+    };
+
+    vi.mocked(retrieveOmnibridgeClaims).mockImplementationOnce(async (_txs, _signal, onProgress) => {
+      onProgress?.(0, 2);
+      onProgress?.(1, 2);
+      onProgress?.(2, 2);
+      return [makeClaim("600000", "0xgb1"), makeClaim("400000", "0xgb2")];
+    });
+
+    const events: unknown[] = [];
+    const { finalValue: finalState } = await consumeGenerator(
+      executeConsolidationPlan(mockState, mockWalletClient, { onStepProgress: (e) => events.push(e) }),
+    );
+
+    expect(finalState.results["gw-1"].status).toBe("success");
+    expect(events).toContainEqual({ kind: "omnibridge", stepId: "gw-1", direction: "exit", ready: 0, total: 2 });
+    expect(events).toContainEqual({ kind: "omnibridge", stepId: "gw-1", direction: "exit", ready: 2, total: 2 });
+  });
+});
+
+describe("estimateRemainingChainOps - omnibridge ops", () => {
+  const USDC_MAINNET = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+  const USDCE_GNOSIS = "0x2a22f9C3b484c3629090FeED35F17Ff8F88f76F0" as Address;
+
+  test("gnosis-bridge egress on Gnosis budgets an approval + two relay calls", () => {
+    const step = makeStep({
+      id: "gb",
+      type: "gnosis-bridge",
+      status: "pending",
+      inputTokens: [makeToken(USDCE_GNOSIS, 1_000_000n, 100)],
+      outputToken: makeToken(USDC_MAINNET, 1_000_000n, 1),
+    });
+    const state = makeState({ plan: [step], sourceTokens: [], destinationToken: makeToken(USDC_MAINNET, 0n, 1) });
+
+    expect(estimateRemainingChainOps(step, state)).toEqual(["erc20-approval", "omnibridge-relay", "omnibridge-relay"]);
+  });
+
+  test("gnosis-bridge ingress on mainnet budgets an approval + one relay call", () => {
+    const step = makeStep({
+      id: "gb-in",
+      type: "gnosis-bridge",
+      status: "pending",
+      inputTokens: [makeToken(USDC_MAINNET, 1_000_000n, 1)],
+      outputToken: makeToken(USDCE_GNOSIS, 1_000_000n, 100),
+    });
+    const state = makeState({ plan: [step], sourceTokens: [], destinationToken: makeToken(USDCE_GNOSIS, 0n, 100) });
+
+    expect(estimateRemainingChainOps(step, state)).toEqual(["erc20-approval", "omnibridge-relay"]);
+  });
+
+  test("gnosis-claim budgets one omnibridge-claim per input message", () => {
+    const step = makeStep({
+      id: "gc",
+      type: "gnosis-claim",
+      status: "pending",
+      inputTokens: [
+        makeToken(USDC_MAINNET, 600_000n, 1, { provenance: "gw-a" }),
+        makeToken(USDC_MAINNET, 400_000n, 1, { provenance: "gw-b" }),
+      ],
+      outputToken: makeToken(USDC_MAINNET, 1_000_000n, 1),
+    });
+    const state = makeState({ plan: [step], sourceTokens: [], destinationToken: makeToken(USDC_MAINNET, 0n, 1) });
+
+    expect(estimateRemainingChainOps(step, state)).toEqual(["omnibridge-claim", "omnibridge-claim"]);
+  });
 });

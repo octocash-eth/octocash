@@ -6,10 +6,17 @@ import ManualClaimDialog from "./manual-claim-dialog";
 
 // Mock hooks
 const mockClaim = vi.fn();
+const mockOmnibridgeClaim = vi.fn();
 
 vi.mock("~/hooks/use-cctp-claim", () => ({
   useCCTPClaim: vi.fn(() => ({
     claim: mockClaim,
+  })),
+}));
+
+vi.mock("~/hooks/use-omnibridge-claim", () => ({
+  useOmnibridgeClaim: vi.fn(() => ({
+    claim: mockOmnibridgeClaim,
   })),
 }));
 
@@ -114,12 +121,14 @@ vi.mock("~/data/supported-chains", () => ({
   blockExplorers: {
     8453: "https://basescan.org",
     42161: "https://arbiscan.io",
+    100: "https://gnosis.blockscout.com",
   },
 }));
 
 describe("ManualClaimDialog", () => {
   beforeEach(() => {
     mockClaim.mockClear();
+    mockOmnibridgeClaim.mockClear();
   });
 
   test("renders trigger element", () => {
@@ -356,6 +365,32 @@ describe("ManualClaimDialog", () => {
     await vi.waitFor(() => {
       expect(mockClaim).toHaveBeenCalledWith("0xghi789", 8453, expect.any(AbortSignal));
     });
+  });
+
+  test("routes Gnosis URLs to the Omnibridge claim instead of CCTP", async () => {
+    const user = userEvent.setup();
+
+    mockOmnibridgeClaim.mockResolvedValue({
+      claimTx: "0xclaim123",
+      logs: [],
+    });
+
+    render(
+      <ManualClaimDialog>
+        <button type="button">Open</button>
+      </ManualClaimDialog>,
+    );
+
+    const input = screen.getByTestId("transaction-url-input");
+    const submitButton = screen.getByText("Claim");
+
+    await user.type(input, "https://gnosis.blockscout.com/tx/0xburn100");
+    await user.click(submitButton);
+
+    await vi.waitFor(() => {
+      expect(mockOmnibridgeClaim).toHaveBeenCalledWith("0xburn100", expect.any(AbortSignal));
+    });
+    expect(mockClaim).not.toHaveBeenCalled();
   });
 
   test("shows 'Claiming…' text while submitting", async () => {

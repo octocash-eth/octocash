@@ -35,3 +35,17 @@ export function attestationStageMessage(received: number, total: number): string
   if (total <= 1) return "Waiting for Circle attestation…";
   return `Attestations received ${received}/${total}`;
 }
+
+/**
+ * Friendly line for an Omnibridge wait. Exit = Gnosis→mainnet signature
+ * collection on the AMB; enter = watching for the validators to mint USDC.e
+ * on Gnosis (delivery is confirmed by the receiver's balance — ground truth).
+ */
+export function omnibridgeStageMessage(direction: "exit" | "enter", ready: number, total: number): string {
+  if (direction === "exit") {
+    if (total <= 1) return "Waiting for Omnibridge signatures…";
+    return `Omnibridge messages signed ${ready}/${total}`;
+  }
+  if (total <= 1) return "Waiting for USDC on Gnosis…";
+  return `Omnibridge deliveries received ${ready}/${total}`;
+}

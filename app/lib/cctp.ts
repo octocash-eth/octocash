@@ -58,7 +58,7 @@ export class AttestationTimeoutError extends Error {
  * Error in some runtimes (older Node, jsdom) — the standardized way to
  * detect cancellation is by the `name` / numeric `code` fields.
  */
-const isAbortError = (e: unknown): boolean => {
+export const isAbortError = (e: unknown): boolean => {
   if (!e || typeof e !== "object") return false;
   const name = (e as { name?: unknown }).name;
   const code = (e as { code?: unknown }).code;
@@ -73,7 +73,7 @@ const isAbortError = (e: unknown): boolean => {
  * 5s before the next loop top notices `signal.aborted` — which is long
  * enough to feel broken in the manual-claim dialog Cancel flow.
  */
-const abortableSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+export const abortableSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
   new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
