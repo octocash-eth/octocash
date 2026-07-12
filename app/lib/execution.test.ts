@@ -869,7 +869,9 @@ describe("executeConsolidationPlan", () => {
     const WBTC_ADDRESS = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599" as Address;
 
     // Complex: swap1 (WETH->USDC) + swap2 (DAI->USDC) -> swap3 (USDC->WBTC)
-    // Test that final swap gets updated amounts from both sources
+    // Test that final swap gets updated amounts from both sources.
+    // quotedAt is fresh so the pre-execution refresh doesn't consume the
+    // getSwapQuote once-mock reserved for step-3's recalculation.
     const step1: TransactionStep = {
       id: "step-1",
       type: "swap",
@@ -877,6 +879,7 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(WETH_ADDRESS, 1000000000000000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 2000000000n, 1, { provenance: "step-1" }),
+      quotedAt: Date.now(),
     };
 
     const step2: TransactionStep = {
@@ -886,6 +889,7 @@ describe("executeConsolidationPlan", () => {
       chainId: 1,
       inputTokens: [makeToken(DAI_ADDRESS, 1000000000000000000000n, 1)],
       outputToken: makeToken(USDC_ADDRESS, 1000000000n, 1, { provenance: "step-2" }),
+      quotedAt: Date.now(),
     };
 
     const step3: TransactionStep = {
@@ -898,6 +902,7 @@ describe("executeConsolidationPlan", () => {
         makeToken(USDC_ADDRESS, 1000000000n, 1, { provenance: "step-2" }),
       ],
       outputToken: makeToken(WBTC_ADDRESS, 10000000n, 1),
+      quotedAt: Date.now(),
     };
 
     mockState.plan = [step1, step2, step3];
@@ -2765,8 +2770,9 @@ describe("Additional edge cases for complete coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
     });
 
-    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 850000n, 1));
-    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 850000n, transactionHash: "0xswap" });
+    // Fresh quote 0.44% below plan — within the 0.5% drift tolerance.
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 896000n, 1));
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 896000n, transactionHash: "0xswap" });
 
     const { finalValue: finalState, values: states } = await consumeGenerator(
       executeConsolidationPlan(state, mockWalletClient),
@@ -2775,7 +2781,7 @@ describe("Additional edge cases for complete coverage", () => {
     expect(getSwapQuote).toHaveBeenCalledWith(step1.inputTokens, step1.outputToken);
 
     const stateAfterRefresh = states.find(
-      (s) => s.plan[0].outputToken.amount === 850000n && s.plan[0].status === "pending",
+      (s) => s.plan[0].outputToken.amount === 896000n && s.plan[0].status === "pending",
     );
     expect(stateAfterRefresh).toBeDefined();
 
@@ -2803,8 +2809,9 @@ describe("Additional edge cases for complete coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
     });
 
-    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 820000n, 1));
-    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 820000n, transactionHash: "0xswap" });
+    // Fresh quote within the drift tolerance (0.33% below plan).
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 897000n, 1));
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 897000n, transactionHash: "0xswap" });
 
     const { finalValue: finalState, values: states } = await consumeGenerator(
       executeConsolidationPlan(state, mockWalletClient),
@@ -2813,7 +2820,7 @@ describe("Additional edge cases for complete coverage", () => {
     expect(getSwapQuote).toHaveBeenCalledWith(step1.inputTokens, step1.outputToken);
 
     const stateAfterRefresh = states.find(
-      (s) => s.plan[0].outputToken.amount === 820000n && s.plan[0].status === "pending",
+      (s) => s.plan[0].outputToken.amount === 897000n && s.plan[0].status === "pending",
     );
     expect(stateAfterRefresh).toBeDefined();
 
@@ -2908,8 +2915,9 @@ describe("Additional edge cases for complete coverage", () => {
       destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
     });
 
-    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 750000n, 1));
-    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 750000n, transactionHash: "0xswap" });
+    // Within-tolerance refresh (0.44% below plan) — adopted, execution continues.
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 896000n, 1));
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 896000n, transactionHash: "0xswap" });
 
     const { finalValue: finalState, values: states } = await consumeGenerator(
       executeConsolidationPlan(state, mockWalletClient),
@@ -2917,15 +2925,90 @@ describe("Additional edge cases for complete coverage", () => {
 
     // After refresh, step 2's input should be recalculated
     const stateAfterRefresh = states.find(
-      (s) => s.plan[0].outputToken.amount === 750000n && s.plan[0].status === "pending",
+      (s) => s.plan[0].outputToken.amount === 896000n && s.plan[0].status === "pending",
     );
     expect(stateAfterRefresh).toBeDefined();
 
     // Step 2's input should be updated to match the refreshed quote
-    expect(stateAfterRefresh?.plan[1].inputTokens[0].amount).toBe(750000n);
-    expect(stateAfterRefresh?.plan[1].outputToken.amount).toBe(750000n); // Bridge 1:1
+    expect(stateAfterRefresh?.plan[1].inputTokens[0].amount).toBe(896000n);
+    expect(stateAfterRefresh?.plan[1].outputToken.amount).toBe(896000n); // Bridge 1:1
 
     expect(finalState.status).toBe("completed");
+  });
+
+  test("quote drift beyond slippage tolerance pauses with the plan updated to fresh amounts", async () => {
+    const step1 = makeStep({
+      id: "step-1",
+      status: "pending",
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: { ...makeToken(USDC_ADDRESS, 900000n, 1), provenance: "step-1" },
+      quotedAt: Date.now() - 60 * 1000,
+    });
+
+    const step2 = makeStep({
+      id: "step-2",
+      type: "bridge",
+      status: "pending",
+      inputTokens: [makeToken(USDC_ADDRESS, 900000n, 1, { provenance: "step-1" })],
+      outputToken: makeToken(USDC_ADDRESS, 900000n, 10),
+    });
+
+    const state = makeState({
+      plan: [step1, step2],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 10),
+    });
+
+    // 16.7% below plan — far beyond the 0.5% tolerance.
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 750000n, 1));
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    // No transaction was sent — the pause happens before the wallet prompt.
+    expect(executeDeloraSwap).not.toHaveBeenCalled();
+
+    // Paused with the step failed as a slippage error, awaiting explicit retry.
+    expect(finalState.status).toBe("paused");
+    expect(finalState.plan[0].status).toBe("failed");
+    expect(finalState.results["step-1"].status).toBe("failed");
+    expect(finalState.results["step-1"].error?.code).toBe("SLIPPAGE_EXCEEDED");
+
+    // The paused plan shows reality: fresh amounts adopted and cascaded, so an
+    // explicit retry proceeds on the new baseline.
+    expect(finalState.plan[0].outputToken.amount).toBe(750000n);
+    expect(finalState.plan[1].inputTokens[0].amount).toBe(750000n);
+    expect(finalState.plan[1].outputToken.amount).toBe(750000n);
+  });
+
+  test("improved quote (above plan) is adopted and never pauses", async () => {
+    const step1 = makeStep({
+      id: "step-1",
+      status: "pending",
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1)],
+      outputToken: makeToken(USDC_ADDRESS, 900000n, 1),
+      quotedAt: Date.now() - 60 * 1000,
+    });
+
+    const state = makeState({
+      plan: [step1],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_ADDRESS, 0n, 1),
+    });
+
+    // 11% above plan.
+    vi.mocked(getSwapQuote).mockResolvedValueOnce(makeToken(USDC_ADDRESS, 999000n, 1));
+    vi.mocked(executeDeloraSwap).mockResolvedValueOnce({ amount: 999000n, transactionHash: "0xswap" });
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("completed");
+    expect(finalState.results["step-1"].status).toBe("success");
   });
 
   // ==========================================================================

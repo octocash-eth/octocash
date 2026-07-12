@@ -1,11 +1,11 @@
 import type { Account, Address, Chain, Hex, HttpTransport, WalletClient } from "viem";
-import { type Call, encodeFunctionData, getAddress, isAddressEqual, parseAbi, zeroAddress } from "viem";
+import { type Call, encodeFunctionData, formatUnits, getAddress, isAddressEqual, parseAbi, zeroAddress } from "viem";
 import { estimateGas, waitForTransactionReceipt } from "viem/actions";
 import { tokenMessenger } from "~/data/cctp-contracts";
 import { BPS_DENOMINATOR, RAILGUN_PROXY, RAILGUN_SHIELD_FEE_BPS } from "~/data/railgun";
 import { chains, transports } from "~/data/supported-chains";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
-import { deriveSwapOutputAmount, executeDeloraSwap, getSwapQuote } from "./delora";
+import { deriveSwapOutputAmount, executeDeloraSwap, getSwapQuote, SLIPPAGE_LIMIT } from "./delora";
 import { createTransactionError } from "./errors";
 import { getNativeBalance } from "./gas";
 import {
@@ -28,6 +28,48 @@ import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } fro
  */
 /** Quotes younger than this are reused; older ones get a fresh Delora round-trip. */
 const SWAP_QUOTE_STALE_MS = 10_000;
+
+/**
+ * Quote-drift tolerance in basis points, single-sourced from the on-chain
+ * slippage limit ({@link SLIPPAGE_LIMIT}): a fresh quote may under-deliver the
+ * plan's expected output by at most this fraction before execution pauses.
+ */
+const QUOTE_DRIFT_TOLERANCE_BPS = BigInt(Math.round(SLIPPAGE_LIMIT * 10_000));
+
+/**
+ * Thrown (into the step's error, pausing the plan) when the fresh pre-swap
+ * quote under-delivers the plan's expected output by more than the slippage
+ * tolerance. The plan is updated with the fresh amounts BEFORE pausing, so the
+ * user reviews reality and an explicit retry proceeds on the new baseline.
+ *
+ * The message deliberately contains "slippage" so `createTransactionError`
+ * classifies it as SLIPPAGE_EXCEEDED ("Price changed too much / Retry for new
+ * quote") — and deliberately NOT the `ExternalAPIError:` prefix, which would
+ * trigger the plan-error auto-retry loop; drift needs explicit user consent.
+ */
+export class QuoteDriftError extends Error {
+  override name = "QuoteDriftError" as const;
+  stepId: string;
+  plannedAmount: bigint;
+  freshAmount: bigint;
+  driftBps: number;
+  toleranceBps: number;
+  constructor(step: TransactionStep, plannedAmount: bigint, freshAmount: bigint) {
+    const { decimals, symbol } = step.outputToken;
+    const driftBps = plannedAmount > 0n ? Number(((plannedAmount - freshAmount) * 10_000n) / plannedAmount) : 0;
+    super(
+      `Swap quote moved beyond the slippage tolerance: the plan expected at least ` +
+        `${formatUnits(plannedAmount, decimals)} ${symbol}, but a fresh quote returns ` +
+        `${formatUnits(freshAmount, decimals)} ${symbol} (${(driftBps / 100).toFixed(2)}% less). ` +
+        `The plan has been updated with current quotes — review it and retry to continue.`,
+    );
+    this.stepId = step.id;
+    this.plannedAmount = plannedAmount;
+    this.freshAmount = freshAmount;
+    this.driftBps = driftBps;
+    this.toleranceBps = Number(QUOTE_DRIFT_TOLERANCE_BPS);
+  }
+}
 
 export class InsufficientInputBalanceError extends Error {
   override name = "InsufficientInputBalanceError" as const;
@@ -187,9 +229,20 @@ export async function* executeConsolidationPlan(
     // an extra Delora round-trip on rapid retry/skip cycles — quotes don't
     // meaningfully drift on that timescale, and each skip saves a unit of
     // Delora's per-IP rate-limit quota.
+    //
+    // Drift policy (time passes between planning and execution, and between
+    // steps): a fresh quote within the slippage tolerance is adopted and
+    // execution continues; a fresh quote below `planned × (1 − tolerance)` is
+    // ALSO adopted (the paused plan must show reality, and the on-chain
+    // minOutputAmount floor would otherwise protect only the degraded quote)
+    // but the step fails with QuoteDriftError and the plan pauses for an
+    // explicit user retry on the new baseline.
     if (step.type === "swap" && (step.quotedAt === undefined || Date.now() - step.quotedAt >= SWAP_QUOTE_STALE_MS)) {
       const refreshedStep = await refreshSwapQuote(step);
       if (refreshedStep.outputToken.amount !== step.outputToken.amount) {
+        const plannedAmount = step.outputToken.amount;
+        const freshAmount = refreshedStep.outputToken.amount;
+
         // Quote changed - update plan and recalculate downstream steps
         workingState.plan = [...workingState.plan];
         workingState.plan[i] = refreshedStep;
@@ -198,6 +251,28 @@ export async function* executeConsolidationPlan(
         const { plan } = await recalculatePlan(workingState, i, refreshedStep.outputToken);
         workingState.plan = plan;
         workingState.updatedAt = Date.now();
+
+        const driftFloor = plannedAmount - (plannedAmount * QUOTE_DRIFT_TOLERANCE_BPS) / 10_000n;
+        if (freshAmount < driftFloor) {
+          const txError = createTransactionError(new QuoteDriftError(refreshedStep, plannedAmount, freshAmount));
+          const failedStep = { ...workingState.plan[i], status: "failed" as const, error: txError };
+          workingState.plan = [...workingState.plan];
+          workingState.plan[i] = failedStep;
+          workingState.results = {
+            ...workingState.results,
+            [failedStep.id]: {
+              stepId: failedStep.id,
+              status: "failed",
+              chainId: failedStep.chainId,
+              error: txError,
+            },
+          };
+          workingState.status = "paused";
+          workingState.currentStepIndex = i;
+          workingState.updatedAt = Date.now();
+          yield structuredClone(workingState);
+          return;
+        }
 
         // Yield state after quote refresh so UI updates with new estimates
         yield structuredClone(workingState);
@@ -624,7 +699,11 @@ async function refreshSwapQuote(step: TransactionStep): Promise<TransactionStep>
       },
       quotedAt: Date.now(),
     };
-  } catch {
+  } catch (error) {
+    // Transient re-quote failure: proceed on the planned numbers — the swap's
+    // on-chain minOutputAmount floor (from the execution-time quote) still
+    // protects the funds. Rate limits surface later via executeDeloraSwap.
+    console.warn("[execution] swap quote refresh failed; proceeding with planned amounts", error);
     return step;
   }
 }
@@ -633,6 +712,11 @@ async function refreshSwapQuote(step: TransactionStep): Promise<TransactionStep>
  * Re-estimates gas at execution time and adjusts the native token amount if the
  * planned amount can no longer be afforded (e.g. gas prices rose since planning).
  * Only intervenes when adjustedNativeAmount < selectedAmount.
+ *
+ * Prefers the plan's per-step `estimatedGas` units (measured via
+ * `eth_simulateV1` at planning time) repriced at the current fee; falls back
+ * to the static shape-based budgets when any remaining step lacks an estimate
+ * (e.g. plans persisted before estimates existed).
  */
 async function adjustNativeTokenForGas(
   tokens: [TokenAmount, ...TokenAmount[]],
@@ -645,16 +729,24 @@ async function adjustNativeTokenForGas(
   const nativeToken = tokens[nativeIdx];
   const chainId = step.chainId;
 
-  // Estimate gas for remaining operations on this chain
-  const remainingOps = estimateRemainingChainOps(step, state);
-  if (remainingOps.length === 0) return tokens;
+  // Remaining unfinished gas-consuming steps this wallet signs on this chain
+  // (including the current one).
+  const remainingSteps = remainingChainStepsForWallet(step, state, nativeToken.walletAddress);
+  if (remainingSteps.length === 0) return tokens;
 
   let balance: bigint;
   let totalGasCost: bigint;
   try {
     const maxFeePerGas = await fetchMaxFeePerGas(chainId);
-    const gasCost = await estimateChainGasCosts(chainId, remainingOps, maxFeePerGas);
-    totalGasCost = gasCost.totalGasCost;
+    if (remainingSteps.every((s) => s.estimatedGas !== undefined)) {
+      const gasUnits = remainingSteps.reduce((sum, s) => sum + (s.estimatedGas?.gasUnits ?? 0n), 0n);
+      totalGasCost = gasUnits * maxFeePerGas;
+    } else {
+      const remainingOps = estimateRemainingChainOps(step, state);
+      if (remainingOps.length === 0) return tokens;
+      const gasCost = await estimateChainGasCosts(chainId, remainingOps, maxFeePerGas);
+      totalGasCost = gasCost.totalGasCost;
+    }
 
     const chain = chains[chainId as keyof typeof chains];
     balance = await getNativeBalance(
@@ -688,6 +780,32 @@ async function adjustNativeTokenForGas(
     adjusted[nativeIdx] = { ...nativeToken, amount: adjustedAmount };
   }
   return adjusted;
+}
+
+/**
+ * Collects the remaining unfinished gas-consuming steps that `wallet` signs on
+ * the same chain as `currentStep` (including `currentStep` itself). Gas is
+ * paid per wallet, so other wallets' steps on the chain don't reserve against
+ * this wallet's native balance.
+ */
+function remainingChainStepsForWallet(
+  currentStep: TransactionStep,
+  state: ConsolidationState,
+  wallet: Address,
+): TransactionStep[] {
+  const remaining: TransactionStep[] = [];
+  let foundCurrent = false;
+  for (const planStep of state.plan) {
+    if (planStep.id === currentStep.id) foundCurrent = true;
+    if (!foundCurrent) continue;
+    if (planStep.chainId !== currentStep.chainId) continue;
+    if (planStep.status === "success" || planStep.status === "skipped") continue;
+    if (planStep.type === "attestation" || planStep.type === "gas-topup-wait") continue;
+    const stepWallet = planStep.inputTokens[0]?.walletAddress;
+    if (!stepWallet || !isAddressEqual(stepWallet, wallet)) continue;
+    remaining.push(planStep);
+  }
+  return remaining;
 }
 
 /**
