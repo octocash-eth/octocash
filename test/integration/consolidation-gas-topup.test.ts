@@ -1,20 +1,13 @@
-import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
 import { parse, stringify } from "superjson";
+import type { Account, Address, Chain, HttpTransport, WalletClient } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import type { ConsolidationState, TokenAmount } from "../../app/lib/types";
-import {
-  USDC_ETHEREUM,
-  USDC_OPTIMISM,
-  USDC_POLYGON,
-  WALLET,
-  consumeGenerator,
-  makeToken,
-} from "../test-helpers";
+import type { ConsolidationState, TokenAmount, TransactionStep } from "../../app/lib/types";
+import { consumeGenerator, makeToken, USDC_ETHEREUM, USDC_OPTIMISM, USDC_POLYGON, WALLET } from "../test-helpers";
 
 // Mock external dependencies BEFORE imports
 vi.mock("../../app/lib/delora");
 vi.mock("../../app/lib/cctp");
-vi.mock("../../app/lib/lifi");
+vi.mock("../../app/lib/gas-refuel");
 vi.mock("../../app/lib/gas", () => ({
   getNativeBalance: vi.fn(),
 }));
@@ -35,9 +28,8 @@ vi.mock("../../app/lib/public-client", () => ({
   retryOnRateLimit: vi.fn(<T>(fn: () => Promise<T>) => fn()),
 }));
 vi.mock("../../app/lib/gas-estimation", async () => {
-  const actual = await vi.importActual<typeof import("../../app/lib/gas-estimation")>(
-    "../../app/lib/gas-estimation",
-  );
+  const actual = await vi.importActual<typeof import("../../app/lib/gas-estimation")>("../../app/lib/gas-estimation");
+  const estimateChainGasCosts = vi.fn();
   return {
     ...actual,
     buildGasContext: vi.fn().mockResolvedValue({
@@ -45,7 +37,23 @@ vi.mock("../../app/lib/gas-estimation", async () => {
       nativeTokenPriceUsd: { 1: 2000, 10: 2000, 137: 0.5, 8453: 2000, 42161: 2000 },
       nativeSymbol: { 1: "ETH", 10: "ETH", 137: "POL", 8453: "ETH", 42161: "ETH" },
     }),
-    estimateChainGasCosts: vi.fn(),
+    estimateChainGasCosts,
+    measureOpsGas: vi.fn().mockResolvedValue(0n),
+    // Per-step estimates derive from the per-chain estimateChainGasCosts mock
+    // so each test's deficit setup flows into reconcileGasGaps unchanged.
+    attachGasEstimates: vi.fn(async (steps: TransactionStep[]) => {
+      for (const step of steps) {
+        if (step.type === "attestation" || step.type === "gas-topup-wait") continue;
+        const { totalGasCost } = await estimateChainGasCosts(step.chainId, []);
+        step.estimatedGas = {
+          gasUnits: 0n,
+          maxFeePerGas: 0n,
+          gasCostWei: totalGasCost,
+          nativeSymbol: "ETH",
+          source: "budget",
+        };
+      }
+    }),
     fetchMaxFeePerGas: vi.fn().mockResolvedValue(1000000n),
   };
 });
@@ -56,45 +64,37 @@ vi.mock("viem/actions", () => ({
 
 import { estimateGas, waitForTransactionReceipt } from "viem/actions";
 import { executeCCTPBurn, executeCCTPMint, getBridgeFee, retrieveAttestations } from "../../app/lib/cctp";
+import { executeDeloraSwap, getSwapQuote, getSwapQuoteWithLegs } from "../../app/lib/delora";
 import { executeConsolidationPlan } from "../../app/lib/execution";
 import { getNativeBalance } from "../../app/lib/gas";
 import { estimateChainGasCosts } from "../../app/lib/gas-estimation";
-import { getLiFiQuoteForTargetOutput, pollLiFiTransferStatus } from "../../app/lib/lifi";
-import { executeDeloraSwap, getSwapQuote } from "../../app/lib/delora";
+import { getGasRefuelQuote, waitForRefuelDelivery } from "../../app/lib/gas-refuel";
 import { planConsolidation } from "../../app/lib/planning";
 
-const LIFI_DIAMOND = "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE" as Address;
+const GASZIP_DEPOSIT = "0x391E7C679d29bD940d63be94AD22A25d25b5A604" as Address;
 
-function makeLiFiQuote(overrides: {
+function makeRefuelQuote(overrides: {
   fromChainId: number;
   toChainId: number;
-  tool?: string;
-  value?: string;
+  provider?: "gaszip" | "delora";
+  value?: bigint;
   data?: string;
-  fromAmount?: string;
-  toAmount?: string;
+  depositWei?: bigint;
+  expectedWei?: bigint;
 }) {
-  const fromAmount = overrides.fromAmount ?? "1500000000000000";
-  const toAmount = overrides.toAmount ?? "1400000000000000";
+  const depositWei = overrides.depositWei ?? 1500000000000000n;
+  const expectedWei = overrides.expectedWei ?? 1400000000000000n;
   return {
-    tool: overrides.tool ?? "across",
-    action: {
-      fromChainId: overrides.fromChainId,
-      toChainId: overrides.toChainId,
-      fromToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-      toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-    },
-    estimate: {
-      fromAmount,
-      toAmount,
-      toAmountMin: toAmount,
-    },
-    transactionRequest: {
-      value: overrides.value ?? "0x5543DF729C000",
-      to: LIFI_DIAMOND,
+    provider: overrides.provider ?? ("gaszip" as const),
+    fromChainId: overrides.fromChainId,
+    toChainId: overrides.toChainId,
+    depositWei,
+    expectedWei,
+    minDeliveredWei: expectedWei,
+    tx: {
+      to: GASZIP_DEPOSIT,
       data: (overrides.data ?? "0xabcdef") as `0x${string}`,
-      from: WALLET,
-      chainId: overrides.fromChainId,
+      value: overrides.value ?? depositWei,
     },
   };
 }
@@ -126,6 +126,11 @@ describe("Gas Top-Up Integration: plan then execute", () => {
         decimals: 6,
       };
     });
+    // Planning consumes the legs variant; delegate to the amount-only mock.
+    vi.mocked(getSwapQuoteWithLegs).mockImplementation(async (input, outputToken) => ({
+      output: await getSwapQuote(input, outputToken),
+      legs: [],
+    }));
 
     vi.mocked(executeDeloraSwap).mockImplementation(async (tokensIn) => {
       const totalAmount = tokensIn.reduce((sum, t) => sum + t.amount, 0n);
@@ -155,11 +160,11 @@ describe("Gas Top-Up Integration: plan then execute", () => {
     ]);
     vi.mocked(executeCCTPMint).mockResolvedValue([`0x${Math.random().toString(16).substring(2)}`, []]);
 
-    // --- LI.FI mocks ---
-    vi.mocked(getLiFiQuoteForTargetOutput).mockImplementation(async (fromChainId, toChainId) =>
-      makeLiFiQuote({ fromChainId, toChainId }),
+    // --- Gas refuel mocks ---
+    vi.mocked(getGasRefuelQuote).mockImplementation(async (fromChainId, toChainId) =>
+      makeRefuelQuote({ fromChainId, toChainId }),
     );
-    vi.mocked(pollLiFiTransferStatus).mockResolvedValue({ status: "DONE", substatus: "COMPLETED" });
+    vi.mocked(waitForRefuelDelivery).mockResolvedValue(undefined);
 
     // --- gas-estimation: small per-chain gas cost so destination wallet can cover (1 ETH default) ---
     vi.mocked(estimateChainGasCosts).mockResolvedValue({
@@ -189,13 +194,13 @@ describe("Gas Top-Up Integration: plan then execute", () => {
       return { totalGasCost: 0n, maxFeePerGas: 20_000_000_000n, perOperation: [] };
     });
 
-    // Make the LI.FI quote return a deposit close to the deficit so we can assert on it.
-    vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue(
-      makeLiFiQuote({
+    // Make the refuel quote return a deposit close to the deficit so we can assert on it.
+    vi.mocked(getGasRefuelQuote).mockResolvedValue(
+      makeRefuelQuote({
         fromChainId: 8453,
         toChainId: 10,
-        fromAmount: DEFICIT_OPTIMISM.toString(),
-        toAmount: DEFICIT_OPTIMISM.toString(),
+        depositWei: DEFICIT_OPTIMISM,
+        expectedWei: DEFICIT_OPTIMISM,
       }),
     );
 
@@ -222,10 +227,10 @@ describe("Gas Top-Up Integration: plan then execute", () => {
     const topupStep = plan[0];
     expect(topupStep.chainId).toBe(8453);
     expect(topupStep.gasTopUpDestinations).toHaveLength(1);
-    expect(topupStep.gasTopUpDestinations![0].chainId).toBe(10);
+    expect(topupStep.gasTopUpDestinations?.[0].chainId).toBe(10);
 
     // The destination amount must equal the estimator deficit (no threshold * 3 multiplier).
-    expect(BigInt(topupStep.gasTopUpDestinations![0].amountWei)).toBe(DEFICIT_OPTIMISM);
+    expect(BigInt(topupStep.gasTopUpDestinations?.[0].amountWei ?? "0")).toBe(DEFICIT_OPTIMISM);
 
     // --- Execute ---
     const state: ConsolidationState = {
@@ -237,7 +242,8 @@ describe("Gas Top-Up Integration: plan then execute", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),    };
+      updatedAt: Date.now(),
+    };
 
     const { finalValue: executedState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
@@ -248,17 +254,20 @@ describe("Gas Top-Up Integration: plan then execute", () => {
 
     expect(executedState.results["step-gas-topup"].transactionHash).toBe("0xgastopuptx");
 
-    const transfers = executedState.metadata?.lifiTransfers;
-    expect(transfers).toHaveLength(1);
-    expect(transfers![0].txHash).toBe("0xgastopuptx");
-    expect(transfers![0].fromChainId).toBe(8453);
-    expect(transfers![0].toChainId).toBe(10);
+    const refuels = executedState.metadata?.gasRefuels;
+    expect(refuels).toHaveLength(1);
+    expect(refuels?.[0]).toMatchObject({
+      provider: "gaszip",
+      txHash: "0xgastopuptx",
+      fromChainId: 8453,
+      toChainId: 10,
+      toAddress: WALLET,
+      baselineWei: "0",
+      minDeliveredWei: DEFICIT_OPTIMISM.toString(),
+    });
 
-    expect(pollLiFiTransferStatus).toHaveBeenCalledWith(
-      "0xgastopuptx",
-      "across",
-      8453,
-      10,
+    expect(waitForRefuelDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ txHash: "0xgastopuptx", fromChainId: 8453, toChainId: 10 }),
       undefined,
       undefined,
       expect.any(Function),
@@ -267,7 +276,7 @@ describe("Gas Top-Up Integration: plan then execute", () => {
     // State survives superjson round-trip
     const loaded: ConsolidationState = parse(stringify(executedState));
     expect(loaded.status).toBe("completed");
-    expect(loaded.metadata?.lifiTransfers).toEqual(transfers);
+    expect(loaded.metadata?.gasRefuels).toEqual(refuels);
   });
 
   test("two chains need gas top-up -- individual transactions, deposits sized per deficit", async () => {
@@ -289,27 +298,26 @@ describe("Gas Top-Up Integration: plan then execute", () => {
       }
       return { totalGasCost: 0n, maxFeePerGas: 1_000_000n, perOperation: [] };
     });
-    const quoteEth = makeLiFiQuote({
+    const quoteEth = makeRefuelQuote({
       fromChainId: 8453,
       toChainId: 1,
-      tool: "across",
-      value: "0x100",
+      value: 256n,
       data: "0xaaa",
-      fromAmount: DEFICIT_ETH.toString(),
-      toAmount: DEFICIT_ETH.toString(),
+      depositWei: DEFICIT_ETH,
+      expectedWei: DEFICIT_ETH,
     });
-    const quotePol = makeLiFiQuote({
+    const quotePol = makeRefuelQuote({
       fromChainId: 8453,
       toChainId: 137,
-      tool: "hop",
-      value: "0x200",
+      provider: "delora",
+      value: 512n,
       data: "0xbbb",
-      fromAmount: DEFICIT_POL.toString(),
-      toAmount: DEFICIT_POL.toString(),
+      depositWei: DEFICIT_POL,
+      expectedWei: DEFICIT_POL,
     });
 
     // 4 calls total: 2 during planning + 2 during execution re-quote
-    vi.mocked(getLiFiQuoteForTargetOutput)
+    vi.mocked(getGasRefuelQuote)
       .mockResolvedValueOnce(quoteEth)
       .mockResolvedValueOnce(quotePol)
       .mockResolvedValueOnce(quoteEth)
@@ -337,14 +345,14 @@ describe("Gas Top-Up Integration: plan then execute", () => {
 
     expect(plan[0].type).toBe("gas-topup");
     expect(plan[0].gasTopUpDestinations).toHaveLength(2);
-    const destChainIds = plan[0].gasTopUpDestinations!.map((d) => d.chainId).sort();
+    const destChainIds = plan[0].gasTopUpDestinations?.map((d) => d.chainId).sort();
     expect(destChainIds).toEqual([1, 137]);
 
     // Each destination's amountWei must equal the per-chain estimator deficit (no threshold * 3).
-    const ethDest = plan[0].gasTopUpDestinations!.find((d) => d.chainId === 1)!;
-    const polDest = plan[0].gasTopUpDestinations!.find((d) => d.chainId === 137)!;
-    expect(BigInt(ethDest.amountWei)).toBe(DEFICIT_ETH);
-    expect(BigInt(polDest.amountWei)).toBe(DEFICIT_POL);
+    const ethDest = plan[0].gasTopUpDestinations?.find((d) => d.chainId === 1);
+    const polDest = plan[0].gasTopUpDestinations?.find((d) => d.chainId === 137);
+    expect(BigInt(ethDest?.amountWei ?? "0")).toBe(DEFICIT_ETH);
+    expect(BigInt(polDest?.amountWei ?? "0")).toBe(DEFICIT_POL);
 
     // --- Execute ---
     const state: ConsolidationState = {
@@ -356,7 +364,8 @@ describe("Gas Top-Up Integration: plan then execute", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),    };
+      updatedAt: Date.now(),
+    };
 
     const { finalValue: executedState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
 
@@ -366,36 +375,30 @@ describe("Gas Top-Up Integration: plan then execute", () => {
     }
 
     expect(sendTxMock).toHaveBeenCalledTimes(2);
-    expect(sendTxMock.mock.calls[0][0].to).toBe(LIFI_DIAMOND);
-    expect(sendTxMock.mock.calls[1][0].to).toBe(LIFI_DIAMOND);
+    expect(sendTxMock.mock.calls[0][0].to).toBe(GASZIP_DEPOSIT);
+    expect(sendTxMock.mock.calls[1][0].to).toBe(GASZIP_DEPOSIT);
 
-    const transfers = executedState.metadata?.lifiTransfers;
-    expect(transfers).toHaveLength(2);
-    const transferTo = (toChainId: number) => transfers!.find((t) => t.toChainId === toChainId)!;
-    expect(transferTo(1)).toMatchObject({ txHash: "0xtx-eth", bridge: "across", fromChainId: 8453 });
-    expect(transferTo(137)).toMatchObject({ txHash: "0xtx-pol", bridge: "hop", fromChainId: 8453 });
+    const refuels = executedState.metadata?.gasRefuels;
+    expect(refuels).toHaveLength(2);
+    const refuelTo = (toChainId: number) => refuels?.find((r) => r.toChainId === toChainId);
+    expect(refuelTo(1)).toMatchObject({ txHash: "0xtx-eth", provider: "gaszip", fromChainId: 8453 });
+    expect(refuelTo(137)).toMatchObject({ txHash: "0xtx-pol", provider: "delora", fromChainId: 8453 });
 
-    expect(pollLiFiTransferStatus).toHaveBeenCalledWith(
-      "0xtx-eth",
-      "across",
-      8453,
-      1,
+    expect(waitForRefuelDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ txHash: "0xtx-eth", toChainId: 1 }),
       undefined,
       undefined,
       expect.any(Function),
     );
-    expect(pollLiFiTransferStatus).toHaveBeenCalledWith(
-      "0xtx-pol",
-      "hop",
-      8453,
-      137,
+    expect(waitForRefuelDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ txHash: "0xtx-pol", toChainId: 137 }),
       undefined,
       undefined,
       expect.any(Function),
     );
   });
 
-  test("forwards LI.FI poll progress via opts.onStepProgress without persisting it", async () => {
+  test("forwards refuel delivery progress via opts.onStepProgress without persisting it", async () => {
     const DEFICIT_OPTIMISM = 5_000_000_000_000n;
     vi.mocked(getNativeBalance).mockImplementation(async (chain, address) => {
       if (chain.id === 8453 && address === WALLET) return 10_000_000_000_000_000_000n;
@@ -406,22 +409,20 @@ describe("Gas Top-Up Integration: plan then execute", () => {
         ? { totalGasCost: DEFICIT_OPTIMISM, maxFeePerGas: 20_000_000_000n, perOperation: [] }
         : { totalGasCost: 0n, maxFeePerGas: 20_000_000_000n, perOperation: [] },
     );
-    vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue(
-      makeLiFiQuote({
+    vi.mocked(getGasRefuelQuote).mockResolvedValue(
+      makeRefuelQuote({
         fromChainId: 8453,
         toChainId: 10,
-        fromAmount: DEFICIT_OPTIMISM.toString(),
-        toAmount: DEFICIT_OPTIMISM.toString(),
+        depositWei: DEFICIT_OPTIMISM,
+        expectedWei: DEFICIT_OPTIMISM,
       }),
     );
 
-    // Drive one PENDING progress event, then resolve DONE.
-    vi.mocked(pollLiFiTransferStatus).mockImplementation(
-      async (_txHash, _bridge, _from, _to, _timeout, _interval, onProgress) => {
-        onProgress?.({ status: "PENDING", substatus: "WAIT_DESTINATION_TRANSACTION" });
-        return { status: "DONE", substatus: "COMPLETED" };
-      },
-    );
+    // Drive one pending progress event, then resolve delivered.
+    vi.mocked(waitForRefuelDelivery).mockImplementation(async (_refuel, _timeout, _interval, onProgress) => {
+      onProgress?.(false);
+      onProgress?.(true);
+    });
 
     const sourceTokens: TokenAmount[] = [makeToken(USDC_OPTIMISM, 1000000n, 10, { walletAddress: WALLET })];
     const destinationToken = { token: USDC_ETHEREUM, chainId: 1, walletAddress: WALLET, symbol: "USDC", decimals: 6 };
@@ -439,7 +440,8 @@ describe("Gas Top-Up Integration: plan then execute", () => {
       sourceTokens,
       destinationToken,
       createdAt: Date.now(),
-      updatedAt: Date.now(),    };
+      updatedAt: Date.now(),
+    };
 
     const events: unknown[] = [];
     const { finalValue: executedState } = await consumeGenerator(
@@ -449,12 +451,19 @@ describe("Gas Top-Up Integration: plan then execute", () => {
     expect(executedState.status).toBe("completed");
     expect(events).toContainEqual(
       expect.objectContaining({
-        kind: "lifi",
+        kind: "refuel",
         stepId: waitStepId,
-        status: { status: "PENDING", substatus: "WAIT_DESTINATION_TRANSACTION" },
+        delivered: false,
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        kind: "refuel",
+        stepId: waitStepId,
+        delivered: true,
       }),
     );
     // Progress is display-only — it must never leak into persisted state.
-    expect(stringify(executedState)).not.toContain("WAIT_DESTINATION_TRANSACTION");
+    expect(stringify(executedState)).not.toContain('"delivered"');
   });
 });

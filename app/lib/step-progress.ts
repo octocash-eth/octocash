@@ -1,40 +1,28 @@
 import { chains } from "~/data/supported-chains";
-import type { LiFiStatusResponse } from "./lifi";
 
 /** Human-readable chain name, with a stable fallback for unknown ids. */
 export function chainNameOf(chainId: number): string {
   return chains[chainId as keyof typeof chains]?.name || `Chain ${chainId}`;
 }
 
-interface LiFiTransferProgress {
+interface RefuelProgress {
   fromChainId: number;
   toChainId: number;
-  status: LiFiStatusResponse;
-}
-
-// Advancement rank — lowest wins so the displayed stage reflects the laggard
-// across destinations (the wait isn't over until the slowest leg lands).
-function rank(substatus?: string): number {
-  if (substatus === "WAIT_SOURCE_CONFIRMATIONS") return 0;
-  if (substatus === "WAIT_DESTINATION_TRANSACTION") return 2;
-  return 1; // PENDING w/ no/unknown substatus, BRIDGE/CHAIN_NOT_AVAILABLE, etc.
+  delivered: boolean;
 }
 
 /**
- * Friendly bridge-stage line for a gas-top-up wait, derived from the
- * least-advanced LI.FI transfer among all destinations.
+ * Friendly stage line for a gas-top-up wait: names the destinations whose
+ * refuel hasn't visibly landed yet (delivery is confirmed by the destination
+ * wallet's native balance, so "delivered" is ground truth, not a bridge
+ * status).
  */
-export function lifiStageMessage(transfers: LiFiTransferProgress[]): string {
-  const slowest = transfers.reduce<LiFiTransferProgress | undefined>(
-    (acc, t) => (acc === undefined || rank(t.status.substatus) < rank(acc.status.substatus) ? t : acc),
-    undefined,
-  );
-  const sub = slowest?.status.substatus;
-  if (sub === "WAIT_SOURCE_CONFIRMATIONS" && slowest) return `Confirming on ${chainNameOf(slowest.fromChainId)}…`;
-  if (sub === "WAIT_DESTINATION_TRANSACTION" && slowest) return `Bridging to ${chainNameOf(slowest.toChainId)}…`;
-  if (sub === "REFUND_IN_PROGRESS") return "Refund in progress…";
-  if (sub === "BRIDGE_NOT_AVAILABLE" || sub === "CHAIN_NOT_AVAILABLE") return "Waiting for bridge…";
-  return "Bridging…";
+export function refuelStageMessage(refuels: RefuelProgress[]): string {
+  const pending = refuels.filter((r) => !r.delivered);
+  if (pending.length === 0) {
+    return refuels.length > 0 ? "Gas delivered ✓" : "Delivering gas…";
+  }
+  return `Delivering gas to ${pending.map((r) => chainNameOf(r.toChainId)).join(" + ")}…`;
 }
 
 /**

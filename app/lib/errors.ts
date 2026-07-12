@@ -27,7 +27,7 @@ export const ERROR_MESSAGES: Record<ErrorCode, [string, string]> = {
   ],
   [ERROR_CODES.GAS_TOPUP_TIMEOUT]: [
     "Gas delivery timed out",
-    "LI.FI transfer may still be processing. Retry to check again.",
+    "The gas refuel may still be processing. Retry to check again.",
   ],
   [ERROR_CODES.PLANNING_ERROR]: ["Failed to plan transaction", "Please try again."],
   [ERROR_CODES.UNSUPPORTED_ROUTE]: ["This route is not supported", "Please try with different tokens."],

@@ -18,7 +18,7 @@ import { useConsolidationRecords } from "~/hooks/use-consolidation-records";
 import type { ConsolidationState } from "~/lib/types";
 import { generateMeta } from "~/utils/meta";
 
-// Heavy components (viem/wagmi/CCTP/LiFi/Delora execution stack) are only needed when
+// Heavy components (viem/wagmi/CCTP/Gas.zip/Delora execution stack) are only needed when
 // a card is expanded, so keep them out of the initial route chunk for fast navigation.
 const ConsolidationTokensSummary = lazy(() =>
   import("~/components/consolidation-tokens-summary").then((m) => ({ default: m.ConsolidationTokensSummary })),

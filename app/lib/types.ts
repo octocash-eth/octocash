@@ -1,5 +1,6 @@
 import type { Address } from "viem";
 import type { Attestation } from "./cctp";
+import type { GasRefuelRecord } from "./gas-refuel";
 
 // ============================================================================
 // Transaction Step Types (T001)
@@ -14,8 +15,8 @@ export type TransactionType =
   | "attestation" // Wait for bridge attestation(s)
   | "claim" // Claim bridged tokens
   | "transfer" // Simple transfer (same token, same chain)
-  | "gas-topup" // Send native token via LI.FI to refuel destination chains
-  | "gas-topup-wait" // Wait for LI.FI transfer delivery on destination chains
+  | "gas-topup" // Send native token (Gas.zip, Delora fallback) to refuel destination chains
+  | "gas-topup-wait" // Wait for refuel delivery on destination chains
   | "shield"; // Deposit ERC20 into Railgun, credited to a private 0zk address
 
 /**
@@ -176,7 +177,7 @@ export interface ConsolidationState {
   // Execution metadata (intermediate data between steps)
   metadata?: {
     attestations?: Attestation[];
-    lifiTransfers?: { txHash: string; bridge: string; fromChainId: number; toChainId: number }[];
+    gasRefuels?: GasRefuelRecord[];
   };
 
   createdAt: number; // Timestamp

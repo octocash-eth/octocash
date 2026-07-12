@@ -14,7 +14,7 @@ import {
   InsufficientNativeForGasError,
   type OperationType,
 } from "./gas-estimation";
-import { getLiFiQuoteForTargetOutput, type LiFiStatusResponse, pollLiFiTransferStatus } from "./lifi";
+import { type GasRefuelRecord, getGasRefuelQuote, waitForRefuelDelivery } from "./gas-refuel";
 import { getPublicClient, retryOnRateLimit } from "./public-client";
 import { prepareSendCalls, SendCallsError } from "./send-calls";
 import { getTokenBalance } from "./tokens";
@@ -105,13 +105,13 @@ export class InsufficientInputBalanceError extends Error {
  * wallet balance.
  */
 /**
- * A progress update for an in-flight waiting step (LI.FI gas-top-up bridge, or
+ * A progress update for an in-flight waiting step (gas-refuel delivery, or
  * CCTP attestation). Delivered out-of-band via {@link ExecuteOptions.onStepProgress}
  * because the wait happens inside an awaited `executeStep` — the generator cannot
  * `yield` mid-step. Display-only; never mutates persisted {@link ConsolidationState}.
  */
 export type StepProgressEvent =
-  | { kind: "lifi"; stepId: string; txHash: string; fromChainId: number; toChainId: number; status: LiFiStatusResponse }
+  | { kind: "refuel"; stepId: string; txHash: string; fromChainId: number; toChainId: number; delivered: boolean }
   | { kind: "attestation"; stepId: string; received: number; total: number };
 
 export interface ExecuteOptions {
@@ -1122,11 +1122,12 @@ async function executeStep(
       const sameChainDests = destinations.filter((d) => d.chainId === sourceChainId);
       const crossChainDests = destinations.filter((d) => d.chainId !== sourceChainId);
 
-      // Get fresh LI.FI quotes only for cross-chain destinations (use target-output
-      // quoting so cross-token pairs like ETH→POL are priced correctly)
+      // Get fresh refuel quotes (Gas.zip, Delora fallback) only for
+      // cross-chain destinations — target-output quoting so cross-token pairs
+      // like ETH→POL are priced correctly.
       const quotes = await Promise.all(
         crossChainDests.map((dest) =>
-          getLiFiQuoteForTargetOutput(sourceChainId, dest.chainId, BigInt(dest.amountWei), sourceAddress, dest.address),
+          getGasRefuelQuote(sourceChainId, dest.chainId, BigInt(dest.amountWei), sourceAddress, dest.address),
         ),
       );
 
@@ -1137,7 +1138,7 @@ async function executeStep(
         await txClient.addChain({ chain: sourceChain });
       }
 
-      const lifiTransfers: { txHash: string; bridge: string; fromChainId: number; toChainId: number }[] = [];
+      const gasRefuels: GasRefuelRecord[] = [];
       let totalValue = 0n;
       let firstTxHash: Hex | undefined;
 
@@ -1162,19 +1163,30 @@ async function executeStep(
         firstTxHash ??= hash;
       }
 
-      // Cross-chain destinations: send via LI.FI individually so status tracking works
+      // Cross-chain destinations: send each refuel deposit individually so the
+      // delivery wait can track them per destination.
       for (let i = 0; i < quotes.length; i++) {
         const quote = quotes[i];
-        const txReq = quote.transactionRequest;
-        const value = BigInt(txReq.value);
+        const dest = crossChainDests[i];
+        const value = quote.tx.value;
         totalValue += value;
+
+        // Record the destination's balance BEFORE depositing: the wait step
+        // confirms delivery when the balance clears baseline + minDelivered,
+        // independent of any provider status API.
+        const destChain = chains[dest.chainId as keyof typeof chains] as Chain;
+        const baseline = await getNativeBalance(
+          destChain,
+          dest.address,
+          transports?.[dest.chainId as keyof typeof transports],
+        );
 
         let gas: bigint | undefined;
         try {
           const estimated = await estimateGas(txClient, {
             account: sourceAddress,
-            to: txReq.to,
-            data: txReq.data,
+            to: quote.tx.to,
+            data: quote.tx.data,
             value,
           });
           gas = (estimated * 120n) / 100n;
@@ -1184,8 +1196,8 @@ async function executeStep(
 
         const hash = await txClient.sendTransaction({
           account: sourceAddress,
-          to: txReq.to,
-          data: txReq.data,
+          to: quote.tx.to,
+          data: quote.tx.data,
           value,
           gas,
           chain: sourceChain,
@@ -1197,11 +1209,14 @@ async function executeStep(
         }
 
         firstTxHash ??= hash;
-        lifiTransfers.push({
+        gasRefuels.push({
+          provider: quote.provider,
           txHash: hash,
-          bridge: quote.tool,
           fromChainId: sourceChainId,
-          toChainId: crossChainDests[i].chainId,
+          toChainId: dest.chainId,
+          toAddress: dest.address,
+          baselineWei: baseline.toString(),
+          minDeliveredWei: quote.minDeliveredWei.toString(),
         });
       }
 
@@ -1215,7 +1230,7 @@ async function executeStep(
           provenance: step.id,
         },
         transactionHash: firstTxHash as Hex,
-        metadataPatch: { lifiTransfers },
+        metadataPatch: { gasRefuels },
       };
     }
 
@@ -1272,20 +1287,20 @@ async function executeStep(
     }
 
     case "gas-topup-wait": {
-      const transfers = state.metadata?.lifiTransfers;
+      const refuels = state.metadata?.gasRefuels;
 
-      // If all destinations were same-chain, there are no LiFi transfers to poll
-      if (transfers && transfers.length > 0) {
+      // If all destinations were same-chain, there are no refuels to wait for
+      if (refuels && refuels.length > 0) {
         await Promise.all(
-          transfers.map((t) =>
-            pollLiFiTransferStatus(t.txHash, t.bridge, t.fromChainId, t.toChainId, undefined, undefined, (status) =>
+          refuels.map((r) =>
+            waitForRefuelDelivery(r, undefined, undefined, (delivered) =>
               opts?.onStepProgress?.({
-                kind: "lifi",
+                kind: "refuel",
                 stepId: step.id,
-                txHash: t.txHash,
-                fromChainId: t.fromChainId,
-                toChainId: t.toChainId,
-                status,
+                txHash: r.txHash,
+                fromChainId: r.fromChainId,
+                toChainId: r.toChainId,
+                delivered,
               }),
             ),
           ),

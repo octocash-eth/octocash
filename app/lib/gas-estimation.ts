@@ -52,7 +52,8 @@ const GAS_BUDGETS: Record<OperationType, bigint> = {
   "cctp-claim": 300_000n,
   "transfer-native": 21_000n,
   "transfer-erc20": 65_000n,
-  // Single LI.FI cross-chain top-up leg (or same-chain native transfer accounted
+  // Single cross-chain refuel leg (Gas.zip deposit or Delora route; same-chain
+  // native transfers accounted
   // generously). Same-chain legs only consume ~21k but using a single conservative
   // budget keeps step gas estimation simple.
   "gas-topup-leg": 300_000n,
@@ -436,7 +437,7 @@ async function simulateOperationGas(
         // Not simulatable as a lone eth_estimateGas call: swaps need their
         // approval mined first (they're covered by the eth_simulateV1 batch
         // upstream via the retained quote calldata), CCTP claim needs the
-        // attestation message, the gas-topup leg's LI.FI `transactionRequest`
+        // attestation message, the gas-topup leg's refuel transaction
         // is quoted at execution, and the shield note requires a wallet
         // signature at execution.
         return null;
@@ -736,7 +737,7 @@ function buildStepSimOps(step: TransactionStep, artifacts: PlanArtifacts): SimOp
     }
 
     default:
-      // claim (attestation calldata unknown), gas-topup (LI.FI transaction
+      // claim (attestation calldata unknown), gas-topup (refuel transaction
       // quoted at execution), and wait steps: ladder/budget only.
       return getStepOperations(step).map((op) => ({ op }));
   }
@@ -1018,7 +1019,7 @@ function getStepOperations(step: TransactionStep): OperationType[] {
     }
     case "gas-topup": {
       const destinations = step.gasTopUpDestinations ?? [];
-      // One leg per destination (same-chain transfer or LI.FI bridge).
+      // One leg per destination (same-chain transfer or cross-chain refuel).
       return destinations.map(() => "gas-topup-leg" as OperationType);
     }
     case "gas-topup-wait":

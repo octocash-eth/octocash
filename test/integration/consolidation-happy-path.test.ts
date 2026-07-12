@@ -31,7 +31,7 @@ vi.mock("../../app/lib/gas", () => ({
 
 import { planConsolidation } from "../../app/lib/planning";
 import { executeConsolidationPlan } from "../../app/lib/execution";
-import { getSwapQuote, executeDeloraSwap } from "../../app/lib/delora";
+import { executeDeloraSwap, getSwapQuote, getSwapQuoteWithLegs } from "../../app/lib/delora";
 import { getBridgeFee, executeCCTPBurn, retrieveAttestations, executeCCTPMint } from "../../app/lib/cctp";
 import { stringify, parse } from "superjson";
 
@@ -58,6 +58,11 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
     } as WalletClient<HttpTransport, Chain, Account>;
 
     // Setup default mocks for planning
+    // Planning consumes the legs variant; delegate to the amount-only mock.
+    vi.mocked(getSwapQuoteWithLegs).mockImplementation(async (input, outputToken) => ({
+      output: await getSwapQuote(input, outputToken),
+      legs: [],
+    }));
     vi.mocked(getSwapQuote).mockImplementation(async (input, outputToken) => {
       const inputArray = Array.isArray(input) ? input : [input];
       const totalAmount = inputArray.reduce((sum, token) => sum + token.amount, 0n);

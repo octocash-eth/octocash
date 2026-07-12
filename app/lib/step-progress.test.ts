@@ -1,39 +1,34 @@
 import { describe, expect, test } from "vitest";
-import type { LiFiStatusResponse } from "./lifi";
-import { attestationStageMessage, lifiStageMessage } from "./step-progress";
+import { attestationStageMessage, refuelStageMessage } from "./step-progress";
 
-const transfer = (fromChainId: number, toChainId: number, substatus?: string) => ({
+const refuel = (fromChainId: number, toChainId: number, delivered: boolean) => ({
   fromChainId,
   toChainId,
-  status: { status: "PENDING", substatus } as LiFiStatusResponse,
+  delivered,
 });
 
-describe("lifiStageMessage", () => {
-  test("no transfers yet → generic bridging", () => {
-    expect(lifiStageMessage([])).toBe("Bridging…");
+describe("refuelStageMessage", () => {
+  test("no refuels yet → generic delivering", () => {
+    expect(refuelStageMessage([])).toBe("Delivering gas…");
   });
 
-  test("source confirmations names the source chain", () => {
-    expect(lifiStageMessage([transfer(1, 8453, "WAIT_SOURCE_CONFIRMATIONS")])).toMatch(/^Confirming on .+…$/);
+  test("pending refuel names the destination chain", () => {
+    expect(refuelStageMessage([refuel(1, 8453, false)])).toMatch(/^Delivering gas to .+…$/);
   });
 
-  test("destination wait names the destination chain", () => {
-    expect(lifiStageMessage([transfer(1, 8453, "WAIT_DESTINATION_TRANSACTION")])).toMatch(/^Bridging to .+…$/);
+  test("laggard destinations drive the message across refuels", () => {
+    // One leg landed, another still in flight — only the pending one is named.
+    const msg = refuelStageMessage([refuel(1, 8453, true), refuel(1, 10, false)]);
+    expect(msg).toBe("Delivering gas to OP Mainnet…");
   });
 
-  test("least-advanced transfer wins across destinations", () => {
-    // One leg already bridging to dest, another still confirming at source —
-    // the laggard (source confirmations) must drive the message.
-    const msg = lifiStageMessage([
-      transfer(1, 8453, "WAIT_DESTINATION_TRANSACTION"),
-      transfer(1, 10, "WAIT_SOURCE_CONFIRMATIONS"),
-    ]);
-    expect(msg).toMatch(/^Confirming on /);
+  test("multiple pending destinations are joined", () => {
+    const msg = refuelStageMessage([refuel(1, 8453, false), refuel(1, 10, false)]);
+    expect(msg).toBe("Delivering gas to Base + OP Mainnet…");
   });
 
-  test("refund + bridge-unavailable copy", () => {
-    expect(lifiStageMessage([transfer(1, 8453, "REFUND_IN_PROGRESS")])).toBe("Refund in progress…");
-    expect(lifiStageMessage([transfer(1, 8453, "BRIDGE_NOT_AVAILABLE")])).toBe("Waiting for bridge…");
+  test("all delivered → confirmation copy", () => {
+    expect(refuelStageMessage([refuel(1, 8453, true), refuel(1, 10, true)])).toBe("Gas delivered ✓");
   });
 });
 

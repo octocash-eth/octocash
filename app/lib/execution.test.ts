@@ -25,7 +25,7 @@ vi.mock("./send-calls", async () => {
     prepareSendCalls: vi.fn(),
   };
 });
-vi.mock("./lifi");
+vi.mock("./gas-refuel");
 vi.mock("viem/actions", () => ({
   estimateGas: vi.fn().mockResolvedValue(100000n),
   waitForTransactionReceipt: vi.fn().mockResolvedValue({ status: "success" }),
@@ -59,7 +59,7 @@ import {
 } from "./execution";
 import { getNativeBalance } from "./gas";
 import { estimateOperationsForChainWallet, type OperationType } from "./gas-estimation";
-import { getLiFiQuoteForTargetOutput, pollLiFiTransferStatus } from "./lifi";
+import { getGasRefuelQuote, waitForRefuelDelivery } from "./gas-refuel";
 import { getPublicClient } from "./public-client";
 import { prepareSendCalls } from "./send-calls";
 
@@ -81,28 +81,21 @@ describe("executeConsolidationPlan", () => {
       addChain: vi.fn(),
     } as unknown as WalletClient<HttpTransport, Chain, Account>;
 
-    // Default LI.FI mocks
-    vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue({
-      tool: "across",
-      action: {
-        fromChainId: 8453,
-        toChainId: 10,
-        fromToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-        toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-      },
-      estimate: { fromAmount: "1500000000000000", toAmount: "1400000000000000", toAmountMin: "1400000000000000" },
-      transactionRequest: {
-        value: "0x5543DF729C000",
-        to: "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
-        data: "0x1794958f00",
-        from: WALLET,
-        chainId: 8453,
+    // Default gas-refuel mocks
+    vi.mocked(getGasRefuelQuote).mockResolvedValue({
+      provider: "gaszip",
+      fromChainId: 8453,
+      toChainId: 10,
+      depositWei: 1500000000000000n,
+      expectedWei: 1400000000000000n,
+      minDeliveredWei: 1400000000000000n,
+      tx: {
+        to: "0x391E7C679d29bD940d63be94AD22A25d25b5A604" as Address,
+        data: "0x1794958f00" as `0x${string}`,
+        value: 1500000000000000n,
       },
     });
-    vi.mocked(pollLiFiTransferStatus).mockResolvedValue({
-      status: "DONE",
-      substatus: "COMPLETED",
-    });
+    vi.mocked(waitForRefuelDelivery).mockResolvedValue(undefined);
     vi.mocked(estimateGas).mockResolvedValue(100000n);
     vi.mocked(waitForTransactionReceipt).mockResolvedValue({ status: "success" } as never);
 
@@ -3018,7 +3011,28 @@ describe("Additional edge cases for complete coverage", () => {
   describe("gas-topup and gas-topup-wait execution", () => {
     const USDC_ADDRESS = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
     const ETH = "0x0000000000000000000000000000000000000000" as Address;
-    const LIFI_DIAMOND = "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE" as Address;
+    const GASZIP_DEPOSIT = "0x391E7C679d29bD940d63be94AD22A25d25b5A604" as Address;
+
+    const refuelQuote = (
+      overrides: Partial<{
+        provider: "gaszip" | "delora";
+        fromChainId: number;
+        toChainId: number;
+        depositWei: bigint;
+        expectedWei: bigint;
+        minDeliveredWei: bigint;
+        tx: { to: Address; data: `0x${string}`; value: bigint };
+      }> = {},
+    ) => ({
+      provider: "gaszip" as const,
+      fromChainId: 8453,
+      toChainId: 10,
+      depositWei: 1500000000000000n,
+      expectedWei: 1400000000000000n,
+      minDeliveredWei: 1400000000000000n,
+      tx: { to: GASZIP_DEPOSIT, data: "0xabcdef" as `0x${string}`, value: 1500000000000000n },
+      ...overrides,
+    });
 
     let mockState: ConsolidationState;
     let mockWalletClient: WalletClient<HttpTransport, Chain, Account>;
@@ -3034,24 +3048,9 @@ describe("Additional edge cases for complete coverage", () => {
         addChain: vi.fn(),
       } as unknown as WalletClient<HttpTransport, Chain, Account>;
 
-      vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValue({
-        tool: "across",
-        action: {
-          fromChainId: 8453,
-          toChainId: 10,
-          fromToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-          toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-        },
-        estimate: { fromAmount: "1500000000000000", toAmount: "1400000000000000", toAmountMin: "1400000000000000" },
-        transactionRequest: {
-          value: "0x5543DF729C000",
-          to: LIFI_DIAMOND,
-          data: "0x1794958f00",
-          from: WALLET,
-          chainId: 8453,
-        },
-      });
-      vi.mocked(pollLiFiTransferStatus).mockResolvedValue({ status: "DONE", substatus: "COMPLETED" });
+      vi.mocked(getGasRefuelQuote).mockResolvedValue(refuelQuote());
+      vi.mocked(waitForRefuelDelivery).mockResolvedValue(undefined);
+      vi.mocked(getNativeBalance).mockResolvedValue(777n); // pre-deposit baseline
       vi.mocked(estimateGas).mockResolvedValue(100000n);
       vi.mocked(waitForTransactionReceipt).mockResolvedValue({ status: "success" } as never);
 
@@ -3068,24 +3067,8 @@ describe("Additional edge cases for complete coverage", () => {
       };
     });
 
-    test("cross-chain destination sends tx to LI.FI Diamond and stores transfer metadata", async () => {
-      vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValueOnce({
-        tool: "across",
-        action: {
-          fromChainId: 8453,
-          toChainId: 10,
-          fromToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-          toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-        },
-        estimate: { fromAmount: "1500000000000000", toAmount: "1400000000000000", toAmountMin: "1400000000000000" },
-        transactionRequest: {
-          value: "0x5543DF729C000",
-          to: LIFI_DIAMOND,
-          data: "0xabcdef",
-          from: WALLET,
-          chainId: 8453,
-        },
-      });
+    test("cross-chain destination sends the refuel deposit and stores the delivery record", async () => {
+      vi.mocked(getGasRefuelQuote).mockResolvedValueOnce(refuelQuote());
 
       const step: TransactionStep = {
         id: "gas-topup-1",
@@ -3110,44 +3093,36 @@ describe("Additional edge cases for complete coverage", () => {
       const sendTx = vi.mocked(mockWalletClient.sendTransaction as ReturnType<typeof vi.fn>);
       expect(sendTx).toHaveBeenCalledOnce();
       const callArgs = sendTx.mock.calls[0][0] as { to: Address; data: string; value: bigint };
-      expect(callArgs.to).toBe(LIFI_DIAMOND);
+      expect(callArgs.to).toBe(GASZIP_DEPOSIT);
       expect(callArgs.data).toBe("0xabcdef");
-      expect(callArgs.value).toBe(BigInt("0x5543DF729C000"));
+      expect(callArgs.value).toBe(1500000000000000n);
 
-      const transfers = finalState.metadata?.lifiTransfers;
-      expect(transfers).toHaveLength(1);
-      expect(transfers?.[0]).toEqual({
+      const refuels = finalState.metadata?.gasRefuels;
+      expect(refuels).toHaveLength(1);
+      expect(refuels?.[0]).toEqual({
+        provider: "gaszip",
         txHash: "0xgastopup",
-        bridge: "across",
         fromChainId: 8453,
         toChainId: 10,
+        toAddress: WALLET,
+        baselineWei: "777",
+        minDeliveredWei: "1400000000000000",
       });
     });
 
-    test("multiple cross-chain destinations send individual LI.FI transactions", async () => {
-      const quote1 = {
-        tool: "across",
-        action: {
-          fromChainId: 8453,
-          toChainId: 10,
-          fromToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-          toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-        },
-        estimate: { fromAmount: "100", toAmount: "90", toAmountMin: "90" },
-        transactionRequest: { value: "0x100", to: LIFI_DIAMOND, data: "0xaaa", from: WALLET, chainId: 8453 } as const,
-      };
-      const quote2 = {
-        tool: "hop",
-        action: {
-          fromChainId: 8453,
-          toChainId: 137,
-          fromToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-          toToken: { symbol: "POL", decimals: 18, priceUSD: "0.5" },
-        },
-        estimate: { fromAmount: "200", toAmount: "180", toAmountMin: "180" },
-        transactionRequest: { value: "0x200", to: LIFI_DIAMOND, data: "0xbbb", from: WALLET, chainId: 8453 } as const,
-      };
-      vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValueOnce(quote1).mockResolvedValueOnce(quote2);
+    test("multiple cross-chain destinations send individual refuel deposits", async () => {
+      vi.mocked(getGasRefuelQuote)
+        .mockResolvedValueOnce(
+          refuelQuote({ depositWei: 256n, tx: { to: GASZIP_DEPOSIT, data: "0xaaa", value: 256n } }),
+        )
+        .mockResolvedValueOnce(
+          refuelQuote({
+            provider: "delora",
+            toChainId: 137,
+            depositWei: 512n,
+            tx: { to: "0x2222222222222222222222222222222222222222" as Address, data: "0xbbb", value: 512n },
+          }),
+        );
 
       const sendTxMock = vi.fn().mockResolvedValueOnce("0xtx1").mockResolvedValueOnce("0xtx2");
       (mockWalletClient as unknown as { sendTransaction: typeof sendTxMock }).sendTransaction = sendTxMock;
@@ -3174,15 +3149,16 @@ describe("Additional edge cases for complete coverage", () => {
       expect(finalState.status).toBe("completed");
       expect(sendTxMock).toHaveBeenCalledTimes(2);
 
-      const transfers = finalState.metadata?.lifiTransfers;
-      expect(transfers).toHaveLength(2);
-      expect(transfers?.[0].txHash).toBe("0xtx1");
-      expect(transfers?.[0].bridge).toBe("across");
-      expect(transfers?.[1].txHash).toBe("0xtx2");
-      expect(transfers?.[1].bridge).toBe("hop");
+      const refuels = finalState.metadata?.gasRefuels;
+      expect(refuels).toHaveLength(2);
+      expect(refuels?.[0].txHash).toBe("0xtx1");
+      expect(refuels?.[0].provider).toBe("gaszip");
+      expect(refuels?.[1].txHash).toBe("0xtx2");
+      expect(refuels?.[1].provider).toBe("delora");
+      expect(refuels?.[1].toChainId).toBe(137);
     });
 
-    test("same-chain destination sends a direct native transfer (no LI.FI quote)", async () => {
+    test("same-chain destination sends a direct native transfer (no refuel quote)", async () => {
       const sendTxMock = vi.fn().mockResolvedValue("0xnative");
       (mockWalletClient as unknown as { sendTransaction: typeof sendTxMock }).sendTransaction = sendTxMock;
 
@@ -3205,10 +3181,10 @@ describe("Additional edge cases for complete coverage", () => {
       const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
 
       expect(finalState.status).toBe("completed");
-      expect(getLiFiQuoteForTargetOutput).not.toHaveBeenCalled();
+      expect(getGasRefuelQuote).not.toHaveBeenCalled();
       expect(sendTxMock).toHaveBeenCalledOnce();
-      // No LI.FI transfer recorded for same-chain
-      expect(finalState.metadata?.lifiTransfers ?? []).toHaveLength(0);
+      // No cross-chain refuel recorded for same-chain
+      expect(finalState.metadata?.gasRefuels ?? []).toHaveLength(0);
     });
 
     test("fails when no destinations", async () => {
@@ -3232,7 +3208,7 @@ describe("Additional edge cases for complete coverage", () => {
       expect(finalState.results["gas-topup-empty"].status).toBe("failed");
     });
 
-    test("gas-topup-wait polls LI.FI when transfers are in metadata", async () => {
+    test("gas-topup-wait waits for delivery when refuels are in metadata", async () => {
       const step: TransactionStep = {
         id: "gas-wait-1",
         type: "gas-topup-wait",
@@ -3246,25 +3222,32 @@ describe("Additional edge cases for complete coverage", () => {
       mockState.status = "ready";
       mockState.currentStepIndex = 0;
       mockState.metadata = {
-        lifiTransfers: [{ txHash: "0xgastopup", bridge: "across", fromChainId: 8453, toChainId: 10 }],
+        gasRefuels: [
+          {
+            provider: "gaszip",
+            txHash: "0xgastopup",
+            fromChainId: 8453,
+            toChainId: 10,
+            toAddress: WALLET,
+            baselineWei: "777",
+            minDeliveredWei: "1400000000000000",
+          },
+        ],
       };
 
       const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
 
       expect(finalState.status).toBe("completed");
       expect(finalState.results["gas-wait-1"].status).toBe("success");
-      expect(pollLiFiTransferStatus).toHaveBeenCalledWith(
-        "0xgastopup",
-        "across",
-        8453,
-        10,
+      expect(waitForRefuelDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({ txHash: "0xgastopup", toChainId: 10 }),
         undefined,
         undefined,
         expect.any(Function),
       );
     });
 
-    test("gas-topup-wait succeeds immediately when there are no LiFi transfers (all same-chain)", async () => {
+    test("gas-topup-wait succeeds immediately when there are no refuels (all same-chain)", async () => {
       const step: TransactionStep = {
         id: "gas-wait-empty",
         type: "gas-topup-wait",
@@ -3282,27 +3265,13 @@ describe("Additional edge cases for complete coverage", () => {
 
       expect(finalState.status).toBe("completed");
       expect(finalState.results["gas-wait-empty"].status).toBe("success");
-      expect(pollLiFiTransferStatus).not.toHaveBeenCalled();
+      expect(waitForRefuelDelivery).not.toHaveBeenCalled();
     });
 
     test("full flow: gas-topup followed by gas-topup-wait", async () => {
-      vi.mocked(getLiFiQuoteForTargetOutput).mockResolvedValueOnce({
-        tool: "across",
-        action: {
-          fromChainId: 8453,
-          toChainId: 10,
-          fromToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-          toToken: { symbol: "ETH", decimals: 18, priceUSD: "2000" },
-        },
-        estimate: { fromAmount: "1500000000000000", toAmount: "1400000000000000", toAmountMin: "1400000000000000" },
-        transactionRequest: {
-          value: "0x5543DF729C000",
-          to: LIFI_DIAMOND,
-          data: "0xfeed",
-          from: WALLET,
-          chainId: 8453,
-        },
-      });
+      vi.mocked(getGasRefuelQuote).mockResolvedValueOnce(
+        refuelQuote({ tx: { to: GASZIP_DEPOSIT, data: "0xfeed", value: 1500000000000000n } }),
+      );
 
       const topupStep: TransactionStep = {
         id: "gas-topup-flow",
@@ -3337,11 +3306,8 @@ describe("Additional edge cases for complete coverage", () => {
       expect(finalState.status).toBe("completed");
       expect(finalState.results["gas-topup-flow"].status).toBe("success");
       expect(finalState.results["gas-wait-flow"].status).toBe("success");
-      expect(pollLiFiTransferStatus).toHaveBeenCalledWith(
-        "0xgastopup",
-        "across",
-        8453,
-        10,
+      expect(waitForRefuelDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({ txHash: "0xgastopup", fromChainId: 8453, toChainId: 10, baselineWei: "777" }),
         undefined,
         undefined,
         expect.any(Function),

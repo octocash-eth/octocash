@@ -22,7 +22,7 @@ import {
   type PlanArtifacts,
   type SimOp,
 } from "./gas-estimation";
-import { getLiFiQuoteForTargetOutput } from "./lifi";
+import { getGasRefuelQuote } from "./gas-refuel";
 import { getPublicClient } from "./public-client";
 import { decodeRailgunAddress, getShieldedAmountAfterFee, isRailgunAddress } from "./railgun";
 import { groupTokensByChainAndWallet } from "./tokens";
@@ -33,7 +33,7 @@ const SUPPORTED_CHAINS = Object.keys(chains).map(Number);
 /**
  * Per-(chain, wallet) deficit of native gas. Collected during planning instead of
  * throwing, so a `gas-topup` step can be prepended to refuel the wallet from
- * another source (LI.FI bridge or same-chain native transfer).
+ * another source (Gas.zip/Delora refuel or same-chain native transfer).
  */
 type GasGap = { chainId: number; walletAddress: Address; deficitWei: bigint };
 type GasGaps = Map<string, GasGap>;
@@ -136,7 +136,7 @@ async function reconcileGasGaps(
 }
 
 /**
- * Assumed worst-case LI.FI cross-chain top-up overhead (bridge fee + relayer +
+ * Assumed worst-case cross-chain top-up overhead (refuel fee + relayer +
  * slippage), as a fraction of the delivered amount, in basis points. Native
  * bridges (Across-style) typically run ~0.1–1%; 1.5% is a conservative
  * catch-all. Used ONLY to gate dust top-ups — not to size the recorded deficit
@@ -148,7 +148,7 @@ const ASSUMED_TOPUP_OVERHEAD_BPS = 150n;
 
 /**
  * Minimum native amount worth topping up for: the operation gas plus the assumed
- * LI.FI overhead on the whole deficit it would take to deliver it. At or below
+ * refuel overhead on the whole deficit it would take to deliver it. At or below
  * this, a cross-chain top-up costs more than the amount it would rescue, so the
  * caller refuses (sole dust) or drops the dust native (other value present).
  */
@@ -163,7 +163,7 @@ function dustTopUpThreshold(amount: bigint, gasCost: bigint, balance: bigint): b
  * cover its own gas AND that amount is no larger than the gas needed to move it.
  *
  * Recording a gas gap here would prepend a `gas-topup` step that bridges native
- * in from another wallet — costing extra gas plus a LI.FI bridge fee — just to
+ * in from another wallet — costing extra gas plus a refuel fee — just to
  * consolidate an amount worth less than those fees. That's a guaranteed net
  * loss, so we surface an actionable error instead (mirrors the pre-top-up
  * behavior the user already knew). Only used when the dust native is the sole
@@ -1275,7 +1275,8 @@ function createShieldStep(
  *   1. Destination wallet on the destination chain (if it has enough native).
  *   2. Otherwise the richest source across ALL supported chains × executor wallets.
  *
- * Per gap, we get a LI.FI quote sized to deliver exactly the deficit (cross-chain),
+ * Per gap, we get a refuel quote (Gas.zip, Delora fallback) sized to deliver exactly
+ * the deficit (cross-chain),
  * or schedule a same-chain native transfer (when source and gap share a chain).
  *
  * @returns Empty array when there are no gaps; one or two steps otherwise.
@@ -1292,7 +1293,7 @@ async function createGasTopUpSteps(
   const gapEntries = [...gaps.values()];
 
   // Try a sequence of source candidates in priority order. For each candidate we
-  // get the actual LI.FI quotes (they include bridge fees and cross-token rates)
+  // get the actual refuel quotes (they include provider fees and cross-token rates)
   // and accept the candidate only if its usable balance covers the total deposit.
   const destChainId = destinationToken.chainId;
   const destChain = chains[destChainId as keyof typeof chains];
@@ -1399,7 +1400,7 @@ async function createGasTopUpSteps(
       }
 
       try {
-        const quote = await getLiFiQuoteForTargetOutput(
+        const quote = await getGasRefuelQuote(
           candidate.chainId,
           gap.chainId,
           gap.deficitWei,
@@ -1410,13 +1411,13 @@ async function createGasTopUpSteps(
           chainId: gap.chainId,
           address: gap.walletAddress,
           amountWei: gap.deficitWei.toString(),
-          depositRequired: BigInt(quote.estimate.fromAmount),
+          depositRequired: quote.depositWei,
         });
       } catch (error) {
         const gapChain = chains[gap.chainId as keyof typeof chains];
         const chainName = gapChain ? (gapChain as { name: string }).name : String(gap.chainId);
         candidateError = new Error(
-          `PlanningError: You don't have enough gas on ${chainName} and LI.FI can't find a route right now. Please try again later or manually top up gas on that network. (${error instanceof Error ? error.message : String(error)})`,
+          `PlanningError: You don't have enough gas on ${chainName} and no gas refuel route (Gas.zip or Delora) is available right now. Please try again later or manually top up gas on that network. (${error instanceof Error ? error.message : String(error)})`,
         );
         break;
       }

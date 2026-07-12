@@ -4,8 +4,7 @@ import { useWalletClient } from "wagmi";
 import { chains } from "~/data/supported-chains";
 import { executeConsolidationPlan, type StepProgressEvent } from "~/lib/execution";
 import { getNativeBalance } from "~/lib/gas";
-import type { LiFiStatusResponse } from "~/lib/lifi";
-import { attestationStageMessage, chainNameOf, lifiStageMessage } from "~/lib/step-progress";
+import { attestationStageMessage, chainNameOf, refuelStageMessage } from "~/lib/step-progress";
 import type { ConsolidationState } from "~/lib/types";
 import { useConsolidationRecords } from "./use-consolidation-records";
 
@@ -28,7 +27,7 @@ export type LiveProgress = Record<string, StepLiveProgress>;
 /** Step types that have an observable wait we surface progress for. */
 const WAIT_STEP_TYPES = new Set(["gas-topup-wait", "attestation"]);
 const defaultStageFor = (type: string): string =>
-  type === "attestation" ? "Waiting for Circle attestation…" : "Bridging…";
+  type === "attestation" ? "Waiting for Circle attestation…" : "Delivering gas…";
 
 interface UseConsolidationExecutionOptions {
   state: ConsolidationState | null;
@@ -44,11 +43,11 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
   const { data: walletClient } = useWalletClient();
   const { saveConsolidation } = useConsolidationRecords();
 
-  // Raw LI.FI per-transfer status kept outside React state so successive polls
+  // Raw per-refuel delivery state kept outside React state so successive polls
   // can recompute the aggregated stage without the structured data leaking into
   // the generic StepLiveProgress the UI consumes. Keyed stepId → txHash.
-  const lifiTransfersRef = useRef<
-    Record<string, Record<string, { fromChainId: number; toChainId: number; status: LiFiStatusResponse }>>
+  const refuelsRef = useRef<
+    Record<string, Record<string, { fromChainId: number; toChainId: number; delivered: boolean }>>
   >({});
 
   // Step progress fed from executeStep's awaited waits via the ExecuteOptions
@@ -58,11 +57,11 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
     setLiveProgress((prev) => {
       const entry = prev[e.stepId] ?? { startedAt: Date.now(), stage: "" };
       let stage: string;
-      if (e.kind === "lifi") {
-        const byTx = { ...(lifiTransfersRef.current[e.stepId] ?? {}) };
-        byTx[e.txHash] = { fromChainId: e.fromChainId, toChainId: e.toChainId, status: e.status };
-        lifiTransfersRef.current[e.stepId] = byTx;
-        stage = lifiStageMessage(Object.values(byTx));
+      if (e.kind === "refuel") {
+        const byTx = { ...(refuelsRef.current[e.stepId] ?? {}) };
+        byTx[e.txHash] = { fromChainId: e.fromChainId, toChainId: e.toChainId, delivered: e.delivered };
+        refuelsRef.current[e.stepId] = byTx;
+        stage = refuelStageMessage(Object.values(byTx));
       } else {
         stage = attestationStageMessage(e.received, e.total);
       }
@@ -93,7 +92,7 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
       for (const id of Object.keys(next)) {
         if (!activeType.has(id)) {
           delete next[id];
-          delete lifiTransfersRef.current[id];
+          delete refuelsRef.current[id];
           changed = true;
         }
       }
@@ -239,12 +238,13 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
     if (failed) await skipStep(failed.id);
   }, [state, skipStep]);
 
-  // Independent on-chain "gas arrived" safety net: while a gas-topup-wait step
-  // is executing, poll each destination's native balance and surface it as the
-  // step's generic `note`. The LI.FI poll resolving stays the source of truth
-  // for step completion — this only enriches the displayed copy early when
-  // funds visibly land before LI.FI reports DONE. destKey + stepId key the
-  // effect so it re-runs only when the active step / destinations change.
+  // Independent on-chain "gas arrived" note: while a gas-topup-wait step is
+  // executing, poll each destination's native balance and surface it as the
+  // step's generic `note`. The executor's own balance-based delivery wait
+  // stays the source of truth for step completion — this only enriches the
+  // displayed copy (any balance increase, even below the delivery threshold).
+  // destKey + stepId key the effect so it re-runs only when the active step /
+  // destinations change.
   const activeWaitStep =
     state?.status === "executing"
       ? state.plan.find((s) => s.type === "gas-topup-wait" && s.status === "executing")

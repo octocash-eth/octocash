@@ -68,6 +68,7 @@ export const SLIPPAGE_LIMIT = 0.005;
 async function fetchSwapQuote(
   input: Pick<TokenAmount, "token" | "amount" | "chainId" | "walletAddress">,
   outputToken: Pick<TokenAmount, "token" | "chainId">,
+  receiverAddress?: Address,
 ): Promise<DeloraQuote> {
   const url = new URL(deloraQuoteUrl());
   url.searchParams.set("senderAddress", input.walletAddress);
@@ -76,6 +77,9 @@ async function fetchSwapQuote(
   url.searchParams.set("amount", input.amount.toString());
   url.searchParams.set("originCurrency", input.token);
   url.searchParams.set("destinationCurrency", outputToken.token);
+  if (receiverAddress) {
+    url.searchParams.set("receiverAddress", receiverAddress);
+  }
   url.searchParams.set("slippage", String(SLIPPAGE_LIMIT));
   if (OCTOCASH_SWAP_FEE > 0) {
     url.searchParams.set("integrator", DELORA_INTEGRATOR);
@@ -449,6 +453,62 @@ export async function getSwapQuote(
 ): Promise<TokenAmount> {
   const { output } = await getSwapQuoteWithLegs(input, outputToken);
   return output;
+}
+
+/**
+ * Get a Delora cross-chain native→native quote targeting a specific output on
+ * the destination chain — the fallback gas-refuel route when Gas.zip can't
+ * serve a chain pair. Same two-step probe as the Gas.zip path: quote with
+ * `amount = target` to learn the rate, then re-quote with a 20% buffer
+ * (same-token) or a proportionally scaled input (cross-token, e.g. ETH→POL).
+ *
+ * The returned `minDeliveredWei` is the quote's on-chain `minOutputAmount`
+ * floor, which the balance-based delivery wait uses as its landed threshold.
+ */
+export async function getDeloraRefuelQuote(
+  fromChainId: number,
+  toChainId: number,
+  targetOutputWei: bigint,
+  from: Address,
+  to: Address,
+): Promise<import("./gas-refuel").GasRefuelQuote> {
+  const quoteAt = (amount: bigint) =>
+    fetchSwapQuote(
+      { token: zeroAddress, amount, chainId: fromChainId, walletAddress: from },
+      { token: zeroAddress, chainId: toChainId },
+      to,
+    );
+
+  const probe = await quoteAt(targetOutputWei);
+  const probeOut = BigInt(probe.outputAmount);
+  if (probeOut <= 0n) {
+    throw new Error("DeloraRefuelError: probe quote returned no output");
+  }
+  const ratio = (probeOut * 100n) / targetOutputWei;
+
+  const depositWei =
+    ratio >= 90n && ratio <= 110n
+      ? (targetOutputWei * 120n) / 100n
+      : (targetOutputWei * targetOutputWei * 120n) / (probeOut * 100n);
+
+  const quote = await quoteAt(depositWei);
+  // The tx value is what the source wallet actually spends — prefer it over
+  // our requested amount in case Delora prices fees into the call value.
+  const txValue = BigInt(quote.calldata.value ?? "0x0");
+
+  return {
+    provider: "delora",
+    fromChainId,
+    toChainId,
+    depositWei: txValue > 0n ? txValue : depositWei,
+    expectedWei: BigInt(quote.outputAmount),
+    minDeliveredWei: BigInt(quote.minOutputAmount ?? quote.outputAmount),
+    tx: {
+      to: quote.calldata.to,
+      data: quote.calldata.data,
+      value: txValue,
+    },
+  };
 }
 
 /** Whether a quote failure is Delora's HTTP 429 / RATE_LIMIT rejection. */
