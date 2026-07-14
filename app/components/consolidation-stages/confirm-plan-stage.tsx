@@ -1,3 +1,4 @@
+import type { AccountsMap } from "~/lib/accounts";
 import type { ConsolidationState, DestinationToken, SourceToken } from "~/lib/types";
 import { TransactionPlanExecutor } from "../transaction-plan";
 
@@ -8,6 +9,7 @@ interface ConfirmPlanStageProps {
   onComplete: (state: ConsolidationState) => void;
   onBack: () => void;
   onExecutionStateChange?: (isExecuting: boolean) => void;
+  accounts?: AccountsMap;
 }
 
 export function ConfirmPlanStage({
@@ -17,6 +19,7 @@ export function ConfirmPlanStage({
   onComplete,
   onBack,
   onExecutionStateChange,
+  accounts,
 }: ConfirmPlanStageProps) {
   return (
     <div className="space-y-3 sm:space-y-4">
@@ -33,6 +36,7 @@ export function ConfirmPlanStage({
         onBack={onBack}
         showActions={true}
         onExecutionStateChange={onExecutionStateChange}
+        accounts={accounts}
       />
     </div>
   );

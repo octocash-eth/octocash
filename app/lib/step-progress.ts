@@ -50,3 +50,26 @@ export function omnibridgeStageMessage(direction: "exit" | "enter", ready: numbe
   if (total <= 1) return "Waiting for delivery on Gnosis…";
   return `Omnibridge deliveries received ${ready}/${total}`;
 }
+
+/**
+ * Friendly line for the Safe submission lifecycle. The confirmations phase is
+ * the long-lived one — it names how many co-signers have approved so the user
+ * knows who they're waiting on (the plan pauses recoverable if it outlasts
+ * the in-step wait budget).
+ */
+export function safeStageMessage(
+  phase: "signing" | "proposed" | "confirmations" | "executing",
+  confirmed: number,
+  threshold: number,
+): string {
+  switch (phase) {
+    case "signing":
+      return "Sign the Safe transaction in your wallet…";
+    case "proposed":
+      return `Proposed to the Safe — awaiting co-signers ${confirmed}/${threshold}`;
+    case "confirmations":
+      return `Awaiting Safe co-signers ${confirmed}/${threshold}`;
+    case "executing":
+      return threshold > 1 ? "Threshold met — executing Safe transaction…" : "Executing Safe transaction…";
+  }
+}

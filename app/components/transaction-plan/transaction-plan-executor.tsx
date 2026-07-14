@@ -23,6 +23,7 @@ export function TransactionPlanExecutor({
   showActions = false,
   planId,
   onExecutionStateChange,
+  accounts,
 }: ExecutorProps) {
   // Step 1: Generate the plan
   const {
@@ -35,6 +36,7 @@ export function TransactionPlanExecutor({
     sourceTokens,
     destinationToken,
     planId,
+    accounts,
   });
 
   // Step 2: Execute the plan

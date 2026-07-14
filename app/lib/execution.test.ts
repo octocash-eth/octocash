@@ -3880,6 +3880,7 @@ describe("gnosis omnibridge steps", () => {
       expect.objectContaining({ token: USDC_MAINNET, chainId: 1 }),
       expect.any(Function),
       undefined,
+      undefined,
     );
     expect(finalState.status).toBe("completed");
     expect(finalState.results["gc-1"].status).toBe("success");

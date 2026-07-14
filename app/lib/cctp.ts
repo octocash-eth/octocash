@@ -348,6 +348,12 @@ export const retrieveAttestations = async (
  * @param attestations - List of attestations retrieved from `retrieveAttestations()`.
  * @param tokenOut - The token to mint.
  * @param sendCalls - The function to send calls.
+ * @param sender - Wallet that submits the mint transaction. Defaults to the
+ *   recipient wallet; pass the owner EOA when the recipient is a Gnosis Safe —
+ *   `receiveMessage` is permissionless (destinationCaller is pinned to
+ *   Multicall3, funds go to `mintRecipient` regardless of the outer sender),
+ *   so routing the claim through an N-of-M signature round would be pure
+ *   ceremony.
  * @returns The transaction hash and the logs.
  */
 export const executeCCTPMint = async (
@@ -355,6 +361,7 @@ export const executeCCTPMint = async (
   tokenOut: TokenAmount,
   sendCalls: SendCallsFn,
   retryHints?: Parameters<SendCallsFn>[5],
+  sender?: Address,
 ): Promise<[string, { address: Address; data: Hex; topics: Hex[] }[][]]> => {
   if (attestations.length === 0) {
     throw new Error("No attestations");
@@ -368,7 +375,8 @@ export const executeCCTPMint = async (
     return ["", []];
   }
 
-  const [mintTx, mintLogs] = await sendCalls("mint", chainId, walletAddress, calls, "atomic-multicall", retryHints);
+  const from = sender ?? walletAddress;
+  const [mintTx, mintLogs] = await sendCalls("mint", chainId, from, calls, "atomic-multicall", retryHints);
   return [mintTx, mintLogs];
 };
 

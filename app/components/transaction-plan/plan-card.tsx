@@ -7,6 +7,7 @@ import { TokenDisplayAmount, TokenDisplayIcon, TokenDisplayRoot, TokenDisplaySym
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { useFormatFiat } from "~/context/currency-provider";
 import { usePrice } from "~/context/token-price-provider";
+import { safeAppQueueUrl } from "~/data/safe-contracts";
 import { chains } from "~/data/supported-chains";
 import type { StepLiveProgress } from "~/hooks/use-consolidation-execution";
 import { consolidateTokenAmounts } from "~/lib/tokens";
@@ -401,6 +402,38 @@ function GasCostDisplay({ gas, chainId }: { gas: StepGasEstimate; chainId: numbe
   );
 }
 
+/**
+ * Marks a step that executes as (part of) a Gnosis Safe transaction: shows
+ * the N-of-M requirement and, while it's live, a deep link into the Safe
+ * queue so co-signers can be pointed at the pending proposal.
+ */
+function SafeExecutionBadge({ step, showQueueLink }: { step: TransactionStep; showQueueLink: boolean }) {
+  const execution = step.execution;
+  if (!execution) return null;
+  const queueUrl = safeAppQueueUrl(step.chainId, execution.safeAddress);
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+      <span
+        className="rounded-full border border-border bg-muted/50 px-1.5 py-px"
+        title={`Executes as a Safe transaction (${execution.threshold} signature${execution.threshold > 1 ? "s" : ""} required)`}
+      >
+        Safe {execution.threshold > 1 ? `${execution.threshold}✕` : ""}
+      </span>
+      {showQueueLink && execution.threshold > 1 && queueUrl && (
+        <a
+          href={queueUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-0.5 text-primary hover:text-primary/80 hover:underline"
+        >
+          Safe queue
+          <ExternalLink className="w-3 h-3" />
+        </a>
+      )}
+    </span>
+  );
+}
+
 export function PlanCard({ step, result, stepNumber, progress }: PlanCardProps) {
   const isPending = step.status === "pending";
   const isExecuting = step.status === "executing";
@@ -432,6 +465,7 @@ export function PlanCard({ step, result, stepNumber, progress }: PlanCardProps) 
         {/* Action description + inline transient wait status */}
         <div className="text-xs sm:text-sm text-foreground flex items-center gap-1.5 flex-wrap min-w-0">
           <ActionContent step={step} result={result} />
+          {step.execution?.via === "safe" && <SafeExecutionBadge step={step} showQueueLink={isExecuting || isFailed} />}
           {isExecuting && progress && <StepProgressLine progress={progress} />}
         </div>
       </div>

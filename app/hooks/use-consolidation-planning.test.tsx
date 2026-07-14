@@ -147,7 +147,13 @@ describe("useConsolidationPlanning", () => {
       );
 
       await waitFor(() => {
-        expect(mockPlanConsolidation).toHaveBeenCalledWith(sourceTokens, destinationToken, connectedWallets);
+        expect(mockPlanConsolidation).toHaveBeenCalledWith(
+          sourceTokens,
+          destinationToken,
+          connectedWallets,
+          undefined,
+          undefined,
+        );
       });
     });
 

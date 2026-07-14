@@ -3,6 +3,7 @@ import { gnosis, mainnet } from "viem/chains";
 import { RAILGUN_SUPPORTED_CHAINS } from "~/data/railgun";
 import { chains, transports } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
+import { type AccountsMap, accountFor, executorFor, isSafeAccount, safeControlledOn } from "./accounts";
 import { deloraPriceKey, fetchDeloraPrices } from "./api/delora";
 import { getBridgeFee } from "./cctp";
 import { type DeloraSwapLeg, getSwapQuoteWithLegs } from "./delora";
@@ -97,9 +98,24 @@ async function reconcileGasGaps(
   steps: TransactionStep[],
   balances: NativeBalances,
   log: (...args: unknown[]) => void,
+  accounts?: AccountsMap,
 ): Promise<GasGaps> {
   const gaps: GasGaps = new Map();
+  // Gas is charged to whoever SIGNS the step: the wallet itself for EOAs, the
+  // owner EOA for Safe steps (execTransaction's msg.sender pays). Native
+  // *value* always comes from the step wallet's own balance, so for Safe
+  // steps the two are tracked under different keys.
   const groups = new Map<string, { chainId: number; wallet: Address; gasWei: bigint; nativeSpendWei: bigint }>();
+
+  const groupFor = (chainId: number, wallet: Address) => {
+    const key = gapKey(chainId, wallet);
+    let group = groups.get(key);
+    if (!group) {
+      group = { chainId, wallet: getAddress(wallet) as Address, gasWei: 0n, nativeSpendWei: 0n };
+      groups.set(key, group);
+    }
+    return group;
+  };
 
   for (const step of steps) {
     if (
@@ -111,20 +127,15 @@ async function reconcileGasGaps(
       continue;
     const wallet = step.inputTokens[0]?.walletAddress;
     if (!wallet) continue;
-    const key = gapKey(step.chainId, wallet);
-    let group = groups.get(key);
-    if (!group) {
-      group = { chainId: step.chainId, wallet: getAddress(wallet) as Address, gasWei: 0n, nativeSpendWei: 0n };
-      groups.set(key, group);
-    }
-    group.gasWei += step.estimatedGas?.gasCostWei ?? 0n;
+    const gasPayer = executorFor(accounts, wallet);
+    groupFor(step.chainId, gasPayer).gasWei += step.estimatedGas?.gasCostWei ?? 0n;
     for (const input of step.inputTokens) {
       if (
         isAddressEqual(input.token, zeroAddress) &&
         input.provenance === undefined &&
         isAddressEqual(input.walletAddress, wallet)
       ) {
-        group.nativeSpendWei += input.amount;
+        groupFor(step.chainId, wallet).nativeSpendWei += input.amount;
       }
     }
   }
@@ -132,12 +143,23 @@ async function reconcileGasGaps(
   for (const group of groups.values()) {
     const balance = await getCachedNativeBalance(balances, group.chainId, group.wallet);
     const required = group.gasWei + group.nativeSpendWei;
-    if (balance < required) {
-      recordGasGap(gaps, group.chainId, group.wallet, required - balance);
-      log(
-        `🔍 [DEBUG] Reconciled gas gap on chain ${group.chainId} for ${group.wallet}: balance=${balance.toString()}, gas=${group.gasWei.toString()}, nativeSpend=${group.nativeSpendWei.toString()}, deficit=${(required - balance).toString()}`,
+    if (balance >= required) continue;
+
+    if (isSafeAccount(accounts, group.wallet)) {
+      // A Safe's shortfall can only be native VALUE (its gas is charged to
+      // the owner EOA above), and Safes aren't refuelable by gas-topup steps
+      // (their native can't be sent with a quick EOA transfer) — hard error.
+      const chainName = chains[group.chainId as keyof typeof chains]?.name ?? `chain ${group.chainId}`;
+      throw new Error(
+        `PlanningError: Safe ${group.wallet} holds ${formatGasCostNative(balance)} native on ${chainName} but the ` +
+          `plan spends ${formatGasCostNative(group.nativeSpendWei)}. Reduce the selected native amount.`,
       );
     }
+
+    recordGasGap(gaps, group.chainId, group.wallet, required - balance);
+    log(
+      `🔍 [DEBUG] Reconciled gas gap on chain ${group.chainId} for ${group.wallet}: balance=${balance.toString()}, gas=${group.gasWei.toString()}, nativeSpend=${group.nativeSpendWei.toString()}, deficit=${(required - balance).toString()}`,
+    );
   }
 
   return gaps;
@@ -328,22 +350,25 @@ async function assertOmnibridgeMinPerTx(
 const EIP7702_DELEGATION_PREFIX = "0xef0100";
 
 /**
- * Source wallets sign on their source chain and (since the same address is the
+ * Wallets sign on their source chain and (since the same address is the
  * default CCTP mintRecipient and the intermediate-wallet candidate pool) need
- * to be reachable as EOAs everywhere. Smart-account wallets (Safe, ERC-4337)
- * have counterfactual addresses that may not be controllable on other chains —
- * bridging risks stranded funds. The destination wallet only needs this check
- * when it's itself a connected wallet (intermediate-wallet candidate); an
- * arbitrary destination address can be a contract and just receive ERC20.
+ * to be reachable everywhere they're used. EOAs are the same address on every
+ * chain; a registered Safe is usable only on chains where discovery verified a
+ * deployment controlled by the connected owner. Unregistered contract
+ * addresses are rejected — bridging to them risks stranded funds. The
+ * destination wallet only needs this check when it's itself a connected
+ * wallet (intermediate-wallet candidate); an arbitrary destination address
+ * can be a contract and just receive ERC20.
  *
  * EIP-7702-delegated EOAs report non-empty bytecode but are still EOAs (same
  * address on every chain, signable by the original key), so we recognize the
  * `0xef0100` designation prefix and let them through.
  */
-async function assertEoaWallets(
+async function assertAccountsUsable(
   sourceTokens: TokenAmount[],
   destinationToken: DestinationToken,
   connectedWallets: readonly Address[],
+  accounts: AccountsMap | undefined,
 ): Promise<void> {
   const pairs = new Map<string, { address: Address; chainId: number }>();
   for (const t of sourceTokens) {
@@ -357,23 +382,51 @@ async function assertEoaWallets(
     });
   }
 
-  await Promise.all(Array.from(pairs.values()).map(({ address, chainId }) => assertEoaOnChain(address, chainId)));
+  await Promise.all(
+    Array.from(pairs.values()).map(({ address, chainId }) => assertAccountUsableOnChain(address, chainId, accounts)),
+  );
 }
 
 /**
- * Throws when `address` is a (non-EIP-7702) contract on `chainId`. Also used
- * standalone for the intermediate wallet on mainnet when a plan routes through
- * the Gnosis<->mainnet Omnibridge hop — the hop's claim/burn steps execute on
- * mainnet, a chain `assertEoaWallets` may not otherwise cover.
+ * Throws when `address` is not usable on `chainId`: an unregistered
+ * (non-EIP-7702) contract, or a registered Safe without a controlled, verified
+ * deployment there. Registered Safes additionally get a `getCode` freshness
+ * check — a stale discovery snapshot must never route funds to an address
+ * with no contract behind it. Also used standalone for the intermediate
+ * wallet on mainnet when a plan routes through the Gnosis<->mainnet
+ * Omnibridge hop — the hop's claim/burn steps execute on mainnet, a chain the
+ * source/destination sweep may not otherwise cover.
  */
-async function assertEoaOnChain(address: Address, chainId: number): Promise<void> {
+async function assertAccountUsableOnChain(
+  address: Address,
+  chainId: number,
+  accounts: AccountsMap | undefined,
+): Promise<void> {
+  const chainName = chains[chainId as keyof typeof chains]?.name ?? `chain ${chainId}`;
+  const account = accountFor(accounts, address);
+
+  if (account.kind === "safe") {
+    if (!safeControlledOn(account, chainId)) {
+      throw new Error(
+        `SafeNotDeployedError: Safe ${address} has no deployment controlled by your connected owner on ${chainName}.`,
+      );
+    }
+    const code = await getPublicClient(chainId).getCode({ address });
+    if (code === undefined || code === "0x") {
+      throw new Error(
+        `SafeNotDeployedError: Safe ${address} has no contract code on ${chainName} — refusing to route funds there.`,
+      );
+    }
+    return;
+  }
+
   const code = await getPublicClient(chainId).getCode({ address });
   const hasCode = code !== undefined && code !== "0x";
   const is7702 = hasCode && code.toLowerCase().startsWith(EIP7702_DELEGATION_PREFIX);
   if (hasCode && !is7702) {
-    const chainName = chains[chainId as keyof typeof chains]?.name ?? `chain ${chainId}`;
     throw new Error(
-      `PlanningError: Smart-account wallets are not supported. ${address} is a contract on ${chainName}.`,
+      `PlanningError: Smart-account wallets are not supported. ${address} is a contract on ${chainName}. ` +
+        `If this is a Gnosis Safe, connect one of its owners and enable it from the Safe accounts panel.`,
     );
   }
 }
@@ -439,24 +492,60 @@ async function resolveIntermediateWallet(
   gasCtx: GasContext,
   balances: NativeBalances,
   isRailgun = false,
+  accounts?: AccountsMap,
+  safeMode = false,
 ): Promise<Address> {
   const destinationWallet = destinationToken.walletAddress;
+  const destChainId = destinationToken.chainId;
+  const chain = chains[destChainId as keyof typeof chains];
+  const chainName = chain?.name ?? `chain ${destChainId}`;
+
+  // Safe mode (every source is Safe-held): funds must never be custodied by
+  // an EOA, not even transiently — the intermediate can ONLY be a Safe. The
+  // owner EOA still signs and submits (execTransaction, permissionless
+  // claims), but mint recipients, hub balances, and final swaps all live on a
+  // Safe; an EOA destination receives exactly one final transfer at the end.
+  if (safeMode) {
+    const destinationAccount = accountFor(accounts, destinationWallet);
+    if (!isRailgun && destinationAccount.kind === "safe" && safeControlledOn(destinationAccount, destChainId)) {
+      await getCachedNativeBalance(balances, destChainId, destinationWallet);
+      return destinationWallet;
+    }
+    const sourceSafe = [...new Set(sourceTokens.map((token) => token.walletAddress))].find((wallet) =>
+      safeControlledOn(accountFor(accounts, wallet), destChainId),
+    );
+    if (sourceSafe) {
+      await getCachedNativeBalance(balances, destChainId, sourceSafe);
+      return sourceSafe;
+    }
+    throw new Error(
+      `PlanningError: None of your Safes is deployed on ${chainName}, so Safe-held funds cannot be safely ` +
+        `received there. Pick a destination chain where a source Safe (or a Safe destination) is deployed.`,
+    );
+  }
+
   // A Railgun destination has no public destination wallet (the UI passes a
   // zero-address placeholder), so a connected wallet is always chosen below.
   const isDestinationConnected =
     !isRailgun && connectedWallets.some((wallet) => isAddressEqual(wallet, destinationWallet));
-  const destChainId = destinationToken.chainId;
-  const chain = chains[destChainId as keyof typeof chains];
 
   if (isDestinationConnected) {
     // Even if the destination wallet can't cover its own dest-chain gas it is
     // still the intermediate; `reconcileGasGaps` sizes the top-up afterwards
-    // from the drafted steps' measured estimates.
+    // from the drafted steps' measured estimates. A controlled Safe
+    // destination qualifies too (assertAccountsUsable verified its deployment
+    // on the destination chain): the bridge mints straight into it and the
+    // final swap becomes one batched Safe transaction.
     await getCachedNativeBalance(balances, destChainId, destinationWallet);
     return destinationWallet;
   }
 
-  const searchOrder = [...new Set([...sourceTokens.map((token) => token.walletAddress), ...connectedWallets])];
+  // EOA mode: Safes are never intermediate candidates — sources are all
+  // EOA-held here, and an intermediate exists precisely to be a cheap
+  // same-address relay (a Safe would cost an N-of-M round per hop).
+  const searchOrder = [...new Set([...sourceTokens.map((token) => token.walletAddress), ...connectedWallets])].filter(
+    (wallet) => !isSafeAccount(accounts, wallet),
+  );
 
   // Find first wallet whose destination-chain balance covers its predicted ops
   // (each candidate may need a different op shape — e.g. one holds extra
@@ -478,7 +567,6 @@ async function resolveIntermediateWallet(
     return searchOrder[0];
   }
 
-  const chainName = chain?.name ?? `chain ${destChainId}`;
   throw new Error(
     `PlanningError: Destination wallet ${destinationWallet} is not connected and no connected wallet found for ${chainName}`,
   );
@@ -876,6 +964,7 @@ async function processChainWalletSwaps(
   artifacts: PlanArtifacts,
   log: (...args: unknown[]) => void,
   bridgeTargets?: Map<number, Omit<TokenAmount, "amount" | "walletAddress">>,
+  accounts?: AccountsMap,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
   const steps: TransactionStep[] = [];
   const swappedTokens: TokenAmount[] = [];
@@ -965,10 +1054,15 @@ async function processChainWalletSwaps(
               : buildBridgeSimOps(chainId, destinationToken.chainId, destinationToken.walletAddress, totalBridged)),
           );
         }
-        const measuredGasWei = await measureOpsGas(chainId, walletAddress, simOps, gasCtx.maxFeePerGas[chainId]);
+        // A Safe pays no gas from its own native balance (the owner EOA
+        // funds execTransaction), so its native can be swapped in full — no
+        // gas reserve is capped out of it.
+        const gasReserveWei = isSafeAccount(accounts, walletAddress)
+          ? 0n
+          : await measureOpsGas(chainId, walletAddress, simOps, gasCtx.maxFeePerGas[chainId]);
         const nativeBalance = await getCachedNativeBalance(balances, chainId, walletAddress);
         const hasOtherValue = quoted.length > 1 || bridgeTargetAlreadyHere.length > 0;
-        await capNativeQuoteForGas(quoted, bridgeTargetToken, measuredGasWei, nativeBalance, hasOtherValue, log);
+        await capNativeQuoteForGas(quoted, bridgeTargetToken, gasReserveWei, nativeBalance, hasOtherValue, log);
       }
       // Wallets that can't cover their gas (native or not) are handled by
       // reconcileGasGaps after estimates are attached.
@@ -1487,6 +1581,7 @@ async function createFinalSwaps(
   balances: NativeBalances,
   artifacts: PlanArtifacts,
   log: (...args: unknown[]) => void,
+  accounts?: AccountsMap,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
   log(
     "🔍 [DEBUG] createFinalSwaps called with tokens:",
@@ -1561,13 +1656,17 @@ async function createFinalSwaps(
         simOps.push({ op: "erc20-approval" }, { op: "shield" });
       }
 
-      const measuredGasWei = await measureOpsGas(destChainId, walletAddress, simOps, gasCtx.maxFeePerGas[destChainId]);
+      // Safe wallets don't fund gas from their own native (see
+      // processChainWalletSwaps) — skip the gas reserve when capping.
+      const gasReserveWei = isSafeAccount(accounts, walletAddress)
+        ? 0n
+        : await measureOpsGas(destChainId, walletAddress, simOps, gasCtx.maxFeePerGas[destChainId]);
       const nativeBalance = await getCachedNativeBalance(balances, destChainId, walletAddress);
       const hasOtherValue = tokensToProcess.length > 1;
       const cappedNative = await capNativeQuoteForGas(
         quoted,
         destinationToken,
-        measuredGasWei,
+        gasReserveWei,
         nativeBalance,
         hasOtherValue,
         log,
@@ -1745,6 +1844,7 @@ async function createGasTopUpSteps(
   destinationToken: DestinationToken,
   executorAddresses: Set<Address>,
   log: (...args: unknown[]) => void,
+  accounts?: AccountsMap,
 ): Promise<TransactionStep[]> {
   if (gaps.size === 0) return [];
 
@@ -1757,7 +1857,9 @@ async function createGasTopUpSteps(
   const destChain = chains[destChainId as keyof typeof chains];
   const candidates: { chainId: number; address: Address; balance: bigint; label: string }[] = [];
 
-  if (destChain) {
+  // A Safe can't fund top-ups: the gas-topup step sends native via a plain
+  // EOA transaction, and routing it through an N-of-M round isn't worth it.
+  if (destChain && !isSafeAccount(accounts, intermediateWallet)) {
     const destBalance = await getNativeBalance(
       destChain,
       intermediateWallet,
@@ -1983,6 +2085,147 @@ async function createGasTopUpSteps(
   return [gasTopUpStep, gasTopUpWaitStep];
 }
 
+/** Step types whose calls the step wallet itself signs (Safe path candidates). */
+const SAFE_EXECUTABLE_TYPES = new Set<TransactionStep["type"]>([
+  "swap",
+  "bridge",
+  "transfer",
+  "gnosis-bridge",
+  "shield",
+]);
+
+/**
+ * Base execTransaction overhead plus per-signature verification cost, added
+ * on top of the measured inner-call gas for Safe-executed steps. Conservative
+ * constants — the real number is re-estimated via eth_estimateGas at send
+ * time; this only keeps planning-side reservations from undershooting.
+ */
+const SAFE_EXEC_BASE_GAS = 45_000n;
+const SAFE_EXEC_PER_SIGNATURE_GAS = 8_000n;
+
+/**
+ * Tags steps whose input wallet is a Safe with the execution marker the
+ * executor dispatches on, and groups independent same-(chain, Safe) steps
+ * into MultiSend batches by provenance: a step joins the current open group
+ * when none of its inputs were produced by a member of that group (an intra-
+ * group dependency means the amount doesn't exist until the group executes,
+ * so the dependent step starts the next group). Batched steps execute as ONE
+ * Safe transaction — one signature round — and succeed/fail/retry together.
+ *
+ * Claim steps (`claim`/`gnosis-claim`) are deliberately not tagged: CCTP's
+ * `receiveMessage` (via Multicall3) and Omnibridge's `executeSignatures` are
+ * permissionless, so the owner EOA runs them directly and co-signers are
+ * never bothered for them.
+ */
+function tagSafeSteps(steps: TransactionStep[], accounts: AccountsMap | undefined): void {
+  if (!accounts) return;
+
+  type BatchGroup = { batchId: string; chainId: number; safe: string; memberIds: Set<string> };
+  let openGroup: BatchGroup | null = null;
+
+  for (const step of steps) {
+    const wallet = step.inputTokens[0]?.walletAddress;
+    if (!wallet || !SAFE_EXECUTABLE_TYPES.has(step.type)) continue;
+    const account = accountFor(accounts, wallet);
+    if (account.kind !== "safe") continue;
+
+    const deployment = account.deployments[step.chainId];
+    if (!deployment) {
+      // assertSafeChainConsistency rejects this plan; keep the tag pass total.
+      continue;
+    }
+
+    // Only swaps and transfers share a MultiSend batch: their calls are pure
+    // and their outputs attributable from one receipt's logs. Bridge and
+    // Omnibridge steps persist per-step side effects (burn tx hashes feeding
+    // the attestation, delivery baselines) and shield is gated off — each
+    // gets a singleton group. (Final swaps never feed a transfer: they pay
+    // out directly to the destination wallet, so intra-group dependencies
+    // simply don't arise between swaps and transfers.)
+    const canShareGroup = step.type === "swap" || step.type === "transfer";
+    const current: BatchGroup | null = openGroup;
+    const dependsOnOpenGroup =
+      current !== null &&
+      step.inputTokens.some((input) => input.provenance !== undefined && current.memberIds.has(input.provenance));
+    const sameGroupTarget =
+      current !== null && current.chainId === step.chainId && current.safe === wallet.toLowerCase();
+
+    const group: BatchGroup =
+      canShareGroup && current !== null && sameGroupTarget && !dependsOnOpenGroup
+        ? current
+        : {
+            batchId: `safe-batch-${step.id}`,
+            chainId: step.chainId,
+            safe: wallet.toLowerCase(),
+            memberIds: new Set<string>(),
+          };
+    openGroup = canShareGroup ? group : null;
+    group.memberIds.add(step.id);
+
+    step.execution = {
+      via: "safe",
+      safeAddress: account.address,
+      ownerAddress: account.ownerAddress,
+      threshold: deployment.threshold,
+      safeVersion: deployment.version,
+      batchId: group.batchId,
+    };
+  }
+}
+
+/**
+ * Adds the execTransaction wrapper's gas to Safe-executed steps, once per
+ * batch group (a group is one on-chain transaction). Runs after
+ * `attachGasEstimates` so the measured inner-call figures stay intact.
+ */
+function addSafeExecGasOverhead(steps: TransactionStep[]): void {
+  const chargedBatches = new Set<string>();
+  for (const step of steps) {
+    if (!step.execution || !step.estimatedGas) continue;
+    if (chargedBatches.has(step.execution.batchId)) continue;
+    chargedBatches.add(step.execution.batchId);
+    const overheadUnits = SAFE_EXEC_BASE_GAS + SAFE_EXEC_PER_SIGNATURE_GAS * BigInt(step.execution.threshold);
+    step.estimatedGas = {
+      ...step.estimatedGas,
+      gasUnits: step.estimatedGas.gasUnits + overheadUnits,
+      gasCostWei: step.estimatedGas.gasCostWei + overheadUnits * step.estimatedGas.maxFeePerGas,
+    };
+  }
+}
+
+/**
+ * Final invariant over the drafted plan: every token that sits at a Safe's
+ * address must sit on a chain where that Safe has a controlled, verified
+ * deployment. This is the single guarantee that a Safe address is never used
+ * as a CCTP mintRecipient, Omnibridge receiver, transfer target, or top-up
+ * destination on a chain where the Safe doesn't exist — regardless of which
+ * code path produced the token.
+ */
+function assertSafeChainConsistency(steps: TransactionStep[], accounts: AccountsMap | undefined): void {
+  if (!accounts) return;
+  for (const step of steps) {
+    for (const token of [...step.inputTokens, step.outputToken]) {
+      const account = accountFor(accounts, token.walletAddress);
+      if (account.kind === "safe" && !safeControlledOn(account, token.chainId)) {
+        const chainName = chains[token.chainId as keyof typeof chains]?.name ?? `chain ${token.chainId}`;
+        throw new Error(
+          `SafeNotDeployedError: Plan step ${step.id} would route ${token.symbol} to Safe ${token.walletAddress} ` +
+            `on ${chainName}, where it has no controlled deployment.`,
+        );
+      }
+    }
+    if (step.type === "gas-topup") {
+      for (const destination of step.gasTopUpDestinations ?? []) {
+        if (isSafeAccount(accounts, destination.address)) {
+          throw new Error(
+            `PlanningError: Gas top-up targets Safe ${destination.address} — top-ups must target the owner EOA.`,
+          );
+        }
+      }
+    }
+  }
+}
+
 /**
  * Fast path for plans whose every source token is already the destination token
  * on the destination chain — used only when there's a single source wallet or
@@ -1999,6 +2242,7 @@ async function planTransferOnly(
   sourceTokens: TokenAmount[],
   destinationToken: DestinationToken,
   log: (...args: unknown[]) => void,
+  accounts?: AccountsMap,
 ): Promise<TransactionStep[]> {
   const destChainId = destinationToken.chainId;
   const destIsNative = isAddressEqual(destinationToken.token, zeroAddress);
@@ -2023,18 +2267,21 @@ async function planTransferOnly(
     const ops: OperationType[] = walletTokens.map(() => transferOp);
     const gasCost = await estimateChainGasCosts(destChainId, ops, gasCtx.maxFeePerGas[destChainId]);
     const nativeBalance = await getCachedNativeBalance(balances, destChainId, sourceWallet);
+    // A Safe source pays no gas from its own native (the owner EOA funds
+    // execTransaction), so nothing is reserved out of the transfer amount.
+    const gasReserveWei = isSafeAccount(accounts, sourceWallet) ? 0n : gasCost.totalGasCost;
 
     let processedTokens: TokenAmount[] = walletTokens;
 
     if (destIsNative) {
       const totalAmount = walletTokens.reduce((sum, t) => sum + t.amount, 0n);
-      const maxAffordable = nativeBalance > gasCost.totalGasCost ? nativeBalance - gasCost.totalGasCost : 0n;
+      const maxAffordable = nativeBalance > gasReserveWei ? nativeBalance - gasReserveWei : 0n;
 
       if (maxAffordable <= 0n) {
         // Wallet can't cover its own gas. Refuse a sole dust transfer;
         // otherwise keep the amount — reconcileGasGaps sizes the top-up.
-        if (totalAmount <= dustTopUpThreshold(totalAmount, gasCost.totalGasCost, nativeBalance)) {
-          throwNativeAmountTooSmall(destChainId, sourceWallet, totalAmount, gasCost.totalGasCost);
+        if (totalAmount <= dustTopUpThreshold(totalAmount, gasReserveWei, nativeBalance)) {
+          throwNativeAmountTooSmall(destChainId, sourceWallet, totalAmount, gasReserveWei);
         }
       } else if (totalAmount > maxAffordable) {
         // Cap the last row by the overshoot so enough native is left for gas.
@@ -2072,15 +2319,17 @@ async function planTransferOnly(
 
   // Measure first (batched eth_simulateV1 with ladder fallback), then size
   // top-ups from the measured deficits.
+  tagSafeSteps(steps, accounts);
   await attachGasEstimates(steps, gasCtx);
-  const gaps = await reconcileGasGaps(steps, balances, log);
+  addSafeExecGasOverhead(steps);
+  const gaps = await reconcileGasGaps(steps, balances, log, accounts);
 
   let finalSteps = steps;
   if (gaps.size > 0) {
     const executorAddresses = new Set<Address>();
-    executorAddresses.add(getAddress(destinationToken.walletAddress) as Address);
+    executorAddresses.add(getAddress(executorFor(accounts, destinationToken.walletAddress)) as Address);
     for (const t of sourceTokens) {
-      executorAddresses.add(getAddress(t.walletAddress) as Address);
+      executorAddresses.add(getAddress(executorFor(accounts, t.walletAddress)) as Address);
     }
     const gasTopUpSteps = await createGasTopUpSteps(
       gaps,
@@ -2088,11 +2337,13 @@ async function planTransferOnly(
       destinationToken,
       executorAddresses,
       log,
+      accounts,
     );
     await attachGasEstimates(gasTopUpSteps, gasCtx);
     finalSteps = [...gasTopUpSteps, ...steps];
   }
 
+  assertSafeChainConsistency(finalSteps, accounts);
   return finalSteps;
 }
 
@@ -2147,15 +2398,39 @@ export async function planConsolidation(
   destinationToken: DestinationToken,
   connectedWallets: readonly Address[],
   log: (...args: unknown[]) => void = () => {},
+  accounts?: AccountsMap,
 ): Promise<TransactionStep[]> {
   // Validate inputs
   validateInputs(sourceTokens, destinationToken, connectedWallets, log);
-  await assertEoaWallets(sourceTokens, destinationToken, connectedWallets);
+  await assertAccountsUsable(sourceTokens, destinationToken, connectedWallets, accounts);
+
+  // Source-kind homogeneity: a plan draws either from EOAs or from Safes,
+  // never both (the Addresses / Safes tabs enforce this in the UI; planning
+  // re-checks as defense in depth). Safe mode hardens custody: funds from
+  // Safes are only ever held by Safes until final delivery.
+  const sourceKinds = new Set(sourceTokens.map((t) => accountFor(accounts, t.walletAddress).kind));
+  if (sourceKinds.size > 1) {
+    throw new Error(
+      "PlanningError: Safe-held and address-held tokens must be consolidated in separate runs. " +
+        "Use the Addresses and Safes tabs to select one kind at a time.",
+    );
+  }
+  const safeMode = sourceKinds.has("safe");
 
   // Railgun (0zk) destination: everything consolidates to an intermediate
   // connected wallet first, then a final `shield` step deposits the token into
   // the Railgun contract. There is no public destination wallet.
   const isRailgun = destinationToken.railgunAddress !== undefined;
+
+  // Railgun's shield key derives from a deterministic personal_sign, which a
+  // Safe cannot produce — and in Safe mode the shielding wallet would have to
+  // be a Safe (an EOA must never custody the funds). Mutually exclusive.
+  if (safeMode && isRailgun) {
+    throw new Error(
+      "PlanningError: Railgun shielding isn't available for Safe-held funds (the shield key requires an EOA " +
+        "signature, and Safe custody rules forbid routing the funds through an EOA). Use the Addresses tab.",
+    );
+  }
 
   // Fast path: when every source is already the destination token on the
   // destination chain, the plan is pure transfers — no swap/bridge/claim is
@@ -2177,7 +2452,7 @@ export async function planConsolidation(
     const sourceWalletSet = new Set(sourceTokens.map((t) => getAddress(t.walletAddress)));
     const destConnected = connectedWallets.some((w) => isAddressEqual(w, destinationToken.walletAddress));
     if (sourceWalletSet.size === 1 || destConnected) {
-      return planTransferOnly(sourceTokens, destinationToken, log);
+      return planTransferOnly(sourceTokens, destinationToken, log, accounts);
     }
   }
 
@@ -2243,16 +2518,40 @@ export async function planConsolidation(
     gasCtx,
     balances,
     isRailgun,
+    accounts,
+    safeMode,
   );
+
+  // Railgun's shield key derives from a deterministic personal_sign — a Safe
+  // returns an EIP-1271 contract signature, which cannot seed it. The
+  // intermediate performs the shield, so it must be an EOA (Safe mode is
+  // rejected earlier; this guards the EOA-mode Safe-destination edge).
+  if (isRailgun && isSafeAccount(accounts, intermediateWallet)) {
+    throw new Error(
+      "PlanningError: Railgun shielding requires an EOA wallet (its shield key derives from a signature a Safe cannot produce). Choose an EOA destination or disable the Safe.",
+    );
+  }
+
   // The intermediate target is a plain public token spec — drop the railgun
   // marker so swap/bridge outputs aren't tagged with it.
   const { railgunAddress, ...publicDestination } = destinationToken;
   const intermediateToken = { ...publicDestination, walletAddress: intermediateWallet };
 
   // The Omnibridge hop's mainnet steps (claim/deposit/burn) are signed by the
-  // intermediate wallet on mainnet — a chain assertEoaWallets may not cover.
+  // intermediate wallet on mainnet — a chain assertAccountsUsable may not
+  // cover. A Safe intermediate (i.e. a Safe destination acting as its own
+  // intermediate) must therefore be controlled on mainnet too, or the route
+  // is rejected with an actionable error.
   if (needsMainnetHub) {
-    await assertEoaOnChain(intermediateWallet, mainnet.id);
+    await assertAccountUsableOnChain(intermediateWallet, mainnet.id, accounts).catch((error) => {
+      if (isSafeAccount(accounts, intermediateWallet)) {
+        throw new Error(
+          `PlanningError: This route needs an Ethereum mainnet hop, but Safe ${intermediateWallet} isn't ` +
+            `deployed (or controlled by your connected owner) there. Pick an EOA destination or a non-Gnosis route.`,
+        );
+      }
+      throw error;
+    });
   }
 
   // Per-chain bridge-target overrides for a direct Omnibridge route: on
@@ -2278,6 +2577,7 @@ export async function planConsolidation(
     artifacts,
     log,
     bridgeTargets,
+    accounts,
   );
 
   if (sourceHasGnosis && !isGnosisDest) {
@@ -2337,45 +2637,73 @@ export async function planConsolidation(
   // chain (false when the destination is Gnosis — that claim runs on mainnet).
   const hasBridges = !isGnosisDest && steps.some((s) => s.type === "bridge");
   const needsFinalTransfer = !isRailgun && !isAddressEqual(intermediateWallet, destinationToken.walletAddress);
+
+  // Safe mode with a distinct destination: the final swaps pay out DIRECTLY
+  // to the destination wallet (Delora quotes support a recipient other than
+  // the sender — the same mechanism the intermediate flow relies on). The
+  // Safe executes the swap, so custody stays on the Safe until the router
+  // delivers; value that's already the destination token is moved by the
+  // transfer steps `createSwapsAndTransfers` emits toward the same target.
+  // Both step kinds batch into the Safe's final MultiSend, and no trailing
+  // `createFinalTransfer` (with its floor/dust trade-offs) is needed at all.
+  const deliversDirectly = safeMode && needsFinalTransfer;
+  const finalTarget = deliversDirectly ? { ...publicDestination } : intermediateToken;
   ({ steps, tokens } = await createFinalSwaps(
     steps,
     tokens,
-    intermediateToken,
+    finalTarget,
     gasCtx,
     hasBridges,
-    needsFinalTransfer,
+    needsFinalTransfer && !deliversDirectly,
     isRailgun,
     balances,
     artifacts,
     log,
+    accounts,
   ));
 
   if (isRailgun && railgunAddress) {
     ({ steps, tokens } = createShieldStep(steps, tokens, railgunAddress, log));
-  } else if (needsFinalTransfer) {
+  } else if (needsFinalTransfer && !deliversDirectly) {
     ({ steps, tokens } = await createFinalTransfer(steps, tokens, destinationToken, log));
   }
+
+  // Tag Safe-executed steps (and compute their MultiSend batch groups) before
+  // estimating so the execTransaction overhead can be layered per group.
+  tagSafeSteps(steps, accounts);
 
   // Attach per-step gas estimates (batched eth_simulateV1 with ladder
   // fallback), then derive gas deficits from the measured numbers.
   await attachGasEstimates(steps, gasCtx, artifacts);
-  const gaps = await reconcileGasGaps(steps, balances, log);
+  addSafeExecGasOverhead(steps);
+  const gaps = await reconcileGasGaps(steps, balances, log, accounts);
 
-  // If any (chain, wallet) can't cover its own gas, prepend a gas-topup step
-  // funded preferentially from the destination wallet, falling back to the
-  // richest executor balance across all supported chains.
+  // If any (chain, gas payer) can't cover its own gas, prepend a gas-topup
+  // step funded preferentially from the destination wallet, falling back to
+  // the richest executor balance across all supported chains. Safe steps'
+  // gas payer is the owner EOA (a real EOA, same address everywhere), so
+  // top-ups never target or draw from a Safe.
   const executorAddresses = new Set<Address>();
-  executorAddresses.add(getAddress(intermediateWallet) as Address);
+  executorAddresses.add(getAddress(executorFor(accounts, intermediateWallet)) as Address);
   for (const step of steps) {
     if (step.inputTokens[0]?.walletAddress) {
-      executorAddresses.add(getAddress(step.inputTokens[0].walletAddress) as Address);
+      executorAddresses.add(getAddress(executorFor(accounts, step.inputTokens[0].walletAddress)) as Address);
     }
   }
-  const gasTopUpSteps = await createGasTopUpSteps(gaps, intermediateWallet, destinationToken, executorAddresses, log);
+  const gasTopUpSteps = await createGasTopUpSteps(
+    gaps,
+    intermediateWallet,
+    destinationToken,
+    executorAddresses,
+    log,
+    accounts,
+  );
   if (gasTopUpSteps.length > 0) {
     await attachGasEstimates(gasTopUpSteps, gasCtx, artifacts);
     steps = [...gasTopUpSteps, ...steps];
   }
+
+  assertSafeChainConsistency(steps, accounts);
 
   // Validate plan constraints
   const attestationSteps = steps.filter((s) => s.type === "attestation");

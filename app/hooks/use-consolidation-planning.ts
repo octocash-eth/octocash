@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { type AccountsMap, toAccountsRecord } from "~/lib/accounts";
 import { planConsolidation } from "~/lib/planning";
 import type { ConsolidationState, DestinationToken, SourceToken } from "~/lib/types";
 import { useConnectedAddresses } from "./use-connected-addresses";
@@ -9,6 +10,8 @@ interface UseConsolidationPlanningOptions {
   destinationToken: DestinationToken;
   enabled?: boolean; // Allow disabling the query (e.g., during execution)
   planId: string; // Unique plan ID to use for this consolidation
+  /** Account-kind lookup (enabled Safes + deployments); absent => all-EOA. */
+  accounts?: AccountsMap;
 }
 
 /**
@@ -20,14 +23,40 @@ export function useConsolidationPlanning({
   destinationToken,
   enabled = true,
   planId,
+  accounts,
 }: UseConsolidationPlanningOptions) {
   const connectedWallets = useConnectedAddresses();
-  const connectedWalletKey = useMemo(() => {
-    return connectedWallets
+
+  // Enabled Safe addresses count as plannable wallets alongside connected EOAs.
+  const allWallets = useMemo(() => {
+    const safeAddresses = Array.from(accounts?.values() ?? []).flatMap((account) =>
+      account.kind === "safe" ? [account.address] : [],
+    );
+    return [...connectedWallets, ...safeAddresses];
+  }, [connectedWallets, accounts]);
+
+  // Key includes each Safe's per-chain deployments so a re-discovery that
+  // changes owners/threshold/deployed-chains invalidates the cached plan.
+  const walletKey = useMemo(() => {
+    const eoaKey = connectedWallets
       .map((address) => address.toLowerCase())
       .sort()
       .join(",");
-  }, [connectedWallets]);
+    const safeKey = Array.from(accounts?.values() ?? [])
+      .flatMap((account) =>
+        account.kind === "safe"
+          ? [
+              `${account.address.toLowerCase()}:${Object.values(account.deployments)
+                .map((d) => `${d.chainId}/${d.threshold}/${d.controlled ? 1 : 0}`)
+                .sort()
+                .join("+")}`,
+            ]
+          : [],
+      )
+      .sort()
+      .join(",");
+    return `${eoaKey}|${safeKey}`;
+  }, [connectedWallets, accounts]);
 
   const {
     data: plan,
@@ -35,8 +64,8 @@ export function useConsolidationPlanning({
     error,
     refetch,
   } = useQuery({
-    queryKey: ["consolidation-plan", planId, connectedWalletKey],
-    queryFn: () => planConsolidation(sourceTokens, destinationToken, connectedWallets),
+    queryKey: ["consolidation-plan", planId, walletKey],
+    queryFn: () => planConsolidation(sourceTokens, destinationToken, allWallets, undefined, accounts),
     enabled: enabled && sourceTokens.length > 0,
     staleTime: Number.POSITIVE_INFINITY, // Cache indefinitely within a component lifecycle
   });
@@ -54,10 +83,13 @@ export function useConsolidationPlanning({
       results: {},
       sourceTokens,
       destinationToken,
+      // Snapshot account kinds so a resumed execution (possibly days later)
+      // doesn't depend on live Safe discovery.
+      ...(accounts && accounts.size > 0 ? { accounts: toAccountsRecord(accounts) } : {}),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-  }, [plan, planId, sourceTokens, destinationToken]);
+  }, [plan, planId, sourceTokens, destinationToken, accounts]);
 
   const generatePlan = useCallback(() => refetch(), [refetch]);
 

@@ -8,6 +8,7 @@ import { Checkbox } from "~/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { getRailgunTokenOptions, RAILGUN_SUPPORTED_CHAINS } from "~/data/railgun";
 import { supportedChains } from "~/data/supported-chains";
+import { type AccountsMap, accountFor, safeControlledOn } from "~/lib/accounts";
 import { isRailgunAddress } from "~/lib/railgun";
 import { ChainIcon } from "../chain/chain-icon";
 
@@ -28,6 +29,14 @@ interface SelectDestinationStageProps {
   /** Whether the user has acknowledged the Railgun beta risk (only relevant for 0zk destinations). */
   betaAccepted?: boolean;
   onBetaAcceptedChange?: (accepted: boolean) => void;
+  /** Account-kind lookup: enabled Safes appear as destination options, constrained to their deployed chains. */
+  accounts?: AccountsMap;
+  /**
+   * When set (Safe mode: sources are Safe-held), only these chains are
+   * offered — the ones where a candidate Safe intermediate has a controlled
+   * deployment, since Safe-held funds may only ever be received by a Safe.
+   */
+  allowedChainIds?: number[];
 }
 
 export function SelectDestinationStage({
@@ -35,6 +44,8 @@ export function SelectDestinationStage({
   onChange,
   betaAccepted = false,
   onBetaAcceptedChange,
+  accounts,
+  allowedChainIds,
 }: SelectDestinationStageProps) {
   const _destinationChainId = useId();
   const _railgunBetaId = useId();
@@ -42,9 +53,29 @@ export function SelectDestinationStage({
 
   const isRailgun = isRailgunAddress(value.walletAddress);
 
-  // Available chains for destination — Railgun is only deployed on a subset.
+  // The selected destination, when it's an enabled Safe. A Safe destination
+  // constrains the chain picker to chains where that Safe is verifiably
+  // deployed AND controlled by the connected owner — bridging to the Safe's
+  // address anywhere else would strand the funds (or hand them to a replayed
+  // deployment with a different owner set).
+  const selectedAccount =
+    value.walletAddress && isAddress(value.walletAddress)
+      ? accountFor(accounts, value.walletAddress as Address)
+      : undefined;
+  const selectedSafe = selectedAccount?.kind === "safe" ? selectedAccount : undefined;
+
+  const safeAddresses = React.useMemo(
+    () => Array.from(accounts?.values() ?? []).flatMap((account) => (account.kind === "safe" ? [account] : [])),
+    [accounts],
+  );
+
+  // Available chains for destination — Railgun is only deployed on a subset,
+  // Safes only where they have a controlled deployment, and Safe-mode plans
+  // only where a candidate Safe intermediate exists.
   const availableChains = supportedChains
     .filter((chain) => !isRailgun || RAILGUN_SUPPORTED_CHAINS.includes(chain.id))
+    .filter((chain) => !selectedSafe || safeControlledOn(selectedSafe, chain.id))
+    .filter((chain) => allowedChainIds === undefined || allowedChainIds.includes(chain.id))
     .map((chain) => ({
       name: chain.name,
       chainId: chain.id,
@@ -78,6 +109,20 @@ export function SelectDestinationStage({
       });
       return;
     }
+    // Drop a previously-selected chain the newly-picked Safe isn't deployed on.
+    if (isAddress(walletAddress)) {
+      const account = accountFor(accounts, walletAddress as Address);
+      if (account.kind === "safe") {
+        const chainSupported = value.chainId !== undefined && safeControlledOn(account, value.chainId);
+        onChange({
+          ...value,
+          walletAddress: getAddress(walletAddress),
+          chainId: chainSupported ? value.chainId : undefined,
+          tokenInfo: chainSupported ? value.tokenInfo : undefined,
+        });
+        return;
+      }
+    }
     onChange({ ...value, walletAddress: isAddress(walletAddress) ? getAddress(walletAddress) : undefined });
   };
 
@@ -106,12 +151,22 @@ export function SelectDestinationStage({
           Destination Wallet
         </label>
         <AddressSelector
-          options={addresses.map((address) => ({ value: address, label: address }))}
+          options={[
+            ...addresses.map((address) => ({ value: address, label: address })),
+            ...safeAddresses.map((safe) => ({ value: safe.address, label: `${safe.address} (Safe)` })),
+          ]}
           value={value.walletAddress ?? ""}
           onChange={handleWalletChange}
           chainId={value.chainId}
           allowRailgun
         />
+        {selectedSafe && value.chainId && selectedSafe.deployments[value.chainId] && (
+          <p className="text-xs text-muted-foreground">
+            Safe on this chain: {selectedSafe.deployments[value.chainId].threshold} of{" "}
+            {selectedSafe.deployments[value.chainId].owners.length} owners must sign (v
+            {selectedSafe.deployments[value.chainId].version}).
+          </p>
+        )}
       </div>
 
       <div className="space-y-2">

@@ -1,4 +1,5 @@
-import type { Address } from "viem";
+import type { Address, Hex } from "viem";
+import type { AccountsRecord } from "./accounts";
 import type { Attestation } from "./cctp";
 import type { GasRefuelRecord } from "./gas-refuel";
 import type { OmnibridgeClaim, OmnibridgeDelivery } from "./omnibridge";
@@ -122,6 +123,55 @@ export interface TransactionStep {
 
   // Shield specific (only for shield steps): the recipient 0zk address
   railgunAddress?: string;
+
+  // Present when the step's calls execute as a Gnosis Safe transaction
+  // (proposed/signed/executed via the connected owner EOA) instead of plain
+  // EOA transactions. Claim steps for Safe recipients are deliberately NOT
+  // tagged — they're permissionless and run from the owner EOA directly.
+  execution?: SafeStepExecution;
+}
+
+/** Plan-time marker routing a step through the Safe submission path. */
+export interface SafeStepExecution {
+  via: "safe";
+  safeAddress: Address;
+  /** Connected owner EOA that signs, proposes, executes, and pays gas. */
+  ownerAddress: Address;
+  /** Signatures required; 1 ⇒ sign-and-execute immediately, no proposal wait. */
+  threshold: number;
+  safeVersion: string;
+  /**
+   * Steps sharing a batchId execute as ONE Safe MultiSend transaction (same
+   * chain + Safe, no provenance dependency between members). They succeed,
+   * fail, and retry together.
+   */
+  batchId: string;
+}
+
+/**
+ * Persisted record of one Safe proposal (one per batch group), enough to
+ * resume after a tab close: reconcile against the Transaction Service, keep
+ * awaiting confirmations, or execute with the stored payload and signatures.
+ */
+export interface SafeProposalRecord {
+  chainId: number;
+  safeAddress: Address;
+  /** Step ids of the batch group this proposal executes. */
+  stepIds: string[];
+  safeTxHash: Hex;
+  safeNonce: number;
+  /** Full SafeTx payload (bigints as strings for persistence). */
+  tx: { to: Address; value: string; data: Hex; operation: 0 | 1 };
+  threshold: number;
+  /** Collected owner signatures (ours at minimum; merged from the service while polling). */
+  confirmations: { owner: Address; signature: Hex }[];
+  /** Owner EOA that executes (and pays gas for) execTransaction. */
+  executor: Address;
+  proposedAt: number;
+  /** When the underlying swap calldata was quoted (staleness gate before exec). */
+  quotedAt?: number;
+  status: "proposed" | "executing" | "executed" | "superseded";
+  executedTxHash?: Hex;
 }
 
 // ============================================================================
@@ -178,6 +228,10 @@ export interface ConsolidationState {
   sourceTokens: SourceToken[]; // Original input tokens
   destinationToken: DestinationToken; // Target token/wallet
 
+  // Account kinds snapshotted at plan time (Safe deployments per chain), so a
+  // resumed execution doesn't depend on live discovery. Absent => all-EOA.
+  accounts?: AccountsRecord;
+
   // Execution metadata (intermediate data between steps)
   metadata?: {
     attestations?: Attestation[];
@@ -185,6 +239,10 @@ export interface ConsolidationState {
     omnibridge?: {
       claims?: OmnibridgeClaim[];
       deliveries?: OmnibridgeDelivery[];
+    };
+    safe?: {
+      /** Safe proposal per batch group, keyed by the group's batchId. */
+      proposals?: Record<string, SafeProposalRecord>;
     };
   };
 
@@ -222,6 +280,11 @@ export const ERROR_CODES = {
   ATTESTATION_TIMEOUT: "ATTESTATION_TIMEOUT",
   OMNIBRIDGE_TIMEOUT: "OMNIBRIDGE_TIMEOUT",
   GAS_TOPUP_TIMEOUT: "GAS_TOPUP_TIMEOUT",
+  SAFE_NOT_DEPLOYED: "SAFE_NOT_DEPLOYED",
+  SAFE_CONFIRMATION_TIMEOUT: "SAFE_CONFIRMATION_TIMEOUT",
+  SAFE_TX_SUPERSEDED: "SAFE_TX_SUPERSEDED",
+  SAFE_NOT_OWNER: "SAFE_NOT_OWNER",
+  SAFE_SERVICE_ERROR: "SAFE_SERVICE_ERROR",
   PLANNING_ERROR: "PLANNING_ERROR",
   UNSUPPORTED_ROUTE: "UNSUPPORTED_ROUTE",
   EXTERNAL_API_ERROR: "EXTERNAL_API_ERROR",

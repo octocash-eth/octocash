@@ -24,6 +24,7 @@ import { useFormatFiat } from "~/context/currency-provider";
 import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
 import { USDC } from "~/data/token-contracts";
 import { useConnectedAddresses } from "~/hooks/use-connected-addresses";
+import { type AccountsMap, accountFor, type WalletAccount } from "~/lib/accounts";
 import { isRailgunAddress } from "~/lib/railgun";
 import { formatTokenAmount, getTokenId } from "~/lib/tokens";
 import type { ConsolidationState, DestinationToken, SourceToken, TokenAmount } from "~/lib/types";
@@ -50,6 +51,8 @@ interface ConsolidateTokensModalProps {
   rowSelection?: Record<string, boolean>;
   selectedRows?: number;
   onComplete?: () => void;
+  /** Account-kind lookup for source/destination wallets; absent entries are EOAs. */
+  accounts?: AccountsMap;
 }
 
 export function ConsolidateTokensModal({
@@ -57,6 +60,7 @@ export function ConsolidateTokensModal({
   rowSelection = {},
   selectedRows = 0,
   onComplete,
+  accounts,
 }: ConsolidateTokensModalProps) {
   const [destination, setDestination] = React.useState<DestinationSelection>(EMPTY_DESTINATION);
   const [railgunBetaAccepted, setRailgunBetaAccepted] = React.useState(false);
@@ -68,16 +72,16 @@ export function ConsolidateTokensModal({
   const [isExecuting, setIsExecuting] = React.useState(false);
   const formatFiat = useFormatFiat();
 
-  // Watch the set of connected addresses so we can drop any stale destination
-  // the user selected before switching accounts in their wallet (e.g. Rabby).
+  // Watch the set of connected addresses (and enabled Safes) so we can drop
+  // any stale destination the user selected before switching accounts in
+  // their wallet (e.g. Rabby) or toggling a Safe off.
   const connectedAddresses = useConnectedAddresses();
   const connectedAddressesKey = React.useMemo(
     () =>
-      Array.from(connectedAddresses)
-        .map((a) => a.toLowerCase())
+      [...Array.from(connectedAddresses).map((a) => a.toLowerCase()), ...Array.from(accounts?.keys() ?? [])]
         .sort()
         .join(","),
-    [connectedAddresses],
+    [connectedAddresses, accounts],
   );
 
   const consolidatedTokens = React.useMemo<TokenWithConsolidateAmount[]>(() => {
@@ -129,6 +133,36 @@ export function ConsolidateTokensModal({
       ...(isRailgun ? { railgunAddress: destination.walletAddress } : {}),
     };
   }, [currentStage, destination, sourceTokens]);
+
+  // Safe mode: every selected source is Safe-held (the Addresses / Safes
+  // tabs guarantee a plan never mixes kinds). Planning then only accepts a
+  // Safe intermediate — funds are never custodied by an EOA mid-plan — so
+  // the destination chain must be one where a candidate Safe (a source Safe,
+  // or the chosen destination Safe) has a controlled deployment.
+  const safeMode = React.useMemo(
+    () =>
+      consolidatedTokens.length > 0 &&
+      consolidatedTokens.every((token) => accountFor(accounts, token.walletAddress).kind === "safe"),
+    [consolidatedTokens, accounts],
+  );
+
+  const allowedChainIds = React.useMemo(() => {
+    if (!safeMode) return undefined;
+    const chainIds = new Set<number>();
+    const addControlledChains = (account: WalletAccount) => {
+      if (account.kind !== "safe") return;
+      for (const deployment of Object.values(account.deployments)) {
+        if (deployment.controlled) chainIds.add(deployment.chainId);
+      }
+    };
+    for (const token of consolidatedTokens) {
+      addControlledChains(accountFor(accounts, token.walletAddress));
+    }
+    if (destination.walletAddress && isAddress(destination.walletAddress)) {
+      addControlledChains(accountFor(accounts, getAddress(destination.walletAddress)));
+    }
+    return [...chainIds];
+  }, [safeMode, consolidatedTokens, accounts, destination.walletAddress]);
 
   // Register every selected token with the shared price context so its USD
   // value reflects the live Delora price.
@@ -372,6 +406,8 @@ export function ConsolidateTokensModal({
                     onChange={setDestination}
                     betaAccepted={railgunBetaAccepted}
                     onBetaAcceptedChange={setRailgunBetaAccepted}
+                    accounts={accounts}
+                    allowedChainIds={allowedChainIds}
                   />
                   <div className="pt-3 sm:pt-4 flex gap-2">
                     <Button onClick={handleBack} variant="outline" className="flex-1">
@@ -392,6 +428,7 @@ export function ConsolidateTokensModal({
                       onComplete={handleComplete}
                       onBack={handleBack}
                       onExecutionStateChange={setIsExecuting}
+                      accounts={accounts}
                     />
                   )}
                 </StepperContent>

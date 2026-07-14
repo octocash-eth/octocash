@@ -33,6 +33,26 @@ export const ERROR_MESSAGES: Record<ErrorCode, [string, string]> = {
     "Gas delivery timed out",
     "The gas refuel may still be processing. Retry to check again.",
   ],
+  [ERROR_CODES.SAFE_NOT_DEPLOYED]: [
+    "Safe not deployed on this chain",
+    "The Safe has no verified deployment there. Pick a chain where the Safe exists, or a different wallet.",
+  ],
+  [ERROR_CODES.SAFE_CONFIRMATION_TIMEOUT]: [
+    "Waiting for Safe co-signers",
+    "The transaction is proposed in your Safe's queue. Resume anytime once co-signers approve.",
+  ],
+  [ERROR_CODES.SAFE_TX_SUPERSEDED]: [
+    "Safe transaction was replaced",
+    "A co-signer rejected or replaced this transaction in the Safe. Retry to create a fresh proposal.",
+  ],
+  [ERROR_CODES.SAFE_NOT_OWNER]: [
+    "Not a Safe owner",
+    "The connected wallet is not an owner of this Safe on this chain. Connect an owner account.",
+  ],
+  [ERROR_CODES.SAFE_SERVICE_ERROR]: [
+    "Safe Transaction Service error",
+    "Proposing to the Safe service failed. Please retry.",
+  ],
   [ERROR_CODES.PLANNING_ERROR]: ["Failed to plan transaction", "Please try again."],
   [ERROR_CODES.UNSUPPORTED_ROUTE]: ["This route is not supported", "Please try with different tokens."],
   [ERROR_CODES.EXTERNAL_API_ERROR]: ["External service error", "Please retry."],
@@ -91,6 +111,18 @@ export function createTransactionError(
     code = ERROR_CODES.OMNIBRIDGE_TIMEOUT;
   } else if (messageIncludes("GAS_TOPUP_TIMEOUT")) {
     code = ERROR_CODES.GAS_TOPUP_TIMEOUT;
+  } else if (messageIncludes("SafeConfirmationTimeoutError")) {
+    code = ERROR_CODES.SAFE_CONFIRMATION_TIMEOUT;
+  } else if (messageIncludes("SafeTxSupersededError")) {
+    code = ERROR_CODES.SAFE_TX_SUPERSEDED;
+  } else if (messageIncludes("SafeNotOwnerError")) {
+    code = ERROR_CODES.SAFE_NOT_OWNER;
+    recoverable = false; // Reconnecting as an owner is required, not a retry
+  } else if (messageIncludes("SafeNotDeployedError")) {
+    code = ERROR_CODES.SAFE_NOT_DEPLOYED;
+    recoverable = false;
+  } else if (messageIncludes("SafeServiceError")) {
+    code = ERROR_CODES.SAFE_SERVICE_ERROR;
   } else if (messageIncludes("TIMEOUT") || messageIncludes("timed out")) {
     code = ERROR_CODES.TIMEOUT;
   } else if (messageIncludes("PlanningError")) {

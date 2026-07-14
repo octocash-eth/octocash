@@ -4,7 +4,13 @@ import { useWalletClient } from "wagmi";
 import { chains } from "~/data/supported-chains";
 import { executeConsolidationPlan, type StepProgressEvent } from "~/lib/execution";
 import { getNativeBalance } from "~/lib/gas";
-import { attestationStageMessage, chainNameOf, omnibridgeStageMessage, refuelStageMessage } from "~/lib/step-progress";
+import {
+  attestationStageMessage,
+  chainNameOf,
+  omnibridgeStageMessage,
+  refuelStageMessage,
+  safeStageMessage,
+} from "~/lib/step-progress";
 import type { ConsolidationState } from "~/lib/types";
 import { useConsolidationRecords } from "./use-consolidation-records";
 
@@ -58,6 +64,18 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
   // human-readable `stage` string; `startedAt`/`note` are preserved.
   const handleStepProgress = useCallback((e: StepProgressEvent) => {
     setLiveProgress((prev) => {
+      // Safe events fan out to every member of the batch group: batched steps
+      // sign, wait, and execute together, so their rows advance together.
+      if (e.kind === "safe") {
+        const stage = safeStageMessage(e.phase, e.confirmed, e.threshold);
+        const next = { ...prev };
+        for (const stepId of e.stepIds) {
+          const entry = next[stepId] ?? { startedAt: Date.now(), stage: "" };
+          next[stepId] = { ...entry, stage };
+        }
+        return next;
+      }
+
       const entry = prev[e.stepId] ?? { startedAt: Date.now(), stage: "" };
       let stage: string;
       if (e.kind === "refuel") {
@@ -86,6 +104,10 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
           .filter((st) => WAIT_STEP_TYPES.has(st.type) && st.status === "executing")
           .map((st) => [st.id, st.type] as const),
       );
+      // The Safe co-signer wait lives INSIDE regular tx steps (swap/bridge/
+      // transfer), not in WAIT_STEP_TYPES — retain any executing step's live
+      // entry so "Awaiting Safe co-signers 1/2" isn't wiped between events.
+      const stillExecuting = new Set(s.plan.filter((st) => st.status === "executing").map((st) => st.id));
       let changed = false;
       const next: LiveProgress = { ...prev };
       for (const [id, type] of activeType) {
@@ -95,7 +117,7 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
         }
       }
       for (const id of Object.keys(next)) {
-        if (!activeType.has(id)) {
+        if (!activeType.has(id) && !stillExecuting.has(id)) {
           delete next[id];
           delete refuelsRef.current[id];
           changed = true;
@@ -135,7 +157,16 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
         const generator = executeConsolidationPlan(
           nextState,
           walletClient as WalletClient<HttpTransport, Chain, Account>,
-          { onStepProgress: handleStepProgress },
+          {
+            onStepProgress: handleStepProgress,
+            // Mid-step persistence: a freshly-POSTed Safe proposal must
+            // survive a tab close even though the generator only yields
+            // between steps.
+            onInterimState: (interimState) => {
+              setState(interimState);
+              saveConsolidation(interimState);
+            },
+          },
         );
 
         let finalState: ConsolidationState = nextState;
@@ -170,19 +201,29 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
     void runExecution(state);
   }, [state, isExecuting, runExecution]);
 
+  // Members of a Safe batch group execute as one atomic transaction, so
+  // retry/skip act on the whole group: the step ids sharing the target's
+  // batchId (or just the target itself for untagged steps).
+  const batchSiblingIds = useCallback((s: ConsolidationState, stepId: string): Set<string> => {
+    const batchId = s.plan.find((st) => st.id === stepId)?.execution?.batchId;
+    if (!batchId) return new Set([stepId]);
+    return new Set(s.plan.filter((st) => st.execution?.batchId === batchId).map((st) => st.id));
+  }, []);
+
   const retryStep = useCallback(
     async (stepId: string) => {
       if (!state) return;
 
-      const stepIndex = state.plan.findIndex((s) => s.id === stepId);
-      const { [stepId]: _, ...remainingResults } = state.results;
+      const affected = batchSiblingIds(state, stepId);
+      const stepIndex = state.plan.findIndex((s) => affected.has(s.id));
+      const remainingResults = Object.fromEntries(Object.entries(state.results).filter(([id]) => !affected.has(id)));
 
       // Preserve `retryHints` (carried on the failed step) through the spread
       // so the next execution attempt replaces the pending tx at the same
       // nonce with a doubled bid. Cleared on success in execution.ts.
       const newState: ConsolidationState = {
         ...state,
-        plan: state.plan.map((s) => (s.id === stepId ? { ...s, status: "pending" as const, error: undefined } : s)),
+        plan: state.plan.map((s) => (affected.has(s.id) ? { ...s, status: "pending" as const, error: undefined } : s)),
         results: remainingResults,
         status: "ready",
         currentStepIndex: stepIndex !== -1 ? stepIndex : state.currentStepIndex,
@@ -193,7 +234,7 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
       saveConsolidation(newState);
       await runExecution(newState);
     },
-    [state, runExecution, saveConsolidation],
+    [state, runExecution, saveConsolidation, batchSiblingIds],
   );
 
   const skipStep = useCallback(
@@ -203,23 +244,32 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
       const step = state.plan.find((s) => s.id === stepId);
       if (!step) return;
 
-      const stepIndex = state.plan.findIndex((s) => s.id === stepId);
+      const affected = batchSiblingIds(state, stepId);
+      const skipResults = Object.fromEntries(
+        state.plan
+          .filter((s) => affected.has(s.id))
+          .map((s) => [
+            s.id,
+            {
+              stepId: s.id,
+              chainId: s.chainId,
+              status: "skipped" as const,
+              skipReason: "Skipped by user after failure",
+            },
+          ]),
+      );
+      const lastAffectedIndex = state.plan.reduce(
+        (last, s, index) => (affected.has(s.id) ? index : last),
+        state.currentStepIndex,
+      );
       const newState: ConsolidationState = {
         ...state,
-        plan: state.plan.map((s) => (s.id === stepId ? { ...s, status: "skipped" } : s)),
-        results: {
-          ...state.results,
-          [stepId]: {
-            stepId: step.id,
-            chainId: step.chainId,
-            status: "skipped",
-            skipReason: "Skipped by user after failure",
-          },
-        },
-        // Skip exactly one failed step: resume just after it. The executor
-        // always pauses on the next failure, so we never run the remainder of
-        // the plan unattended.
-        currentStepIndex: stepIndex !== -1 ? stepIndex + 1 : state.currentStepIndex,
+        plan: state.plan.map((s) => (affected.has(s.id) ? { ...s, status: "skipped" } : s)),
+        results: { ...state.results, ...skipResults },
+        // Skip exactly one failed step (or its whole Safe batch): resume just
+        // after it. The executor always pauses on the next failure, so we
+        // never run the remainder of the plan unattended.
+        currentStepIndex: lastAffectedIndex + 1,
         status: "ready",
         updatedAt: Date.now(),
       };
@@ -228,7 +278,7 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
       saveConsolidation(newState);
       await runExecution(newState);
     },
-    [state, runExecution, saveConsolidation],
+    [state, runExecution, saveConsolidation, batchSiblingIds],
   );
 
   const retryFailedStep = useCallback(async () => {

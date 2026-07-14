@@ -5,6 +5,7 @@ import { formatUnits } from "viem";
 import { ConsolidateTokensModal } from "~/components/consolidate-tokens-modal";
 import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
 import { chains } from "~/data/supported-chains";
+import { type AccountsMap, accountFor, safeControlledOn } from "~/lib/accounts";
 import {
   checkDeloraRoutableToUsdc,
   fetchDeloraTokensForChain,
@@ -22,7 +23,18 @@ const SUPPORTED_CHAIN_IDS = Object.keys(chains).map(Number);
 
 interface WalletTableProps {
   connectedAddresses?: readonly string[];
+  /** Account-kind lookup for `connectedAddresses`; absent entries are EOAs. */
+  accounts?: AccountsMap;
+  /**
+   * Rendered above the table while the Safes tab is active (the Safe accounts
+   * panel). Its presence enables the Addresses / Safes tabs — token selection
+   * is scoped to one wallet kind per consolidation, so Safe-held funds always
+   * plan with a Safe intermediate (funds never transit an EOA).
+   */
+  safesPanel?: React.ReactNode;
 }
+
+type WalletTab = "addresses" | "safes";
 
 // Empty state component
 const EmptyState = ({ hasAddresses }: { hasAddresses: boolean }) => (
@@ -34,8 +46,16 @@ const EmptyState = ({ hasAddresses }: { hasAddresses: boolean }) => (
   </div>
 );
 
-export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
+export function WalletTable({ connectedAddresses = [], accounts, safesPanel }: WalletTableProps) {
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
+  const [activeTab, setActiveTab] = React.useState<WalletTab>("addresses");
+  const showTabs = safesPanel !== undefined;
+
+  // Selection must never span both kinds — clear it when switching tabs.
+  const switchTab = React.useCallback((tab: WalletTab) => {
+    setActiveTab(tab);
+    setRowSelection({});
+  }, []);
 
   // Stable addresses key for query
   const addressesKey = React.useMemo(() => Array.from(connectedAddresses).sort().join(","), [connectedAddresses]);
@@ -239,12 +259,32 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
     );
   }, [allFetchedTokens, deloraByChain, hiddenCandidates, routabilityQueries, liveUsd]);
 
+  // Tokens sitting at a Safe's address on a chain where that Safe has no
+  // controlled deployment are unreachable (either the Safe doesn't exist
+  // there, or a replayed deployment has a different owner set) — planning
+  // would reject them, so they must never be selectable.
+  const isReachable = React.useCallback(
+    (token: TokenAmount): boolean => safeControlledOn(accountFor(accounts, token.walletAddress), token.chainId),
+    [accounts],
+  );
+
+  // Scope rows to the active tab's wallet kind. Without tabs (no Safes
+  // discovered), everything is EOA-held and passes through unchanged.
+  const matchesTab = React.useCallback(
+    (token: TokenAmount): boolean => {
+      if (!showTabs) return true;
+      const kind = accountFor(accounts, token.walletAddress).kind;
+      return activeTab === "safes" ? kind === "safe" : kind === "eoa";
+    },
+    [showTabs, activeTab, accounts],
+  );
+
   // Combine tokens: Zerion first, then extra tokens (deduplicated). Both
   // streams are passed through `isDeloraAllowed` so non-routable tokens never
   // reach the table, then we sort by the same live `priceFor` the value
   // column uses so the default order matches the displayed USD values.
   const tokens = React.useMemo(() => {
-    const zerionTokens = (zerionQuery.data ?? []).filter(isDeloraAllowed);
+    const zerionTokens = (zerionQuery.data ?? []).filter(isDeloraAllowed).filter(isReachable).filter(matchesTab);
 
     // Hold extras back until their query has succeeded, so Zerion data
     // renders first before extra tokens are folded in.
@@ -253,12 +293,14 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
           ...zerionTokens,
           ...(extraQuery.data ?? [])
             .filter(isDeloraAllowed)
+            .filter(isReachable)
+            .filter(matchesTab)
             .filter((extra) => !zerionTokens.some((zerion) => isSameToken(zerion, extra))),
         ]
       : zerionTokens;
 
     return merged.sort((a, b) => liveUsd(b) - liveUsd(a));
-  }, [zerionQuery.data, extraQuery.data, extraQuery.isSuccess, isDeloraAllowed, liveUsd]);
+  }, [zerionQuery.data, extraQuery.data, extraQuery.isSuccess, isDeloraAllowed, isReachable, matchesTab, liveUsd]);
 
   // Rebuild columns when `priceFor` changes so the value column's `sortingFn`
   // (which closes over `priceFor`) sees fresh prices and the table re-sorts.
@@ -288,6 +330,36 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
         </div>
       )}
       {error && <div className="p-4 text-red-700 rounded-md bg-red-50">{error}</div>}
+      {showTabs && (
+        <div
+          role="tablist"
+          aria-label="Wallet kind"
+          className="inline-flex rounded-md border border-border p-0.5 bg-muted/40"
+        >
+          {(
+            [
+              ["addresses", "Addresses"],
+              ["safes", "Safes"],
+            ] as const
+          ).map(([tab, label]) => (
+            <button
+              key={tab}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab}
+              onClick={() => switchTab(tab)}
+              className={
+                activeTab === tab
+                  ? "rounded px-3 py-1 text-sm font-medium bg-background shadow-sm"
+                  : "rounded px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      {showTabs && activeTab === "safes" && safesPanel}
       {tokens.length > 0 || isLoading ? (
         <>
           <DataTable
@@ -313,6 +385,7 @@ export function WalletTable({ connectedAddresses = [] }: WalletTableProps) {
               rowSelection={rowSelection}
               selectedRows={Object.keys(rowSelection).length}
               onComplete={handleRefresh}
+              accounts={accounts}
             />
           </div>
         </>

@@ -1,4 +1,4 @@
-import type { Account, Address, Chain, Hex, HttpTransport, WalletClient } from "viem";
+import type { Account, Address, Chain, Hex, HttpTransport, Log, WalletClient } from "viem";
 import { type Call, encodeFunctionData, formatUnits, getAddress, isAddressEqual, parseAbi, zeroAddress } from "viem";
 import { estimateGas, waitForTransactionReceipt } from "viem/actions";
 import { gnosis, mainnet } from "viem/chains";
@@ -8,7 +8,14 @@ import { BPS_DENOMINATOR, RAILGUN_PROXY, RAILGUN_SHIELD_FEE_BPS } from "~/data/r
 import { chains, transports } from "~/data/supported-chains";
 import { USDC } from "~/data/token-contracts";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
-import { deriveSwapOutputAmount, executeDeloraSwap, getSwapQuote, SLIPPAGE_LIMIT } from "./delora";
+import {
+  buildDeloraCalls,
+  deriveSwapOutputAmount,
+  executeDeloraSwap,
+  getSwapQuote,
+  SLIPPAGE_LIMIT,
+  simulateSwapDelivery,
+} from "./delora";
 import { createTransactionError } from "./errors";
 import { getNativeBalance } from "./gas";
 import {
@@ -26,9 +33,10 @@ import {
   waitForOmnibridgeDelivery,
 } from "./omnibridge";
 import { getPublicClient, retryOnRateLimit } from "./public-client";
-import { prepareSendCalls, SendCallsError } from "./send-calls";
+import { isSafeWallet, prepareStepSendCalls, type SafeStepHooks } from "./safe-send-calls";
+import { SendCallsError } from "./send-calls";
 import { getTokenBalance } from "./tokens";
-import type { ConsolidationState, StepResult, TokenAmount, TransactionStep } from "./types";
+import type { ConsolidationState, SafeProposalRecord, StepResult, TokenAmount, TransactionStep } from "./types";
 
 /**
  * Thrown when a step's preflight balance check finds the wallet doesn't hold
@@ -125,10 +133,29 @@ export type StepProgressEvent =
   | { kind: "attestation"; stepId: string; received: number; total: number }
   // Omnibridge wait: "exit" = AMB signature collection (Gnosis -> mainnet),
   // "enter" = USDC.e delivery watch on Gnosis (mainnet -> Gnosis).
-  | { kind: "omnibridge"; stepId: string; direction: "exit" | "enter"; ready: number; total: number };
+  | { kind: "omnibridge"; stepId: string; direction: "exit" | "enter"; ready: number; total: number }
+  // Safe submission lifecycle. `stepIds` lists every member of the batch
+  // group so the UI can fan the status out to all rows executing together.
+  | {
+      kind: "safe";
+      stepId: string;
+      stepIds: string[];
+      phase: "signing" | "proposed" | "confirmations" | "executing";
+      confirmed: number;
+      threshold: number;
+      safeTxHash?: string;
+      chainId: number;
+    };
 
 export interface ExecuteOptions {
   onStepProgress?: (event: StepProgressEvent) => void;
+  /**
+   * Called with a cloned state whenever a step persists mid-step progress
+   * that must survive a tab close (e.g. a freshly-POSTed Safe proposal —
+   * losing it would orphan a pending co-signer flow). The regular per-yield
+   * persistence only fires between steps.
+   */
+  onInterimState?: (state: ConsolidationState) => void;
 }
 
 export async function validateInputBalances(step: TransactionStep, _state: ConsolidationState): Promise<void> {
@@ -307,6 +334,100 @@ export async function* executeConsolidationPlan(
 
     // Yield state when starting step execution
     yield structuredClone(workingState);
+
+    // Safe batch groups (independent same-chain steps of one Safe) execute as
+    // ONE Safe transaction when the first member is reached; the remaining
+    // members are resolved from the shared result and skipped by the
+    // "already completed" check on their own iterations. They succeed, fail,
+    // and retry together (the MultiSend is atomic). Reconciliation of a prior
+    // attempt happens through the persisted proposal record inside the Safe
+    // send path, not the per-step tx-hash probe.
+    const groupMembers = getBatchGroupMembers(workingState, executingStep);
+    if (groupMembers.length > 1) {
+      // Mark every member as executing so the whole group shows live status.
+      workingState.plan = workingState.plan.map((planStep) =>
+        groupMembers.some((member) => member.id === planStep.id)
+          ? { ...planStep, status: "executing" as const }
+          : planStep,
+      );
+      workingState.updatedAt = Date.now();
+      yield structuredClone(workingState);
+
+      try {
+        const groupResults = await executeSafeBatchGroup(
+          getBatchGroupMembers(workingState, executingStep),
+          workingState,
+          walletClient,
+          opts,
+        );
+
+        workingState.plan = [...workingState.plan];
+        for (const result of groupResults) {
+          const memberIndex = workingState.plan.findIndex((planStep) => planStep.id === result.stepId);
+          if (memberIndex >= 0) {
+            workingState.plan[memberIndex] = {
+              ...workingState.plan[memberIndex],
+              status: "success",
+              transactionHash: result.transactionHash,
+              executedAt: Date.now(),
+              retryHints: undefined,
+            };
+          }
+          workingState.results = { ...workingState.results, [result.stepId]: result };
+        }
+        for (const result of groupResults) {
+          if (result.actualOutput) {
+            const memberIndex = workingState.plan.findIndex((planStep) => planStep.id === result.stepId);
+            const { plan } = await recalculatePlan(workingState, memberIndex, result.actualOutput);
+            workingState.plan = plan;
+          }
+        }
+        workingState.updatedAt = Date.now();
+        yield structuredClone(workingState);
+        continue;
+      } catch (error) {
+        // Atomic failure: every member of the group fails with the same
+        // error/hash/hints, and the plan pauses at the first member.
+        const txError = createTransactionError(error);
+        const recoveredHash = error instanceof SendCallsError ? error.transactionHash : undefined;
+        const retryHints =
+          error instanceof SendCallsError && error.nonce !== undefined && error.maxFeePerGas !== undefined
+            ? {
+                nonce: error.nonce,
+                maxFeePerGas: error.maxFeePerGas,
+                maxPriorityFeePerGas: error.maxPriorityFeePerGas,
+              }
+            : undefined;
+        workingState.plan = [...workingState.plan];
+        for (const member of groupMembers) {
+          const memberIndex = workingState.plan.findIndex((planStep) => planStep.id === member.id);
+          if (memberIndex >= 0) {
+            workingState.plan[memberIndex] = {
+              ...workingState.plan[memberIndex],
+              status: "failed",
+              error: txError,
+              transactionHash: recoveredHash ?? workingState.plan[memberIndex].transactionHash,
+              retryHints: retryHints ?? workingState.plan[memberIndex].retryHints,
+            };
+          }
+          workingState.results = {
+            ...workingState.results,
+            [member.id]: {
+              stepId: member.id,
+              status: "failed",
+              chainId: member.chainId,
+              error: txError,
+              transactionHash: recoveredHash,
+            },
+          };
+        }
+        workingState.status = "paused";
+        workingState.currentStepIndex = i;
+        workingState.updatedAt = Date.now();
+        yield structuredClone(workingState);
+        return;
+      }
+    }
 
     // Verify-before-retry: if a prior attempt left a tx hash on this step
     // (e.g. log parsing threw after a successful on-chain swap, or
@@ -535,7 +656,13 @@ async function tryReconcileFromChain(
       // cancellation / manual speedup). Probe the wallet's next-nonce to
       // distinguish "still ours to retry" from "consumed by something else".
       if (step.retryHints?.nonce !== undefined) {
-        const broadcaster = step.inputTokens[0]?.walletAddress ?? step.outputToken.walletAddress;
+        // For Safe steps the on-chain tx is the owner EOA's execTransaction —
+        // probing the Safe's eth_getTransactionCount would be meaningless
+        // (contract nonce ≠ account nonce) and could false-positive.
+        const proposal = step.execution ? state.metadata?.safe?.proposals?.[step.execution.batchId] : undefined;
+        const broadcaster = step.execution
+          ? (proposal?.executor ?? step.execution.ownerAddress)
+          : (step.inputTokens[0]?.walletAddress ?? step.outputToken.walletAddress);
         try {
           const latest = await retryOnRateLimit(() =>
             client.getTransactionCount({ address: broadcaster, blockTag: "latest" }),
@@ -584,7 +711,9 @@ async function tryReconcileFromChain(
       // step — return `reverted` so the executor clears retryHints (the
       // leaked approve's nonce was already consumed on chain) and falls
       // through to a fresh burn broadcast.
-      const expectedTo = tokenMessenger[step.chainId];
+      // Safe steps go on-chain as execTransaction TO the Safe itself, not to
+      // the TokenMessenger — the proposal record pins the inner calldata.
+      const expectedTo = step.execution ? step.execution.safeAddress : tokenMessenger[step.chainId];
       const receiptTo = (receipt as { to?: Address | null }).to;
       if (expectedTo && receiptTo && !isAddressEqual(receiptTo, expectedTo)) {
         return { kind: "reverted" };
@@ -644,8 +773,13 @@ async function tryReconcileFromChain(
       // a preceding approve or transmuter withdraw.
       const inputToken = step.inputTokens[0]?.token;
       const isUsdcEgress = inputToken !== undefined && isAddressEqual(inputToken, USDC[gnosis.id]);
-      const expectedTo =
-        step.chainId === gnosis.id ? (isUsdcEgress ? USDC_ON_XDAI : HOME_OMNIBRIDGE) : FOREIGN_OMNIBRIDGE;
+      const expectedTo = step.execution
+        ? step.execution.safeAddress
+        : step.chainId === gnosis.id
+          ? isUsdcEgress
+            ? USDC_ON_XDAI
+            : HOME_OMNIBRIDGE
+          : FOREIGN_OMNIBRIDGE;
       const receiptTo = (receipt as { to?: Address | null }).to;
       if (receiptTo && !isAddressEqual(receiptTo, expectedTo)) {
         return { kind: "reverted" };
@@ -715,7 +849,9 @@ async function tryReconcileFromChain(
     case "shield": {
       // Same defensive discriminator as "bridge": the recorded hash must point
       // at the RailgunSmartWallet shield call, not the preceding ERC20 approve.
-      const expectedTo = RAILGUN_PROXY[step.chainId];
+      // (Shield steps are never Safe-executed — planning gates them — but the
+      // guard keeps the discriminator honest if that ever changes.)
+      const expectedTo = step.execution ? step.execution.safeAddress : RAILGUN_PROXY[step.chainId];
       const receiptTo = (receipt as { to?: Address | null }).to;
       if (expectedTo && receiptTo && !isAddressEqual(receiptTo, expectedTo)) {
         return { kind: "reverted" };
@@ -824,6 +960,12 @@ async function adjustNativeTokenForGas(
   step: TransactionStep,
   state: ConsolidationState,
 ): Promise<[TokenAmount, ...TokenAmount[]]> {
+  // Safe-executed steps pay no gas from the Safe's own native balance — the
+  // owner EOA funds execTransaction — so nothing is reserved out of the
+  // amounts here. Planning already validated the Safe's native *value* spend
+  // against its balance and charged gas to the owner.
+  if (step.execution?.via === "safe") return tokens;
+
   const nativeIdx = tokens.findIndex((t) => isAddressEqual(t.token, zeroAddress));
   if (nativeIdx < 0) return tokens;
 
@@ -980,13 +1122,215 @@ export function estimateRemainingChainOps(currentStep: TransactionStep, state: C
  * @param walletClient - Wallet client
  * @returns Step result
  */
+/**
+ * The still-executable members of the step's Safe batch group, in plan order.
+ * Members already resolved (success/failed/skipped) or whose dependencies
+ * failed are excluded — the group executes with whatever remains usable.
+ * Returns just `[step]` for untagged steps and singleton groups.
+ */
+export function getBatchGroupMembers(state: ConsolidationState, step: TransactionStep): TransactionStep[] {
+  const batchId = step.execution?.batchId;
+  if (!batchId) return [step];
+  const members = state.plan.filter((planStep) => {
+    if (planStep.execution?.batchId !== batchId) return false;
+    const result = state.results[planStep.id];
+    if (result?.status === "success" || result?.status === "skipped" || result?.status === "failed") return false;
+    return !shouldSkipStep(planStep, state.results);
+  });
+  return members.length > 0 ? members : [step];
+}
+
+/**
+ * Executes a multi-member Safe batch group as ONE Safe transaction: every
+ * member's calls are built up front (fresh Delora calldata for swaps, plain
+ * transfers as-is), concatenated in plan order, and submitted through the
+ * Safe path — one MultiSend, one signature round. Members succeed together
+ * (the MultiSend is atomic) and the caller fails them together.
+ *
+ * Per-member output attribution: MultiSend preserves call order and the one
+ * receipt carries all logs, so each member's output is summed from Transfer
+ * logs of ITS output token to the Safe. Members sharing an output token split
+ * the summed total proportionally to their planned amounts — downstream steps
+ * on the same wallet+chain consume the sum anyway, so the split only affects
+ * display granularity.
+ */
+async function executeSafeBatchGroup(
+  members: TransactionStep[],
+  state: ConsolidationState,
+  walletClient: WalletClient<HttpTransport, Chain, Account>,
+  opts?: ExecuteOptions,
+): Promise<StepResult[]> {
+  const first = members[0];
+  const execution = first.execution;
+  if (!execution) throw new Error("Safe batch group requires tagged steps");
+  const chainId = first.chainId;
+  const safe = execution.safeAddress;
+
+  for (const member of members) {
+    await validateInputBalances(member, state);
+  }
+
+  const buildMemberCalls = async (): Promise<{ member: TransactionStep; calls: Call[] }[]> => {
+    const built: { member: TransactionStep; calls: Call[] }[] = [];
+    for (const member of members) {
+      if (member.type === "swap") {
+        const inputs = filterZeroAmounts(member.inputTokens, member.id, "swap");
+        const { calls, minOutputAmount } = await buildDeloraCalls(inputs, member.outputToken);
+        // Per-member delivery simulation: inner calls run with the Safe as
+        // msg.sender under MultiSend, which is exactly what simulateCalls
+        // models with `account: safe`.
+        await simulateSwapDelivery(chainId, safe, calls, member.outputToken, minOutputAmount);
+        built.push({ member, calls });
+      } else if (member.type === "transfer") {
+        const totalAmount = member.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+        const call: Call = isAddressEqual(member.outputToken.token, zeroAddress)
+          ? { to: member.outputToken.walletAddress, data: "0x", value: totalAmount }
+          : {
+              to: member.outputToken.token,
+              data: encodeFunctionData({
+                abi: parseAbi(["function transfer(address to, uint256 amount) returns (bool)"]),
+                args: [member.outputToken.walletAddress, totalAmount],
+              }),
+            };
+        built.push({ member, calls: [call] });
+      } else {
+        // Planning only groups swaps and transfers (see tagSafeSteps).
+        throw new Error(`Safe batch group cannot contain a ${member.type} step`);
+      }
+    }
+    return built;
+  };
+
+  const builtCalls = await buildMemberCalls();
+  const allCalls = builtCalls.flatMap((entry) => entry.calls);
+
+  const hooks = buildSafeStepHooks(first, state, opts);
+  hooks.rebuildCalls = async () => (await buildMemberCalls()).flatMap((entry) => entry.calls);
+  const sendCalls = prepareStepSendCalls(walletClient, first, state, hooks);
+  const [transactionHash, logs] = await sendCalls(
+    "safe-batch",
+    chainId,
+    safe,
+    allCalls,
+    "atomic-steps",
+    first.retryHints,
+  );
+  const flatLogs = logs.flat() as unknown as Log[];
+
+  // Attribute swap outputs: exact per distinct (output token, recipient)
+  // pair, proportional among swap members that share one. A batched transfer
+  // may deliver the SAME token to the SAME recipient as the swaps (e.g.
+  // claimed USDC transferred out alongside DAI→USDC swaps paying the
+  // destination directly) — its known amount is subtracted from the derived
+  // total so it isn't double-counted as swap output.
+  const swapAmounts = new Map<string, bigint>();
+  const byTarget = new Map<string, TransactionStep[]>();
+  const targetKey = (member: TransactionStep) =>
+    `${member.outputToken.token.toLowerCase()}:${member.outputToken.walletAddress.toLowerCase()}`;
+  for (const member of members) {
+    if (member.type !== "swap") continue;
+    byTarget.set(targetKey(member), [...(byTarget.get(targetKey(member)) ?? []), member]);
+  }
+  const transferredByTarget = new Map<string, bigint>();
+  for (const member of members) {
+    if (member.type !== "transfer") continue;
+    const key = targetKey(member);
+    const amount = member.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+    transferredByTarget.set(key, (transferredByTarget.get(key) ?? 0n) + amount);
+  }
+  for (const [key, targetMembers] of byTarget) {
+    const derived = deriveSwapOutputAmount(flatLogs, targetMembers[0].outputToken);
+    const transferred = transferredByTarget.get(key) ?? 0n;
+    const plannedSum = targetMembers.reduce((sum, member) => sum + member.outputToken.amount, 0n);
+    // With real logs the derived total always CONTAINS the transferred amount
+    // (both landed at the same recipient), so derived <= transferred can only
+    // mean deriveSwapOutputAmount hit its no-logs fallback (quoted amount of
+    // one member) — attribute the planned outputs instead of clamping to 0.
+    const total = derived > transferred ? derived - transferred : plannedSum;
+    let assigned = 0n;
+    targetMembers.forEach((member, index) => {
+      const share =
+        index === targetMembers.length - 1
+          ? total - assigned
+          : plannedSum > 0n
+            ? (total * member.outputToken.amount) / plannedSum
+            : 0n;
+      assigned += share;
+      swapAmounts.set(member.id, share);
+    });
+  }
+
+  return members.map((member) => {
+    const amount =
+      member.type === "swap"
+        ? (swapAmounts.get(member.id) ?? member.outputToken.amount)
+        : member.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
+    return {
+      stepId: member.id,
+      status: "success" as const,
+      chainId,
+      actualOutput: { ...member.outputToken, amount, provenance: member.id },
+      transactionHash,
+    };
+  });
+}
+
+/**
+ * Builds the Safe-path hooks for one step: proposal persistence goes through
+ * `state.metadata.safe.proposals[batchId]` (mutating the executor's working
+ * state — the generator is suspended awaiting this step, so there's a single
+ * writer) and is pushed out immediately via `onInterimState` so a pending
+ * proposal survives a tab close. Quote-bearing steps also get `rebuildCalls`
+ * so a proposal that went stale during a long co-signer wait can be replaced
+ * with freshly-quoted calldata.
+ */
+function buildSafeStepHooks(step: TransactionStep, state: ConsolidationState, opts?: ExecuteOptions): SafeStepHooks {
+  const batchId = step.execution?.batchId ?? step.id;
+  const stepIds = state.plan
+    .filter((planStep) => step.execution && planStep.execution?.batchId === step.execution.batchId)
+    .map((planStep) => planStep.id);
+
+  return {
+    getProposal: () => state.metadata?.safe?.proposals?.[batchId],
+    persistProposal: (record: SafeProposalRecord) => {
+      state.metadata = {
+        ...state.metadata,
+        safe: { proposals: { ...state.metadata?.safe?.proposals, [batchId]: record } },
+      };
+      opts?.onInterimState?.(structuredClone(state));
+    },
+    onProgress: (event) =>
+      opts?.onStepProgress?.({
+        kind: "safe",
+        stepId: step.id,
+        stepIds: stepIds.length > 0 ? stepIds : [step.id],
+        ...event,
+      }),
+    ...(step.type === "swap"
+      ? {
+          rebuildCalls: async () => {
+            const { calls } = await buildDeloraCalls(
+              step.inputTokens.filter((t) => t.amount > 0n),
+              step.outputToken,
+            );
+            return calls;
+          },
+        }
+      : {}),
+  };
+}
+
 async function executeStep(
   step: TransactionStep,
   state: ConsolidationState,
   walletClient: WalletClient<HttpTransport, Chain, Account>,
   opts?: ExecuteOptions,
 ): Promise<StepResult> {
-  const sendCalls = prepareSendCalls(walletClient);
+  // Safe-aware router: calls from the step's Safe execute as one Safe
+  // transaction (batched, proposed, co-signed as needed); every other sender
+  // takes the untouched EOA path. Steps without an `execution` tag never
+  // diverge from the pre-Safe behavior.
+  const sendCalls = prepareStepSendCalls(walletClient, step, state, buildSafeStepHooks(step, state, opts));
 
   switch (step.type) {
     case "swap": {
@@ -1124,8 +1468,12 @@ async function executeStep(
         throw new Error("No attestations found for claim");
       }
 
-      // Execute CCTP mint
-      const [mintTx] = await executeCCTPMint(attestations, step.outputToken, sendCalls, step.retryHints);
+      // Execute CCTP mint. When the recipient is a Safe, the owner EOA
+      // submits it directly — receiveMessage is permissionless and the mint
+      // credits `mintRecipient` regardless of the sender, so co-signers are
+      // never bothered for claims.
+      const mintSender = isSafeWallet(state, step.outputToken.walletAddress) ? walletClient.account.address : undefined;
+      const [mintTx] = await executeCCTPMint(attestations, step.outputToken, sendCalls, step.retryHints, mintSender);
 
       // Calculate actual amount from attestations
       const actualAmount = attestations.reduce(
@@ -1524,8 +1872,18 @@ async function executeStep(
       }
 
       // executeSignatures on the mainnet AMB; already-relayed messages are
-      // filtered inside, so retries are safe.
-      const [claimTx] = await executeOmnibridgeClaim(claims, step.outputToken, sendCalls, step.retryHints);
+      // filtered inside, so retries are safe. Safe receivers get the claim
+      // submitted by the owner EOA — it's permissionless, same as CCTP mint.
+      const omniClaimSender = isSafeWallet(state, step.outputToken.walletAddress)
+        ? walletClient.account.address
+        : undefined;
+      const [claimTx] = await executeOmnibridgeClaim(
+        claims,
+        step.outputToken,
+        sendCalls,
+        step.retryHints,
+        omniClaimSender,
+      );
 
       const actualAmount = claims.reduce((sum, claim) => sum + BigInt(claim.amount), 0n);
       return {

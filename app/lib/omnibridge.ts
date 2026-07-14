@@ -511,12 +511,19 @@ export const getExecuteSignaturesCalls = async (claims: OmnibridgeClaim[]): Prom
  * pending message, releasing native mainnet USDC to the receiver encoded in
  * the message. Already-relayed messages are filtered out first, so retries
  * are safe. Analog of `executeCCTPMint`.
+ *
+ * @param sender - Wallet that submits the claim. Defaults to the receiver;
+ *   pass the owner EOA when the receiver is a Gnosis Safe —
+ *   `executeSignatures` is permissionless (the AMB validators' signatures
+ *   authorize the message, funds go to the encoded receiver), so no N-of-M
+ *   round is needed for it.
  */
 export const executeOmnibridgeClaim = async (
   claims: OmnibridgeClaim[],
   tokenOut: TokenAmount,
   sendCalls: SendCallsFn,
   retryHints?: Parameters<SendCallsFn>[5],
+  sender?: Address,
 ): Promise<[string, { address: Address; data: Hex; topics: Hex[] }[][]]> => {
   if (claims.length === 0) {
     throw new Error("No Omnibridge claims");
@@ -531,7 +538,7 @@ export const executeOmnibridgeClaim = async (
   const [claimTx, claimLogs] = await sendCalls(
     "claim",
     mainnet.id,
-    tokenOut.walletAddress,
+    sender ?? tokenOut.walletAddress,
     calls,
     "atomic-multicall",
     retryHints,
