@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
   accountFor,
+  controlledOn,
+  deployedOn,
   executorFor,
   isSafeAccount,
   type SafeAccount,
-  safeControlledOn,
-  safeDeployedOn,
   toAccountsMap,
   toAccountsRecord,
 } from "./accounts";
@@ -40,17 +40,17 @@ describe("accountFor", () => {
 });
 
 describe("deployment checks", () => {
-  test("safeDeployedOn: Safes only where verified, EOAs everywhere", () => {
-    expect(safeDeployedOn(safeAccount, 1)).toBe(true);
-    expect(safeDeployedOn(safeAccount, 100)).toBe(true);
-    expect(safeDeployedOn(safeAccount, 8453)).toBe(false);
-    expect(safeDeployedOn({ kind: "eoa", address: OTHER }, 8453)).toBe(true);
+  test("deployedOn: Safes only where verified, EOAs everywhere", () => {
+    expect(deployedOn(safeAccount, 1)).toBe(true);
+    expect(deployedOn(safeAccount, 100)).toBe(true);
+    expect(deployedOn(safeAccount, 8453)).toBe(false);
+    expect(deployedOn({ kind: "eoa", address: OTHER }, 8453)).toBe(true);
   });
 
-  test("safeControlledOn requires the connected owner in that chain's owner set", () => {
-    expect(safeControlledOn(safeAccount, 1)).toBe(true);
-    expect(safeControlledOn(safeAccount, 100)).toBe(false); // replayed deployment, different owners
-    expect(safeControlledOn(safeAccount, 8453)).toBe(false);
+  test("controlledOn requires the connected owner in that chain's owner set", () => {
+    expect(controlledOn(safeAccount, 1)).toBe(true);
+    expect(controlledOn(safeAccount, 100)).toBe(false); // replayed deployment, different owners
+    expect(controlledOn(safeAccount, 8453)).toBe(false);
   });
 });
 

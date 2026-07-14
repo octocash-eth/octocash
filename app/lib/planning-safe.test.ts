@@ -296,7 +296,7 @@ describe("planConsolidation with a Safe source", () => {
     ).rejects.toThrow(/separate runs.*Addresses and Safes tabs/s);
   });
 
-  test("rejects Railgun destinations for Safe-held sources", async () => {
+  test("Railgun destinations work with Safe-held sources: the SAFE shields (no EOA custody)", async () => {
     const sourceTokens = [erc20(USDC_OPTIMISM, 5_000_000n, 10, SAFE, "USDC")];
     const destinationToken = {
       token: USDC_ADDRESS,
@@ -307,10 +307,28 @@ describe("planConsolidation with a Safe source", () => {
       railgunAddress:
         "0zk1qyqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
     };
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
 
-    await expect(
-      planConsolidation(sourceTokens, destinationToken, [WALLET, OWNER, SAFE], undefined, safeAccounts([10, 1])),
-    ).rejects.toThrow(/Railgun shielding isn't available for Safe-held funds/);
+    const steps = await planConsolidation(
+      sourceTokens,
+      destinationToken,
+      [WALLET, OWNER, SAFE],
+      undefined,
+      safeAccounts([10, 1]),
+    );
+
+    // Bridged USDC mints into the SAFE (Safe mode: the intermediate is a
+    // source Safe controlled on the destination chain)...
+    const claim = steps.find((s) => s.type === "claim");
+    expect(claim?.outputToken.walletAddress).toBe(SAFE);
+
+    // ...and the SAFE itself deposits into Railgun as a Safe transaction —
+    // the shield key comes from the owner EOA's signature, never the funds.
+    const shield = steps.find((s) => s.type === "shield");
+    expect(shield).toBeDefined();
+    expect(shield?.inputTokens[0].walletAddress).toBe(SAFE);
+    expect(shield?.execution?.via).toBe("safe");
+    expect(shield?.railgunAddress).toBe(destinationToken.railgunAddress);
   });
 
   test("still rejects unregistered contract wallets, pointing at the Safe flow", async () => {
@@ -329,7 +347,7 @@ describe("planConsolidation with a Safe source", () => {
 
     await expect(
       planConsolidation(sourceTokens, destinationToken, [WALLET, CONTRACT], undefined, undefined),
-    ).rejects.toThrow(/Smart-account wallets are not supported.*Safe accounts panel/s);
+    ).rejects.toThrow(/Smart-account wallets must be detected before use.*Safe accounts panel/s);
   });
 });
 

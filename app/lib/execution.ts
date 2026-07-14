@@ -7,6 +7,7 @@ import { FOREIGN_OMNIBRIDGE, HOME_OMNIBRIDGE, USDC_ON_XDAI } from "~/data/omnibr
 import { BPS_DENOMINATOR, RAILGUN_PROXY, RAILGUN_SHIELD_FEE_BPS } from "~/data/railgun";
 import { chains, transports } from "~/data/supported-chains";
 import { USDC } from "~/data/token-contracts";
+import { accountFor, isSmartAccount, toAccountsMap } from "./accounts";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import {
   buildDeloraCalls,
@@ -33,10 +34,18 @@ import {
   waitForOmnibridgeDelivery,
 } from "./omnibridge";
 import { getPublicClient, retryOnRateLimit } from "./public-client";
-import { isSafeWallet, prepareStepSendCalls, type SafeStepHooks } from "./safe-send-calls";
+import { isSafeWallet, prepareStepSendCalls, type SafeStepHooks, type StepSendHooks } from "./safe-send-calls";
 import { SendCallsError } from "./send-calls";
+import type { SmartStepHooks } from "./smart-send-calls";
 import { getTokenBalance } from "./tokens";
-import type { ConsolidationState, SafeProposalRecord, StepResult, TokenAmount, TransactionStep } from "./types";
+import type {
+  ConsolidationState,
+  SafeProposalRecord,
+  SendCallsBundleRecord,
+  StepResult,
+  TokenAmount,
+  TransactionStep,
+} from "./types";
 
 /**
  * Thrown when a step's preflight balance check finds the wallet doesn't hold
@@ -145,6 +154,16 @@ export type StepProgressEvent =
       threshold: number;
       safeTxHash?: string;
       chainId: number;
+    }
+  // ERC-4337 smart-wallet submission (EIP-5792 bundle) lifecycle.
+  | {
+      kind: "smart";
+      stepId: string;
+      stepIds: string[];
+      phase: "sending" | "confirming";
+      chainId: number;
+      bundleId?: string;
+      call?: { index: number; total: number };
     };
 
 export interface ExecuteOptions {
@@ -335,13 +354,14 @@ export async function* executeConsolidationPlan(
     // Yield state when starting step execution
     yield structuredClone(workingState);
 
-    // Safe batch groups (independent same-chain steps of one Safe) execute as
-    // ONE Safe transaction when the first member is reached; the remaining
-    // members are resolved from the shared result and skipped by the
-    // "already completed" check on their own iterations. They succeed, fail,
-    // and retry together (the MultiSend is atomic). Reconciliation of a prior
-    // attempt happens through the persisted proposal record inside the Safe
-    // send path, not the per-step tx-hash probe.
+    // Atomic batch groups (independent same-chain steps of one Safe or one
+    // ERC-4337 smart wallet) execute as ONE on-chain submission when the
+    // first member is reached; the remaining members are resolved from the
+    // shared result and skipped by the "already completed" check on their own
+    // iterations. They succeed, fail, and retry together (the batch is
+    // atomic). Reconciliation of a prior attempt happens through the
+    // persisted proposal/bundle record inside the account's send path, not
+    // the per-step tx-hash probe.
     const groupMembers = getBatchGroupMembers(workingState, executingStep);
     if (groupMembers.length > 1) {
       // Mark every member as executing so the whole group shows live status.
@@ -354,7 +374,7 @@ export async function* executeConsolidationPlan(
       yield structuredClone(workingState);
 
       try {
-        const groupResults = await executeSafeBatchGroup(
+        const groupResults = await executeAtomicBatchGroup(
           getBatchGroupMembers(workingState, executingStep),
           workingState,
           walletClient,
@@ -630,6 +650,35 @@ export type ReconcileOutcome =
   | { kind: "rpc-error" };
 
 /**
+ * Whether a mined receipt plausibly belongs to this step's expected contract
+ * interaction.
+ *
+ * EOA and Safe steps match on the OUTER `to` (the target contract, or the
+ * Safe whose execTransaction wraps the inner calldata). Smart-account steps
+ * can't: the outer tx is a UserOperation submitted via the ERC-4337
+ * EntryPoint (or a bundler multiplexer), so the receipt's `to` is never the
+ * target — and, critically, outer receipt success does NOT imply the inner
+ * call succeeded (the EntryPoint tx succeeds even when the UserOp's call
+ * reverted). For smart steps the discriminator is therefore LOG-based: a
+ * genuine burn/deposit/shield always emits ≥1 event FROM the expected
+ * contract, and its absence covers both "unrelated tx" and "inner revert".
+ */
+function receiptMatchesTarget(
+  receipt: { to?: Address | null; logs?: { address: Address }[] },
+  expectedTo: Address | undefined,
+  execution: TransactionStep["execution"],
+): boolean {
+  if (execution?.via === "smart") {
+    if (!expectedTo) return true;
+    return (receipt.logs ?? []).some((log) => isAddressEqual(log.address, expectedTo));
+  }
+  const target = execution?.via === "safe" ? execution.safeAddress : expectedTo;
+  const receiptTo = receipt.to;
+  if (!target || !receiptTo) return true;
+  return isAddressEqual(receiptTo, target);
+}
+
+/**
  * Probes the chain for a step that already has an on-chain tx hash from a prior
  * attempt. Decides whether to short-circuit with a success result, fall through
  * to a fresh-nonce broadcast, fall through to a same-nonce replay, or pause for
@@ -655,14 +704,23 @@ async function tryReconcileFromChain(
       // broadcast, or replaced at the same nonce by another tx (wallet
       // cancellation / manual speedup). Probe the wallet's next-nonce to
       // distinguish "still ours to retry" from "consumed by something else".
+      // Smart-account steps: the outer tx is a UserOperation sent by the
+      // EntryPoint/bundler, so the account's own eth_getTransactionCount never
+      // advances — the nonce probe cannot distinguish anything. (The smart
+      // path also never sets retryHints, so this guard is belt-and-braces.)
+      if (step.execution?.via === "smart") {
+        return { kind: "not-found" };
+      }
       if (step.retryHints?.nonce !== undefined) {
         // For Safe steps the on-chain tx is the owner EOA's execTransaction —
         // probing the Safe's eth_getTransactionCount would be meaningless
         // (contract nonce ≠ account nonce) and could false-positive.
-        const proposal = step.execution ? state.metadata?.safe?.proposals?.[step.execution.batchId] : undefined;
-        const broadcaster = step.execution
-          ? (proposal?.executor ?? step.execution.ownerAddress)
-          : (step.inputTokens[0]?.walletAddress ?? step.outputToken.walletAddress);
+        const proposal =
+          step.execution?.via === "safe" ? state.metadata?.safe?.proposals?.[step.execution.batchId] : undefined;
+        const broadcaster =
+          step.execution?.via === "safe"
+            ? (proposal?.executor ?? step.execution.ownerAddress)
+            : (step.inputTokens[0]?.walletAddress ?? step.outputToken.walletAddress);
         try {
           const latest = await retryOnRateLimit(() =>
             client.getTransactionCount({ address: broadcaster, blockTag: "latest" }),
@@ -712,10 +770,9 @@ async function tryReconcileFromChain(
       // leaked approve's nonce was already consumed on chain) and falls
       // through to a fresh burn broadcast.
       // Safe steps go on-chain as execTransaction TO the Safe itself, not to
-      // the TokenMessenger — the proposal record pins the inner calldata.
-      const expectedTo = step.execution ? step.execution.safeAddress : tokenMessenger[step.chainId];
-      const receiptTo = (receipt as { to?: Address | null }).to;
-      if (expectedTo && receiptTo && !isAddressEqual(receiptTo, expectedTo)) {
+      // the TokenMessenger; smart-account steps match on logs instead (see
+      // receiptMatchesTarget).
+      if (!receiptMatchesTarget(receipt, tokenMessenger[step.chainId], step.execution)) {
         return { kind: "reverted" };
       }
       return {
@@ -773,15 +830,9 @@ async function tryReconcileFromChain(
       // a preceding approve or transmuter withdraw.
       const inputToken = step.inputTokens[0]?.token;
       const isUsdcEgress = inputToken !== undefined && isAddressEqual(inputToken, USDC[gnosis.id]);
-      const expectedTo = step.execution
-        ? step.execution.safeAddress
-        : step.chainId === gnosis.id
-          ? isUsdcEgress
-            ? USDC_ON_XDAI
-            : HOME_OMNIBRIDGE
-          : FOREIGN_OMNIBRIDGE;
-      const receiptTo = (receipt as { to?: Address | null }).to;
-      if (receiptTo && !isAddressEqual(receiptTo, expectedTo)) {
+      const expectedTo =
+        step.chainId === gnosis.id ? (isUsdcEgress ? USDC_ON_XDAI : HOME_OMNIBRIDGE) : FOREIGN_OMNIBRIDGE;
+      if (!receiptMatchesTarget(receipt, expectedTo, step.execution)) {
         return { kind: "reverted" };
       }
       const amount = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
@@ -849,11 +900,9 @@ async function tryReconcileFromChain(
     case "shield": {
       // Same defensive discriminator as "bridge": the recorded hash must point
       // at the RailgunSmartWallet shield call, not the preceding ERC20 approve.
-      // (Shield steps are never Safe-executed — planning gates them — but the
-      // guard keeps the discriminator honest if that ever changes.)
-      const expectedTo = step.execution ? step.execution.safeAddress : RAILGUN_PROXY[step.chainId];
-      const receiptTo = (receipt as { to?: Address | null }).to;
-      if (expectedTo && receiptTo && !isAddressEqual(receiptTo, expectedTo)) {
+      // (Shield steps are never Safe/smart-executed — planning gates them —
+      // but the guard keeps the discriminator honest if that ever changes.)
+      if (!receiptMatchesTarget(receipt, RAILGUN_PROXY[step.chainId], step.execution)) {
         return { kind: "reverted" };
       }
       const total = step.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
@@ -1141,20 +1190,22 @@ export function getBatchGroupMembers(state: ConsolidationState, step: Transactio
 }
 
 /**
- * Executes a multi-member Safe batch group as ONE Safe transaction: every
- * member's calls are built up front (fresh Delora calldata for swaps, plain
- * transfers as-is), concatenated in plan order, and submitted through the
- * Safe path — one MultiSend, one signature round. Members succeed together
- * (the MultiSend is atomic) and the caller fails them together.
+ * Executes a multi-member atomic batch group as ONE on-chain submission:
+ * every member's calls are built up front (fresh Delora calldata for swaps,
+ * plain transfers as-is), concatenated in plan order, and routed through the
+ * account's transport — a Safe MultiSend execTransaction, or an ERC-4337
+ * wallet's atomic `wallet_sendCalls` bundle. One signature round either way;
+ * members succeed together (the batch is atomic) and the caller fails them
+ * together.
  *
- * Per-member output attribution: MultiSend preserves call order and the one
- * receipt carries all logs, so each member's output is summed from Transfer
- * logs of ITS output token to the Safe. Members sharing an output token split
- * the summed total proportionally to their planned amounts — downstream steps
- * on the same wallet+chain consume the sum anyway, so the split only affects
- * display granularity.
+ * Per-member output attribution: both transports preserve call order and the
+ * receipt(s) carry all logs, so each member's output is summed from Transfer
+ * logs of ITS output token to its recipient. Members sharing an output token
+ * split the summed total proportionally to their planned amounts —
+ * downstream steps on the same wallet+chain consume the sum anyway, so the
+ * split only affects display granularity.
  */
-async function executeSafeBatchGroup(
+async function executeAtomicBatchGroup(
   members: TransactionStep[],
   state: ConsolidationState,
   walletClient: WalletClient<HttpTransport, Chain, Account>,
@@ -1162,9 +1213,9 @@ async function executeSafeBatchGroup(
 ): Promise<StepResult[]> {
   const first = members[0];
   const execution = first.execution;
-  if (!execution) throw new Error("Safe batch group requires tagged steps");
+  if (!execution) throw new Error("Atomic batch group requires tagged steps");
   const chainId = first.chainId;
-  const safe = execution.safeAddress;
+  const batchWallet = execution.via === "safe" ? execution.safeAddress : execution.smartAddress;
 
   for (const member of members) {
     await validateInputBalances(member, state);
@@ -1176,10 +1227,10 @@ async function executeSafeBatchGroup(
       if (member.type === "swap") {
         const inputs = filterZeroAmounts(member.inputTokens, member.id, "swap");
         const { calls, minOutputAmount } = await buildDeloraCalls(inputs, member.outputToken);
-        // Per-member delivery simulation: inner calls run with the Safe as
-        // msg.sender under MultiSend, which is exactly what simulateCalls
-        // models with `account: safe`.
-        await simulateSwapDelivery(chainId, safe, calls, member.outputToken, minOutputAmount);
+        // Per-member delivery simulation: inner calls run with the batching
+        // account as msg.sender (MultiSend delegatecall / UserOp execution),
+        // which is exactly what simulateCalls models with `account`.
+        await simulateSwapDelivery(chainId, batchWallet, calls, member.outputToken, minOutputAmount);
         built.push({ member, calls });
       } else if (member.type === "transfer") {
         const totalAmount = member.inputTokens.reduce((sum, t) => sum + t.amount, 0n);
@@ -1194,8 +1245,8 @@ async function executeSafeBatchGroup(
             };
         built.push({ member, calls: [call] });
       } else {
-        // Planning only groups swaps and transfers (see tagSafeSteps).
-        throw new Error(`Safe batch group cannot contain a ${member.type} step`);
+        // Planning only groups swaps and transfers (see tagExecutionSteps).
+        throw new Error(`Atomic batch group cannot contain a ${member.type} step`);
       }
     }
     return built;
@@ -1204,13 +1255,17 @@ async function executeSafeBatchGroup(
   const builtCalls = await buildMemberCalls();
   const allCalls = builtCalls.flatMap((entry) => entry.calls);
 
-  const hooks = buildSafeStepHooks(first, state, opts);
-  hooks.rebuildCalls = async () => (await buildMemberCalls()).flatMap((entry) => entry.calls);
+  const hooks = buildStepSendHooks(first, state, opts);
+  if (execution.via === "safe") {
+    // A stale Safe proposal (co-signers took hours) can be replaced with
+    // freshly-quoted calldata; smart bundles quote-and-send immediately.
+    hooks.safe.rebuildCalls = async () => (await buildMemberCalls()).flatMap((entry) => entry.calls);
+  }
   const sendCalls = prepareStepSendCalls(walletClient, first, state, hooks);
   const [transactionHash, logs] = await sendCalls(
-    "safe-batch",
+    "batch",
     chainId,
-    safe,
+    batchWallet,
     allCalls,
     "atomic-steps",
     first.retryHints,
@@ -1276,21 +1331,54 @@ async function executeSafeBatchGroup(
 }
 
 /**
- * Builds the Safe-path hooks for one step: proposal persistence goes through
- * `state.metadata.safe.proposals[batchId]` (mutating the executor's working
- * state — the generator is suspended awaiting this step, so there's a single
- * writer) and is pushed out immediately via `onInterimState` so a pending
- * proposal survives a tab close. Quote-bearing steps also get `rebuildCalls`
- * so a proposal that went stale during a long co-signer wait can be replaced
- * with freshly-quoted calldata.
+ * Builds the smart-account-path hooks for one step (see also
+ * {@link buildStepSendHooks}): mid-step bundle persistence goes through
+ * `state.metadata.smart.bundles[batchId]` and is pushed out immediately via
+ * `onInterimState` — the bundle id surviving a tab close is the entire
+ * reconcile story for wallet-scoped EIP-5792 ids.
  */
-function buildSafeStepHooks(step: TransactionStep, state: ConsolidationState, opts?: ExecuteOptions): SafeStepHooks {
+function buildSmartStepHooks(step: TransactionStep, state: ConsolidationState, opts?: ExecuteOptions): SmartStepHooks {
   const batchId = step.execution?.batchId ?? step.id;
   const stepIds = state.plan
     .filter((planStep) => step.execution && planStep.execution?.batchId === step.execution.batchId)
     .map((planStep) => planStep.id);
 
   return {
+    getBundle: () => state.metadata?.smart?.bundles?.[batchId],
+    persistBundle: (record: SendCallsBundleRecord) => {
+      state.metadata = {
+        ...state.metadata,
+        smart: { bundles: { ...state.metadata?.smart?.bundles, [batchId]: record } },
+      };
+      opts?.onInterimState?.(structuredClone(state));
+    },
+    onProgress: (event) =>
+      opts?.onStepProgress?.({
+        kind: "smart",
+        stepId: step.id,
+        stepIds: stepIds.length > 0 ? stepIds : [step.id],
+        ...event,
+      }),
+  };
+}
+
+/**
+ * Builds the account-kind router hooks for one step: Safe proposal
+ * persistence goes through `state.metadata.safe.proposals[batchId]` (mutating
+ * the executor's working state — the generator is suspended awaiting this
+ * step, so there's a single writer) and is pushed out immediately via
+ * `onInterimState` so a pending proposal survives a tab close. Quote-bearing
+ * Safe steps also get `rebuildCalls` so a proposal that went stale during a
+ * long co-signer wait can be replaced with freshly-quoted calldata (smart
+ * bundles quote-and-send immediately — no stale-proposal problem).
+ */
+function buildStepSendHooks(step: TransactionStep, state: ConsolidationState, opts?: ExecuteOptions): StepSendHooks {
+  const batchId = step.execution?.batchId ?? step.id;
+  const stepIds = state.plan
+    .filter((planStep) => step.execution && planStep.execution?.batchId === step.execution.batchId)
+    .map((planStep) => planStep.id);
+
+  const safe: SafeStepHooks = {
     getProposal: () => state.metadata?.safe?.proposals?.[batchId],
     persistProposal: (record: SafeProposalRecord) => {
       state.metadata = {
@@ -1318,6 +1406,8 @@ function buildSafeStepHooks(step: TransactionStep, state: ConsolidationState, op
         }
       : {}),
   };
+
+  return { safe, smart: buildSmartStepHooks(step, state, opts) };
 }
 
 async function executeStep(
@@ -1326,11 +1416,12 @@ async function executeStep(
   walletClient: WalletClient<HttpTransport, Chain, Account>,
   opts?: ExecuteOptions,
 ): Promise<StepResult> {
-  // Safe-aware router: calls from the step's Safe execute as one Safe
-  // transaction (batched, proposed, co-signed as needed); every other sender
-  // takes the untouched EOA path. Steps without an `execution` tag never
-  // diverge from the pre-Safe behavior.
-  const sendCalls = prepareStepSendCalls(walletClient, step, state, buildSafeStepHooks(step, state, opts));
+  // Account-kind router: calls from the step's Safe execute as one Safe
+  // transaction (batched, proposed, co-signed as needed); calls from an
+  // ERC-4337 smart wallet go out as EIP-5792 bundles; every other sender
+  // takes the untouched EOA path. Plain-EOA steps never diverge from the
+  // pre-Safe behavior.
+  const sendCalls = prepareStepSendCalls(walletClient, step, state, buildStepSendHooks(step, state, opts));
 
   switch (step.type) {
     case "swap": {
@@ -1601,6 +1692,13 @@ async function executeStep(
         await txClient.addChain({ chain: sourceChain });
       }
 
+      // A smart-wallet source must send through the account-kind router
+      // (EIP-5792 bundles): a raw eth_sendTransaction to a 4337 wallet may
+      // return a userOp hash that no receipt wait ever resolves. In an
+      // all-smart plan the smart account is the only possible refuel source,
+      // so this is required, not cosmetic.
+      const sourceIsSmart = isSmartAccount(toAccountsMap(state.accounts), sourceAddress);
+
       const gasRefuels: GasRefuelRecord[] = [];
       let totalValue = 0n;
       let firstTxHash: Hex | undefined;
@@ -1610,20 +1708,26 @@ async function executeStep(
         const value = BigInt(dest.amountWei);
         totalValue += value;
 
-        const hash = await txClient.sendTransaction({
-          account: sourceAddress,
-          to: dest.address,
-          data: "0x" as Hex,
-          value,
-          chain: sourceChain,
-        });
-
-        const receipt = await waitForTransactionReceipt(txClient, { hash });
-        if (receipt.status !== "success") {
-          throw new Error("Gas top-up transaction reverted");
+        let hash: string;
+        if (sourceIsSmart) {
+          [hash] = await sendCalls("gas-topup", sourceChainId, sourceAddress, [
+            { to: dest.address, data: "0x" as Hex, value },
+          ]);
+        } else {
+          hash = await txClient.sendTransaction({
+            account: sourceAddress,
+            to: dest.address,
+            data: "0x" as Hex,
+            value,
+            chain: sourceChain,
+          });
+          const receipt = await waitForTransactionReceipt(txClient, { hash: hash as Hex });
+          if (receipt.status !== "success") {
+            throw new Error("Gas top-up transaction reverted");
+          }
         }
 
-        firstTxHash ??= hash;
+        firstTxHash ??= hash as Hex;
       }
 
       // Cross-chain destinations: send each refuel deposit individually so the
@@ -1644,34 +1748,41 @@ async function executeStep(
           transports?.[dest.chainId as keyof typeof transports],
         );
 
-        let gas: bigint | undefined;
-        try {
-          const estimated = await estimateGas(txClient, {
+        let hash: string;
+        if (sourceIsSmart) {
+          [hash] = await sendCalls("gas-topup", sourceChainId, sourceAddress, [
+            { to: quote.tx.to, data: quote.tx.data, value },
+          ]);
+        } else {
+          let gas: bigint | undefined;
+          try {
+            const estimated = await estimateGas(txClient, {
+              account: sourceAddress,
+              to: quote.tx.to,
+              data: quote.tx.data,
+              value,
+            });
+            gas = (estimated * 120n) / 100n;
+          } catch {
+            gas = undefined;
+          }
+
+          hash = await txClient.sendTransaction({
             account: sourceAddress,
             to: quote.tx.to,
             data: quote.tx.data,
             value,
+            gas,
+            chain: sourceChain,
           });
-          gas = (estimated * 120n) / 100n;
-        } catch {
-          gas = undefined;
+
+          const receipt = await waitForTransactionReceipt(txClient, { hash: hash as Hex });
+          if (receipt.status !== "success") {
+            throw new Error("Gas top-up transaction reverted");
+          }
         }
 
-        const hash = await txClient.sendTransaction({
-          account: sourceAddress,
-          to: quote.tx.to,
-          data: quote.tx.data,
-          value,
-          gas,
-          chain: sourceChain,
-        });
-
-        const receipt = await waitForTransactionReceipt(txClient, { hash });
-        if (receipt.status !== "success") {
-          throw new Error("Gas top-up transaction reverted");
-        }
-
-        firstTxHash ??= hash;
+        firstTxHash ??= hash as Hex;
         gasRefuels.push({
           provider: quote.provider,
           txHash: hash,
@@ -1727,11 +1838,26 @@ async function executeStep(
       const combinedInput = { ...first, amount: totalAmount };
 
       // Lazy import keeps the shield crypto (noble/poseidon) out of the main chunk.
-      const { executeRailgunShield } = await import("./railgun-shield");
+      const { deriveShieldPrivateKey, executeRailgunShield, randomShieldPrivateKey } = await import("./railgun-shield");
+      // The shield private key is an ephemeral ENCRYPTION key (its public
+      // half travels with the note), so it need not come from the wallet
+      // holding the funds. EOAs keep the Railgun SDK convention (sign as the
+      // depositor — re-derivable sender history); a Safe's key derives from
+      // the connected owner EOA's signature (the Safe still sends the tx);
+      // smart wallets get a random key (no session EOA; 4337 personal_sign is
+      // non-deterministic for passkeys and would cost an extra popup).
+      const depositorKind = accountFor(toAccountsMap(state.accounts), first.walletAddress).kind;
+      const shieldPrivateKey =
+        depositorKind === "smart"
+          ? randomShieldPrivateKey()
+          : await deriveShieldPrivateKey(
+              walletClient,
+              depositorKind === "safe" ? walletClient.account.address : first.walletAddress,
+            );
       const [transactionHash, shieldedAmount] = await executeRailgunShield(
         combinedInput,
         railgunAddress,
-        walletClient,
+        shieldPrivateKey,
         sendCalls,
         step.retryHints,
       );

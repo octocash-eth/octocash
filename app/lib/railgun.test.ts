@@ -34,9 +34,11 @@ import { chains } from "~/data/supported-chains";
 import { decodeRailgunAddress, getShieldedAmountAfterFee, isRailgunAddress, truncateRailgunAddress } from "./railgun";
 import {
   buildShieldRequest,
+  deriveShieldPrivateKey,
   getNotePublicKey,
   getSharedSymmetricKey,
   getShieldPrivateKeySignatureMessage,
+  randomShieldPrivateKey,
 } from "./railgun-shield";
 
 // ============================================================================
@@ -202,6 +204,32 @@ describe("railgun config", () => {
   test("low-privacy threshold is $1M", () => {
     expect(LOW_PRIVACY_TVL_USD).toBe(1_000_000);
     expect(BPS_DENOMINATOR).toBe(10_000n);
+  });
+});
+
+// ============================================================================
+// Shield private key sourcing
+// ============================================================================
+
+describe("shield private key sourcing", () => {
+  test("deriveShieldPrivateKey = keccak256 of the RAILGUN_SHIELD signature (SDK convention)", async () => {
+    const account = "0x1111111111111111111111111111111111111111" as const;
+    const signer = {
+      signMessage: async ({ message }: { account: `0x${string}`; message: string }) => {
+        expect(message).toBe(getShieldPrivateKeySignatureMessage());
+        return "0xdeadbeef" as const;
+      },
+    };
+    const key = await deriveShieldPrivateKey(signer, account);
+    // keccak256("0xdeadbeef")
+    expect(key).toBe("0xd4fd4e189132273036449fc9e11198c739161b4c0116a9a2dccdfa1c492006f1");
+  });
+
+  test("randomShieldPrivateKey yields distinct 32-byte keys usable by buildShieldRequest", () => {
+    const a = randomShieldPrivateKey();
+    const b = randomShieldPrivateKey();
+    expect(a).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(a).not.toBe(b);
   });
 });
 

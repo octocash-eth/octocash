@@ -10,6 +10,7 @@ import {
   omnibridgeStageMessage,
   refuelStageMessage,
   safeStageMessage,
+  smartStageMessage,
 } from "~/lib/step-progress";
 import type { ConsolidationState } from "~/lib/types";
 import { useConsolidationRecords } from "./use-consolidation-records";
@@ -64,10 +65,11 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
   // human-readable `stage` string; `startedAt`/`note` are preserved.
   const handleStepProgress = useCallback((e: StepProgressEvent) => {
     setLiveProgress((prev) => {
-      // Safe events fan out to every member of the batch group: batched steps
-      // sign, wait, and execute together, so their rows advance together.
-      if (e.kind === "safe") {
-        const stage = safeStageMessage(e.phase, e.confirmed, e.threshold);
+      // Safe/smart events fan out to every member of the batch group: batched
+      // steps sign, wait, and execute together, so their rows advance together.
+      if (e.kind === "safe" || e.kind === "smart") {
+        const stage =
+          e.kind === "safe" ? safeStageMessage(e.phase, e.confirmed, e.threshold) : smartStageMessage(e.phase, e.call);
         const next = { ...prev };
         for (const stepId of e.stepIds) {
           const entry = next[stepId] ?? { startedAt: Date.now(), stage: "" };

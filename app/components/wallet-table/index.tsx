@@ -5,7 +5,7 @@ import { formatUnits } from "viem";
 import { ConsolidateTokensModal } from "~/components/consolidate-tokens-modal";
 import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
 import { chains } from "~/data/supported-chains";
-import { type AccountsMap, accountFor, safeControlledOn } from "~/lib/accounts";
+import { type AccountsMap, accountFor, controlledOn } from "~/lib/accounts";
 import {
   checkDeloraRoutableToUsdc,
   fetchDeloraTokensForChain,
@@ -264,17 +264,19 @@ export function WalletTable({ connectedAddresses = [], accounts, safesPanel }: W
   // there, or a replayed deployment has a different owner set) — planning
   // would reject them, so they must never be selectable.
   const isReachable = React.useCallback(
-    (token: TokenAmount): boolean => safeControlledOn(accountFor(accounts, token.walletAddress), token.chainId),
+    (token: TokenAmount): boolean => controlledOn(accountFor(accounts, token.walletAddress), token.chainId),
     [accounts],
   );
 
-  // Scope rows to the active tab's wallet kind. Without tabs (no Safes
-  // discovered), everything is EOA-held and passes through unchanged.
+  // Scope rows to the active tab's wallet kind: Safes on their own tab
+  // (custody + co-signing make mixed plans incoherent), everything the user
+  // signs synchronously — EOAs and connected ERC-4337 smart wallets — on the
+  // Addresses tab. Without tabs (no Safes discovered), all rows pass through.
   const matchesTab = React.useCallback(
     (token: TokenAmount): boolean => {
       if (!showTabs) return true;
       const kind = accountFor(accounts, token.walletAddress).kind;
-      return activeTab === "safes" ? kind === "safe" : kind === "eoa";
+      return activeTab === "safes" ? kind === "safe" : kind !== "safe";
     },
     [showTabs, activeTab, accounts],
   );

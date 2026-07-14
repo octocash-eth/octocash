@@ -30,7 +30,7 @@ vi.mock("./cctp", async (importOriginal) => ({
 import { getSafeTx, proposeSafeTx } from "./api/safe-transaction-service";
 import { getPublicClient } from "./public-client";
 import { approvedHashSignature, readSafeInfo, signSafeTx } from "./safe";
-import { prepareStepSendCalls, type SafeStepHooks } from "./safe-send-calls";
+import { prepareStepSendCalls, type SafeStepHooks, type StepSendHooks } from "./safe-send-calls";
 import { prepareSendCalls, SendCallsError } from "./send-calls";
 
 const SAFE = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Address;
@@ -79,16 +79,20 @@ function makeState(step: TransactionStep, proposal?: SafeProposalRecord): Consol
   };
 }
 
-function makeHooks(state: ConsolidationState): SafeStepHooks & { persisted: SafeProposalRecord[] } {
+function makeHooks(state: ConsolidationState): StepSendHooks & { persisted: SafeProposalRecord[] } {
   const persisted: SafeProposalRecord[] = [];
-  return {
-    persisted,
+  const safe: SafeStepHooks = {
     getProposal: () => state.metadata?.safe?.proposals?.["batch-1"],
     persistProposal: (record) => {
       persisted.push(record);
       state.metadata = { ...state.metadata, safe: { proposals: { "batch-1": record } } };
     },
     onProgress: vi.fn(),
+  };
+  return {
+    persisted,
+    safe,
+    smart: { getBundle: () => undefined, persistBundle: vi.fn(), onProgress: vi.fn() },
   };
 }
 
@@ -352,7 +356,8 @@ describe("stale-proposal refresh", () => {
 
     const step = makeStep(1);
     const state = makeState(step);
-    const hooks = { ...makeHooks(state), rebuildCalls };
+    const hooks = makeHooks(state);
+    hooks.safe.rebuildCalls = rebuildCalls;
     const sendCalls = prepareStepSendCalls(walletClient, step, state, hooks);
 
     const [hash] = await sendCalls("swap", 10, SAFE, CALLS, "atomic-steps", undefined);
@@ -392,7 +397,8 @@ describe("stale-proposal refresh", () => {
 
     const step = makeStep(2);
     const state = makeState(step, record);
-    const hooks = { ...makeHooks(state), rebuildCalls };
+    const hooks = makeHooks(state);
+    hooks.safe.rebuildCalls = rebuildCalls;
     const sendCalls = prepareStepSendCalls(walletClient, step, state, hooks);
 
     await expect(sendCalls("swap", 10, SAFE, CALLS, "atomic-steps", undefined)).rejects.toThrow(

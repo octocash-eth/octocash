@@ -8,7 +8,7 @@ import { Checkbox } from "~/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "~/components/ui/select";
 import { getRailgunTokenOptions, RAILGUN_SUPPORTED_CHAINS } from "~/data/railgun";
 import { supportedChains } from "~/data/supported-chains";
-import { type AccountsMap, accountFor, safeControlledOn } from "~/lib/accounts";
+import { type AccountsMap, accountFor, controlledOn } from "~/lib/accounts";
 import { isRailgunAddress } from "~/lib/railgun";
 import { ChainIcon } from "../chain/chain-icon";
 
@@ -74,7 +74,7 @@ export function SelectDestinationStage({
   // only where a candidate Safe intermediate exists.
   const availableChains = supportedChains
     .filter((chain) => !isRailgun || RAILGUN_SUPPORTED_CHAINS.includes(chain.id))
-    .filter((chain) => !selectedSafe || safeControlledOn(selectedSafe, chain.id))
+    .filter((chain) => !selectedSafe || controlledOn(selectedSafe, chain.id))
     .filter((chain) => allowedChainIds === undefined || allowedChainIds.includes(chain.id))
     .map((chain) => ({
       name: chain.name,
@@ -113,7 +113,7 @@ export function SelectDestinationStage({
     if (isAddress(walletAddress)) {
       const account = accountFor(accounts, walletAddress as Address);
       if (account.kind === "safe") {
-        const chainSupported = value.chainId !== undefined && safeControlledOn(account, value.chainId);
+        const chainSupported = value.chainId !== undefined && controlledOn(account, value.chainId);
         onChange({
           ...value,
           walletAddress: getAddress(walletAddress),

@@ -1,22 +1,26 @@
 import { useCallback, useMemo } from "react";
 import useLocalStorageState from "use-local-storage-state";
 import type { Address } from "viem";
-import { type AccountsMap, type SafeAccount, safeControlledOn } from "~/lib/accounts";
+import { type AccountsMap, controlledOn, type WalletAccount } from "~/lib/accounts";
 import { useConnectedAddresses } from "./use-connected-addresses";
 import { useOwnedSafes } from "./use-owned-safes";
+import { useSmartAccounts } from "./use-smart-accounts";
 
 const STORAGE_KEY = "octocash:enabled-safes";
 
 /**
  * The full set of addresses the app can spend from — connected EOAs plus the
  * Safes the user has explicitly enabled from the Safes panel — together with
- * the accounts map that tells planning/execution which of them are Safes.
- * Discovered Safes are opt-in (persisted across sessions) so a treasury
- * signer's dashboard isn't suddenly flooded with every DAO Safe they sit on.
+ * the accounts map that tells planning/execution which of them are Safes or
+ * ERC-4337 smart wallets. Discovered Safes are opt-in (persisted across
+ * sessions) so a treasury signer's dashboard isn't suddenly flooded with
+ * every DAO Safe they sit on; smart accounts need no opt-in — they ARE the
+ * connected wallet, the map entry just annotates their kind.
  */
 export function useSpendableAccounts() {
   const connectedAddresses = useConnectedAddresses();
   const { safes, isLoading } = useOwnedSafes();
+  const { smartAccounts } = useSmartAccounts();
   const [enabledSafes, setEnabledSafes] = useLocalStorageState<string[]>(STORAGE_KEY, { defaultValue: [] });
 
   const enabledSet = useMemo(() => new Set(enabledSafes.map((address) => address.toLowerCase())), [enabledSafes]);
@@ -27,16 +31,17 @@ export function useSpendableAccounts() {
         (safe) =>
           enabledSet.has(safe.address.toLowerCase()) &&
           // A Safe with no controlled deployment can't be spent from at all.
-          Object.keys(safe.deployments).some((chainId) => safeControlledOn(safe, Number(chainId))),
+          Object.keys(safe.deployments).some((chainId) => controlledOn(safe, Number(chainId))),
       ),
     [safes, enabledSet],
   );
 
   const accounts = useMemo<AccountsMap>(() => {
-    const map = new Map<string, SafeAccount>();
+    const map = new Map<string, WalletAccount>();
     for (const safe of activeSafes) map.set(safe.address.toLowerCase(), safe);
+    for (const smart of smartAccounts) map.set(smart.address.toLowerCase(), smart);
     return map;
-  }, [activeSafes]);
+  }, [activeSafes, smartAccounts]);
 
   const addresses = useMemo<Address[]>(
     () => [...connectedAddresses, ...activeSafes.map((safe) => safe.address)],

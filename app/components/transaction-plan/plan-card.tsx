@@ -403,13 +403,30 @@ function GasCostDisplay({ gas, chainId }: { gas: StepGasEstimate; chainId: numbe
 }
 
 /**
- * Marks a step that executes as (part of) a Gnosis Safe transaction: shows
- * the N-of-M requirement and, while it's live, a deep link into the Safe
- * queue so co-signers can be pointed at the pending proposal.
+ * Marks a step that executes through a smart-account path. Safe steps show
+ * the N-of-M requirement and, while live, a deep link into the Safe queue so
+ * co-signers can be pointed at the pending proposal; ERC-4337 smart-wallet
+ * steps get a plain badge (they sign synchronously in the connected wallet).
  */
 function SafeExecutionBadge({ step, showQueueLink }: { step: TransactionStep; showQueueLink: boolean }) {
   const execution = step.execution;
   if (!execution) return null;
+
+  if (execution.via === "smart") {
+    return (
+      <span
+        className="rounded-full border border-border bg-muted/50 px-1.5 py-px text-xs text-muted-foreground"
+        title={
+          execution.atomic
+            ? "Executes as one atomic batch in your smart wallet"
+            : "Executes call-by-call in your smart wallet"
+        }
+      >
+        Smart wallet
+      </span>
+    );
+  }
+
   const queueUrl = safeAppQueueUrl(step.chainId, execution.safeAddress);
   return (
     <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
@@ -465,7 +482,7 @@ export function PlanCard({ step, result, stepNumber, progress }: PlanCardProps) 
         {/* Action description + inline transient wait status */}
         <div className="text-xs sm:text-sm text-foreground flex items-center gap-1.5 flex-wrap min-w-0">
           <ActionContent step={step} result={result} />
-          {step.execution?.via === "safe" && <SafeExecutionBadge step={step} showQueueLink={isExecuting || isFailed} />}
+          {step.execution && <SafeExecutionBadge step={step} showQueueLink={isExecuting || isFailed} />}
           {isExecuting && progress && <StepProgressLine progress={progress} />}
         </div>
       </div>

@@ -35,27 +35,37 @@ export function useConsolidationPlanning({
     return [...connectedWallets, ...safeAddresses];
   }, [connectedWallets, accounts]);
 
-  // Key includes each Safe's per-chain deployments so a re-discovery that
-  // changes owners/threshold/deployed-chains invalidates the cached plan.
+  // Key includes each Safe's / smart wallet's per-chain deployments so a
+  // re-discovery that changes owners/threshold/deployed-chains/capabilities
+  // invalidates the cached plan.
   const walletKey = useMemo(() => {
     const eoaKey = connectedWallets
       .map((address) => address.toLowerCase())
       .sort()
       .join(",");
-    const safeKey = Array.from(accounts?.values() ?? [])
-      .flatMap((account) =>
-        account.kind === "safe"
-          ? [
-              `${account.address.toLowerCase()}:${Object.values(account.deployments)
-                .map((d) => `${d.chainId}/${d.threshold}/${d.controlled ? 1 : 0}`)
-                .sort()
-                .join("+")}`,
-            ]
-          : [],
-      )
+    const accountKey = Array.from(accounts?.values() ?? [])
+      .flatMap((account) => {
+        if (account.kind === "safe") {
+          return [
+            `safe:${account.address.toLowerCase()}:${Object.values(account.deployments)
+              .map((d) => `${d.chainId}/${d.threshold}/${d.controlled ? 1 : 0}`)
+              .sort()
+              .join("+")}`,
+          ];
+        }
+        if (account.kind === "smart") {
+          return [
+            `smart:${account.address.toLowerCase()}:${Object.values(account.deployments)
+              .map((d) => `${d.chainId}/${d.atomic}`)
+              .sort()
+              .join("+")}`,
+          ];
+        }
+        return [];
+      })
       .sort()
       .join(",");
-    return `${eoaKey}|${safeKey}`;
+    return `${eoaKey}|${accountKey}`;
   }, [connectedWallets, accounts]);
 
   const {

@@ -124,12 +124,15 @@ export interface TransactionStep {
   // Shield specific (only for shield steps): the recipient 0zk address
   railgunAddress?: string;
 
-  // Present when the step's calls execute as a Gnosis Safe transaction
-  // (proposed/signed/executed via the connected owner EOA) instead of plain
-  // EOA transactions. Claim steps for Safe recipients are deliberately NOT
+  // Present when the step's calls execute through a smart-account path — a
+  // Gnosis Safe transaction (proposed/signed/executed via the connected owner
+  // EOA) or an ERC-4337 smart wallet's EIP-5792 bundle — instead of plain EOA
+  // transactions. Claim steps for Safe recipients are deliberately NOT
   // tagged — they're permissionless and run from the owner EOA directly.
-  execution?: SafeStepExecution;
+  execution?: StepExecution;
 }
+
+export type StepExecution = SafeStepExecution | SmartStepExecution;
 
 /** Plan-time marker routing a step through the Safe submission path. */
 export interface SafeStepExecution {
@@ -146,6 +149,45 @@ export interface SafeStepExecution {
    * fail, and retry together.
    */
   batchId: string;
+}
+
+/**
+ * Plan-time marker routing a step through the EIP-5792 smart-account path:
+ * the connected ERC-4337 wallet signs synchronously and submits its own
+ * UserOperation; the app sends `wallet_sendCalls` bundles.
+ */
+export interface SmartStepExecution {
+  via: "smart";
+  smartAddress: Address;
+  /** Plan-time snapshot: the chain reported atomic batching (supported/ready). */
+  atomic: boolean;
+  /**
+   * Steps sharing a batchId go out as ONE wallet_sendCalls bundle. Multi-step
+   * groups only form when `atomic` is true — sequential bundles can't give
+   * the all-or-nothing semantics batch groups assume.
+   */
+  batchId: string;
+}
+
+/**
+ * One wallet_sendCalls submission (per batch group; the sequential mode
+ * overwrites it per sub-bundle). The bundle id is WALLET-SCOPED — only the
+ * same wallet session can resolve it via wallet_getCallsStatus — so the
+ * transactionHash is persisted the moment receipts appear as the
+ * chain-verifiable fallback anchor for resume/reconcile.
+ */
+export interface SendCallsBundleRecord {
+  id: string;
+  chainId: number;
+  account: Address;
+  /** Step ids of the batch group this bundle executes. */
+  stepIds: string[];
+  /** Sub-call index in sequential (non-atomic) mode; absent for atomic bundles. */
+  callIndex?: number;
+  atomic: boolean;
+  sentAt: number;
+  status: "sent" | "confirmed" | "failed";
+  transactionHash?: Hex;
 }
 
 /**
@@ -244,6 +286,10 @@ export interface ConsolidationState {
       /** Safe proposal per batch group, keyed by the group's batchId. */
       proposals?: Record<string, SafeProposalRecord>;
     };
+    smart?: {
+      /** EIP-5792 bundle per batch group, keyed by the group's batchId. */
+      bundles?: Record<string, SendCallsBundleRecord>;
+    };
   };
 
   createdAt: number; // Timestamp
@@ -281,6 +327,8 @@ export const ERROR_CODES = {
   OMNIBRIDGE_TIMEOUT: "OMNIBRIDGE_TIMEOUT",
   GAS_TOPUP_TIMEOUT: "GAS_TOPUP_TIMEOUT",
   SAFE_NOT_DEPLOYED: "SAFE_NOT_DEPLOYED",
+  SMART_ACCOUNT_NOT_DEPLOYED: "SMART_ACCOUNT_NOT_DEPLOYED",
+  BUNDLE_NOT_CONFIRMED: "BUNDLE_NOT_CONFIRMED",
   SAFE_CONFIRMATION_TIMEOUT: "SAFE_CONFIRMATION_TIMEOUT",
   SAFE_TX_SUPERSEDED: "SAFE_TX_SUPERSEDED",
   SAFE_NOT_OWNER: "SAFE_NOT_OWNER",

@@ -187,7 +187,7 @@ describe("sendCalls", () => {
               forceAtomic: true,
             }),
           );
-          expect(mockClient.waitForCallsStatus).toHaveBeenCalledWith({ id: "mock-call-id" });
+          expect(mockClient.waitForCallsStatus).toHaveBeenCalledWith(expect.objectContaining({ id: "mock-call-id" }));
           expect(tx).toBe("0xdeadbeef");
           expect(logs).toEqual([
             [
@@ -250,7 +250,7 @@ describe("sendCalls", () => {
               [{ to: "0x0000000000000000000000000000000000000000", data: "0x" }],
               "atomic-batch",
             ),
-          ).rejects.toThrow("test transaction reverted");
+          ).rejects.toThrow(/test call bundle/);
         });
 
         test("throws when receipts is undefined", async () => {
@@ -272,7 +272,7 @@ describe("sendCalls", () => {
               [{ to: "0x0000000000000000000000000000000000000000", data: "0x" }],
               "atomic-batch",
             ),
-          ).rejects.toThrow("test transaction reverted");
+          ).rejects.toThrow(/test call bundle/);
         });
 
         test("throws when transaction hash is missing", async () => {
@@ -297,7 +297,7 @@ describe("sendCalls", () => {
               [{ to: "0x0000000000000000000000000000000000000000", data: "0x" }],
               "atomic-batch",
             ),
-          ).rejects.toThrow("test transaction reverted");
+          ).rejects.toThrow(/test call bundle/);
         });
       });
     });

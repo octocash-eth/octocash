@@ -135,7 +135,7 @@ describe("Safe batch group execution", () => {
     // One Safe submission carrying all four inner calls (2 approve+swap pairs).
     expect(sendCallsMock).toHaveBeenCalledTimes(1);
     const [txId, chainId, from, calls] = sendCallsMock.mock.calls[0];
-    expect([txId, chainId, from]).toEqual(["safe-batch", 10, SAFE]);
+    expect([txId, chainId, from]).toEqual(["batch", 10, SAFE]);
     expect(calls).toHaveLength(4);
     expect(calls[0].to).toBe(TOKEN_A);
     expect(calls[2].to).toBe(TOKEN_B);

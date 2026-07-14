@@ -37,6 +37,14 @@ export const ERROR_MESSAGES: Record<ErrorCode, [string, string]> = {
     "Safe not deployed on this chain",
     "The Safe has no verified deployment there. Pick a chain where the Safe exists, or a different wallet.",
   ],
+  [ERROR_CODES.SMART_ACCOUNT_NOT_DEPLOYED]: [
+    "Smart wallet not deployed on this chain",
+    "The smart wallet has no contract code there. Pick a chain where it is deployed, or a different wallet.",
+  ],
+  [ERROR_CODES.BUNDLE_NOT_CONFIRMED]: [
+    "Waiting for the wallet to confirm",
+    "The batch was submitted to your smart wallet but hasn't confirmed yet. Retry to keep waiting, or check your wallet's activity.",
+  ],
   [ERROR_CODES.SAFE_CONFIRMATION_TIMEOUT]: [
     "Waiting for Safe co-signers",
     "The transaction is proposed in your Safe's queue. Resume anytime once co-signers approve.",
@@ -121,6 +129,11 @@ export function createTransactionError(
   } else if (messageIncludes("SafeNotDeployedError")) {
     code = ERROR_CODES.SAFE_NOT_DEPLOYED;
     recoverable = false;
+  } else if (messageIncludes("SmartAccountNotDeployedError")) {
+    code = ERROR_CODES.SMART_ACCOUNT_NOT_DEPLOYED;
+    recoverable = false;
+  } else if (messageIncludes("BundleNotConfirmedError")) {
+    code = ERROR_CODES.BUNDLE_NOT_CONFIRMED;
   } else if (messageIncludes("SafeServiceError")) {
     code = ERROR_CODES.SAFE_SERVICE_ERROR;
   } else if (messageIncludes("TIMEOUT") || messageIncludes("timed out")) {

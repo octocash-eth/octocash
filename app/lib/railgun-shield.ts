@@ -41,9 +41,15 @@ import { buildERC20ApprovalCalls } from "./tokens";
 import type { TokenAmount } from "./types";
 
 /**
- * Fixed message the shielding wallet signs; keccak256 of the signature is the
- * `shieldPrivateKey`. DO NOT MODIFY — it must match the Railgun engine so
- * recipients can decrypt the note.
+ * Fixed message an EOA signs to derive a `shieldPrivateKey`
+ * (keccak256 of the signature). DO NOT MODIFY — matching the Railgun engine's
+ * constant keeps sender-side re-derivation compatible with Railgun wallets
+ * (recognizing one's own shield events later).
+ *
+ * Note the key is an EPHEMERAL ENCRYPTION KEY, not an authorization: its
+ * public half is posted on-chain with the note, so the recipient decrypts via
+ * ECDH(viewingPrivateKey, shieldKey) regardless of who generated it — any
+ * 32-byte key works (see {@link randomShieldPrivateKey}).
  */
 export function getShieldPrivateKeySignatureMessage(): string {
   return "RAILGUN_SHIELD";
@@ -198,20 +204,48 @@ export interface ShieldSigner {
 }
 
 /**
- * Executes a shield: derives the shield private key from a wallet signature,
- * builds the note, then sends `approve` (if needed) + `shield` through the
- * standard sendCalls pipeline.
+ * Derives the shield private key from an EOA's deterministic personal_sign —
+ * the Railgun SDK convention, letting that EOA re-derive the key later to
+ * recognize its own shield events. `account` does NOT have to be the wallet
+ * holding the funds: for a Safe depositor the connected owner EOA signs while
+ * the Safe sends the shield transaction.
+ */
+export async function deriveShieldPrivateKey(signer: ShieldSigner, account: Address): Promise<Hex> {
+  const signature = await signer.signMessage({ account, message: getShieldPrivateKeySignatureMessage() });
+  return keccak256(signature);
+}
+
+/**
+ * Random ephemeral shield private key, for depositors with no EOA in the
+ * session (ERC-4337 wallets: their personal_sign is non-deterministic for
+ * passkey signers and costs an extra popup). The recipient is unaffected —
+ * the key's public half travels with the note — but the sender cannot
+ * re-derive it for self-audit. Per-shield randomness also avoids linking a
+ * sender's deposits through a reused on-chain shieldKey.
+ */
+export function randomShieldPrivateKey(): Hex {
+  const bytes = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(bytes);
+  return bytesToHex(bytes);
+}
+
+/**
+ * Executes a shield: builds the note from the provided shield private key,
+ * then sends `approve` (if needed) + `shield` through the standard sendCalls
+ * pipeline (which routes by the holding wallet's account kind — a Safe
+ * shields via one MultiSend, a smart wallet via an EIP-5792 bundle).
  *
  * @param input - Consolidated ERC20 (token/amount/chain/wallet) to shield.
  * @param railgunAddress - Recipient `0zk...` address.
- * @param signer - Wallet client of the holding wallet (signs RAILGUN_SHIELD).
- * @param sendCalls - prepared sendCalls bound to the same wallet.
+ * @param shieldPrivateKey - 32-byte note-encryption key; see
+ *   {@link deriveShieldPrivateKey} / {@link randomShieldPrivateKey}.
+ * @param sendCalls - prepared sendCalls bound to the holding wallet's step.
  * @returns `[transactionHash, shieldedAmountAfterFee]`
  */
 export async function executeRailgunShield(
   input: TokenAmount,
   railgunAddress: string,
-  signer: ShieldSigner,
+  shieldPrivateKey: Hex,
   sendCalls: SendCallsFn,
   retryHints?: RetryHints,
 ): Promise<[string, bigint]> {
@@ -224,12 +258,6 @@ export async function executeRailgunShield(
   if (decoded.chainId !== undefined && decoded.chainId !== chainId) {
     throw new Error(`Railgun address is bound to chain ${decoded.chainId}, cannot shield on chain ${chainId}`);
   }
-
-  const signature = await signer.signMessage({
-    account: walletAddress,
-    message: getShieldPrivateKeySignatureMessage(),
-  });
-  const shieldPrivateKey = keccak256(signature);
 
   const request = buildShieldRequest(railgunAddress, token, amount, shieldPrivateKey);
 

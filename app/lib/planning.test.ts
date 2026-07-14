@@ -2834,7 +2834,7 @@ describe("planConsolidation", () => {
       mockGetCode("0x6080604052"); // arbitrary contract bytecode
 
       await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(
-        /Smart-account wallets are not supported/,
+        /Smart-account wallets must be detected before use/,
       );
     });
 

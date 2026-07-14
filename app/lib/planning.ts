@@ -3,7 +3,16 @@ import { gnosis, mainnet } from "viem/chains";
 import { RAILGUN_SUPPORTED_CHAINS } from "~/data/railgun";
 import { chains, transports } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
-import { type AccountsMap, accountFor, executorFor, isSafeAccount, safeControlledOn } from "./accounts";
+import {
+  type AccountsMap,
+  accountFor,
+  atomicOn,
+  controlledOn,
+  deployedOn,
+  EIP7702_DELEGATION_PREFIX,
+  executorFor,
+  isSafeAccount,
+} from "./accounts";
 import { deloraPriceKey, fetchDeloraPrices } from "./api/delora";
 import { getBridgeFee } from "./cctp";
 import { type DeloraSwapLeg, getSwapQuoteWithLegs } from "./delora";
@@ -338,27 +347,16 @@ async function assertOmnibridgeMinPerTx(
 }
 
 /**
- * EIP-7702 designation prefix. An EOA that has authorized a delegate has
- * bytecode of the form `0xef0100 || <20-byte delegate address>` (23 bytes
- * total). The account remains an EOA — the original key still controls it
- * and the address is the same on every chain — so for our planning purposes
- * (CCTP mintRecipient, intermediate-wallet candidate, signing) it should be
- * treated like a plain EOA, not a smart-account wallet.
- *
- * See https://eips.ethereum.org/EIPS/eip-7702.
- */
-const EIP7702_DELEGATION_PREFIX = "0xef0100";
-
-/**
  * Wallets sign on their source chain and (since the same address is the
  * default CCTP mintRecipient and the intermediate-wallet candidate pool) need
  * to be reachable everywhere they're used. EOAs are the same address on every
  * chain; a registered Safe is usable only on chains where discovery verified a
- * deployment controlled by the connected owner. Unregistered contract
- * addresses are rejected — bridging to them risks stranded funds. The
- * destination wallet only needs this check when it's itself a connected
- * wallet (intermediate-wallet candidate); an arbitrary destination address
- * can be a contract and just receive ERC20.
+ * deployment controlled by the connected owner; a registered smart account
+ * (ERC-4337 wallet connected as itself) only where its contract code was
+ * verified. Unregistered contract addresses are rejected — bridging to them
+ * risks stranded funds. The destination wallet only needs this check when
+ * it's itself a connected wallet (intermediate-wallet candidate); an
+ * arbitrary destination address can be a contract and just receive ERC20.
  *
  * EIP-7702-delegated EOAs report non-empty bytecode but are still EOAs (same
  * address on every chain, signable by the original key), so we recognize the
@@ -406,7 +404,7 @@ async function assertAccountUsableOnChain(
   const account = accountFor(accounts, address);
 
   if (account.kind === "safe") {
-    if (!safeControlledOn(account, chainId)) {
+    if (!controlledOn(account, chainId)) {
       throw new Error(
         `SafeNotDeployedError: Safe ${address} has no deployment controlled by your connected owner on ${chainName}.`,
       );
@@ -420,13 +418,32 @@ async function assertAccountUsableOnChain(
     return;
   }
 
+  if (account.kind === "smart") {
+    if (!deployedOn(account, chainId)) {
+      throw new Error(
+        `SmartAccountNotDeployedError: Smart wallet ${address} has no verified contract code on ${chainName} — ` +
+          `it can only send and receive on chains where it is deployed.`,
+      );
+    }
+    // Freshness re-check, same doctrine as Safe: a stale detection snapshot
+    // must never route funds to an address with no contract behind it.
+    const code = await getPublicClient(chainId).getCode({ address });
+    if (code === undefined || code === "0x") {
+      throw new Error(
+        `SmartAccountNotDeployedError: Smart wallet ${address} has no contract code on ${chainName} — refusing to route funds there.`,
+      );
+    }
+    return;
+  }
+
   const code = await getPublicClient(chainId).getCode({ address });
   const hasCode = code !== undefined && code !== "0x";
   const is7702 = hasCode && code.toLowerCase().startsWith(EIP7702_DELEGATION_PREFIX);
   if (hasCode && !is7702) {
     throw new Error(
-      `PlanningError: Smart-account wallets are not supported. ${address} is a contract on ${chainName}. ` +
-        `If this is a Gnosis Safe, connect one of its owners and enable it from the Safe accounts panel.`,
+      `PlanningError: Smart-account wallets must be detected before use. ${address} is a contract on ${chainName}. ` +
+        `If this is a Gnosis Safe, connect one of its owners and enable it from the Safe accounts panel; ` +
+        `if it's a smart wallet, reconnect it so it can be detected.`,
     );
   }
 }
@@ -494,6 +511,7 @@ async function resolveIntermediateWallet(
   isRailgun = false,
   accounts?: AccountsMap,
   safeMode = false,
+  needsMainnetHub = false,
 ): Promise<Address> {
   const destinationWallet = destinationToken.walletAddress;
   const destChainId = destinationToken.chainId;
@@ -507,12 +525,12 @@ async function resolveIntermediateWallet(
   // Safe; an EOA destination receives exactly one final transfer at the end.
   if (safeMode) {
     const destinationAccount = accountFor(accounts, destinationWallet);
-    if (!isRailgun && destinationAccount.kind === "safe" && safeControlledOn(destinationAccount, destChainId)) {
+    if (!isRailgun && destinationAccount.kind === "safe" && controlledOn(destinationAccount, destChainId)) {
       await getCachedNativeBalance(balances, destChainId, destinationWallet);
       return destinationWallet;
     }
     const sourceSafe = [...new Set(sourceTokens.map((token) => token.walletAddress))].find((wallet) =>
-      safeControlledOn(accountFor(accounts, wallet), destChainId),
+      controlledOn(accountFor(accounts, wallet), destChainId),
     );
     if (sourceSafe) {
       await getCachedNativeBalance(balances, destChainId, sourceSafe);
@@ -540,11 +558,21 @@ async function resolveIntermediateWallet(
     return destinationWallet;
   }
 
-  // EOA mode: Safes are never intermediate candidates — sources are all
-  // EOA-held here, and an intermediate exists precisely to be a cheap
-  // same-address relay (a Safe would cost an N-of-M round per hop).
+  // EOA mode candidate pool:
+  // - Safes are never candidates — an intermediate exists precisely to be a
+  //   cheap same-address relay, and a Safe would cost an N-of-M round per hop.
+  // - ERC-4337 smart wallets ARE candidates (they sign synchronously and are
+  //   often the user's only wallet — including for Railgun shields, which use
+  //   a random ephemeral note key), but only where their code is verified —
+  //   on the destination chain, and on mainnet when the plan routes through
+  //   the Gnosis hub (the hop's claim/deposit steps execute there).
   const searchOrder = [...new Set([...sourceTokens.map((token) => token.walletAddress), ...connectedWallets])].filter(
-    (wallet) => !isSafeAccount(accounts, wallet),
+    (wallet) => {
+      const account = accountFor(accounts, wallet);
+      if (account.kind === "eoa") return true;
+      if (account.kind === "safe") return false;
+      return deployedOn(account, destChainId) && (!needsMainnetHub || deployedOn(account, mainnet.id));
+    },
   );
 
   // Find first wallet whose destination-chain balance covers its predicted ops
@@ -2104,87 +2132,113 @@ const SAFE_EXEC_BASE_GAS = 45_000n;
 const SAFE_EXEC_PER_SIGNATURE_GAS = 8_000n;
 
 /**
- * Tags steps whose input wallet is a Safe with the execution marker the
- * executor dispatches on, and groups independent same-(chain, Safe) steps
- * into MultiSend batches by provenance: a step joins the current open group
- * when none of its inputs were produced by a member of that group (an intra-
- * group dependency means the amount doesn't exist until the group executes,
- * so the dependent step starts the next group). Batched steps execute as ONE
- * Safe transaction — one signature round — and succeed/fail/retry together.
- *
- * Claim steps (`claim`/`gnosis-claim`) are deliberately not tagged: CCTP's
- * `receiveMessage` (via Multicall3) and Omnibridge's `executeSignatures` are
- * permissionless, so the owner EOA runs them directly and co-signers are
- * never bothered for them.
+ * ERC-4337 wrapper overhead (EntryPoint handleOps + account signature
+ * verification) on top of the measured inner-call gas, once per bundle.
+ * Conservative; the wallet re-estimates at send time.
  */
-function tagSafeSteps(steps: TransactionStep[], accounts: AccountsMap | undefined): void {
+const SMART_EXEC_BASE_GAS = 100_000n;
+
+/**
+ * Tags steps whose input wallet is a Safe or an ERC-4337 smart wallet with
+ * the execution marker the executor dispatches on, and groups independent
+ * same-(chain, account) steps into atomic batches by provenance: a step joins
+ * the current open group when none of its inputs were produced by a member of
+ * that group (an intra-group dependency means the amount doesn't exist until
+ * the group executes, so the dependent step starts the next group). Batched
+ * steps execute as ONE on-chain submission — a Safe MultiSend or an EIP-5792
+ * atomic bundle, one signature round — and succeed/fail/retry together.
+ * Smart accounts only form multi-member groups on chains reporting atomic
+ * capability: sequential bundles can't give the all-or-nothing semantics
+ * batch groups assume.
+ *
+ * Claim steps (`claim`/`gnosis-claim`) are deliberately not tagged for Safes:
+ * CCTP's `receiveMessage` (via Multicall3) and Omnibridge's
+ * `executeSignatures` are permissionless, so the owner EOA runs them directly
+ * and co-signers are never bothered. (Smart-account claims route by sender at
+ * the send-calls layer regardless of tags — the account signs synchronously,
+ * so there's no ceremony to skip.)
+ */
+function tagExecutionSteps(steps: TransactionStep[], accounts: AccountsMap | undefined): void {
   if (!accounts) return;
 
-  type BatchGroup = { batchId: string; chainId: number; safe: string; memberIds: Set<string> };
+  type BatchGroup = { batchId: string; chainId: number; wallet: string; memberIds: Set<string> };
   let openGroup: BatchGroup | null = null;
 
   for (const step of steps) {
     const wallet = step.inputTokens[0]?.walletAddress;
     if (!wallet || !SAFE_EXECUTABLE_TYPES.has(step.type)) continue;
     const account = accountFor(accounts, wallet);
-    if (account.kind !== "safe") continue;
-
-    const deployment = account.deployments[step.chainId];
-    if (!deployment) {
-      // assertSafeChainConsistency rejects this plan; keep the tag pass total.
+    if (account.kind === "eoa") continue;
+    if (!deployedOn(account, step.chainId)) {
+      // assertAccountChainConsistency rejects this plan; keep the pass total.
       continue;
     }
 
-    // Only swaps and transfers share a MultiSend batch: their calls are pure
-    // and their outputs attributable from one receipt's logs. Bridge and
-    // Omnibridge steps persist per-step side effects (burn tx hashes feeding
-    // the attestation, delivery baselines) and shield is gated off — each
-    // gets a singleton group. (Final swaps never feed a transfer: they pay
-    // out directly to the destination wallet, so intra-group dependencies
-    // simply don't arise between swaps and transfers.)
-    const canShareGroup = step.type === "swap" || step.type === "transfer";
+    // Only swaps and transfers share a batch: their calls are pure and their
+    // outputs attributable from one receipt's logs. Bridge and Omnibridge
+    // steps persist per-step side effects (burn tx hashes feeding the
+    // attestation, delivery baselines) and shield is gated off — each gets a
+    // singleton group. (Final swaps never feed a transfer: they pay out
+    // directly to the destination wallet, so intra-group dependencies simply
+    // don't arise between swaps and transfers.)
+    const atomicCapable = account.kind === "safe" || atomicOn(account, step.chainId);
+    const canShareGroup = (step.type === "swap" || step.type === "transfer") && atomicCapable;
     const current: BatchGroup | null = openGroup;
     const dependsOnOpenGroup =
       current !== null &&
       step.inputTokens.some((input) => input.provenance !== undefined && current.memberIds.has(input.provenance));
     const sameGroupTarget =
-      current !== null && current.chainId === step.chainId && current.safe === wallet.toLowerCase();
+      current !== null && current.chainId === step.chainId && current.wallet === wallet.toLowerCase();
 
     const group: BatchGroup =
       canShareGroup && current !== null && sameGroupTarget && !dependsOnOpenGroup
         ? current
         : {
-            batchId: `safe-batch-${step.id}`,
+            batchId: `${account.kind}-batch-${step.id}`,
             chainId: step.chainId,
-            safe: wallet.toLowerCase(),
+            wallet: wallet.toLowerCase(),
             memberIds: new Set<string>(),
           };
     openGroup = canShareGroup ? group : null;
     group.memberIds.add(step.id);
 
-    step.execution = {
-      via: "safe",
-      safeAddress: account.address,
-      ownerAddress: account.ownerAddress,
-      threshold: deployment.threshold,
-      safeVersion: deployment.version,
-      batchId: group.batchId,
-    };
+    if (account.kind === "safe") {
+      const deployment = account.deployments[step.chainId];
+      step.execution = {
+        via: "safe",
+        safeAddress: account.address,
+        ownerAddress: account.ownerAddress,
+        threshold: deployment.threshold,
+        safeVersion: deployment.version,
+        batchId: group.batchId,
+      };
+    } else {
+      step.execution = {
+        via: "smart",
+        smartAddress: account.address,
+        atomic: atomicOn(account, step.chainId),
+        batchId: group.batchId,
+      };
+    }
   }
 }
 
 /**
- * Adds the execTransaction wrapper's gas to Safe-executed steps, once per
- * batch group (a group is one on-chain transaction). Runs after
- * `attachGasEstimates` so the measured inner-call figures stay intact.
+ * Adds the account wrapper's gas (Safe execTransaction, or the ERC-4337
+ * EntryPoint dispatch) to tagged steps, once per batch group (a group is one
+ * on-chain submission). Runs after `attachGasEstimates` so the measured
+ * inner-call figures stay intact.
  */
-function addSafeExecGasOverhead(steps: TransactionStep[]): void {
+function addExecutionGasOverhead(steps: TransactionStep[]): void {
   const chargedBatches = new Set<string>();
   for (const step of steps) {
     if (!step.execution || !step.estimatedGas) continue;
     if (chargedBatches.has(step.execution.batchId)) continue;
     chargedBatches.add(step.execution.batchId);
-    const overheadUnits = SAFE_EXEC_BASE_GAS + SAFE_EXEC_PER_SIGNATURE_GAS * BigInt(step.execution.threshold);
+    const overheadUnits =
+      step.execution.via === "safe"
+        ? SAFE_EXEC_BASE_GAS + SAFE_EXEC_PER_SIGNATURE_GAS * BigInt(step.execution.threshold)
+        : SMART_EXEC_BASE_GAS;
     step.estimatedGas = {
       ...step.estimatedGas,
       gasUnits: step.estimatedGas.gasUnits + overheadUnits,
@@ -2194,31 +2248,41 @@ function addSafeExecGasOverhead(steps: TransactionStep[]): void {
 }
 
 /**
- * Final invariant over the drafted plan: every token that sits at a Safe's
- * address must sit on a chain where that Safe has a controlled, verified
- * deployment. This is the single guarantee that a Safe address is never used
- * as a CCTP mintRecipient, Omnibridge receiver, transfer target, or top-up
- * destination on a chain where the Safe doesn't exist — regardless of which
- * code path produced the token.
+ * Final invariant over the drafted plan: every token that sits at a Safe's or
+ * a smart wallet's address must sit on a chain where that account has a
+ * controlled, verified deployment. This is the single guarantee that such an
+ * address is never used as a CCTP mintRecipient, Omnibridge receiver,
+ * transfer target, or top-up destination on a chain where the account doesn't
+ * exist — regardless of which code path produced the token.
  */
-function assertSafeChainConsistency(steps: TransactionStep[], accounts: AccountsMap | undefined): void {
+function assertAccountChainConsistency(steps: TransactionStep[], accounts: AccountsMap | undefined): void {
   if (!accounts) return;
   for (const step of steps) {
     for (const token of [...step.inputTokens, step.outputToken]) {
       const account = accountFor(accounts, token.walletAddress);
-      if (account.kind === "safe" && !safeControlledOn(account, token.chainId)) {
+      if (account.kind !== "eoa" && !controlledOn(account, token.chainId)) {
         const chainName = chains[token.chainId as keyof typeof chains]?.name ?? `chain ${token.chainId}`;
+        const label = account.kind === "safe" ? "Safe" : "smart wallet";
+        const prefix = account.kind === "safe" ? "SafeNotDeployedError" : "SmartAccountNotDeployedError";
         throw new Error(
-          `SafeNotDeployedError: Plan step ${step.id} would route ${token.symbol} to Safe ${token.walletAddress} ` +
+          `${prefix}: Plan step ${step.id} would route ${token.symbol} to ${label} ${token.walletAddress} ` +
             `on ${chainName}, where it has no controlled deployment.`,
         );
       }
     }
     if (step.type === "gas-topup") {
       for (const destination of step.gasTopUpDestinations ?? []) {
-        if (isSafeAccount(accounts, destination.address)) {
+        const account = accountFor(accounts, destination.address);
+        if (account.kind === "safe") {
           throw new Error(
             `PlanningError: Gas top-up targets Safe ${destination.address} — top-ups must target the owner EOA.`,
+          );
+        }
+        // Smart wallets ARE refuelable — but only where deployed.
+        if (account.kind === "smart" && !deployedOn(account, destination.chainId)) {
+          throw new Error(
+            `SmartAccountNotDeployedError: Gas top-up targets smart wallet ${destination.address} on chain ` +
+              `${destination.chainId}, where it has no verified deployment.`,
           );
         }
       }
@@ -2319,9 +2383,9 @@ async function planTransferOnly(
 
   // Measure first (batched eth_simulateV1 with ladder fallback), then size
   // top-ups from the measured deficits.
-  tagSafeSteps(steps, accounts);
+  tagExecutionSteps(steps, accounts);
   await attachGasEstimates(steps, gasCtx);
-  addSafeExecGasOverhead(steps);
+  addExecutionGasOverhead(steps);
   const gaps = await reconcileGasGaps(steps, balances, log, accounts);
 
   let finalSteps = steps;
@@ -2343,7 +2407,7 @@ async function planTransferOnly(
     finalSteps = [...gasTopUpSteps, ...steps];
   }
 
-  assertSafeChainConsistency(finalSteps, accounts);
+  assertAccountChainConsistency(finalSteps, accounts);
   return finalSteps;
 }
 
@@ -2404,12 +2468,14 @@ export async function planConsolidation(
   validateInputs(sourceTokens, destinationToken, connectedWallets, log);
   await assertAccountsUsable(sourceTokens, destinationToken, connectedWallets, accounts);
 
-  // Source-kind homogeneity: a plan draws either from EOAs or from Safes,
-  // never both (the Addresses / Safes tabs enforce this in the UI; planning
-  // re-checks as defense in depth). Safe mode hardens custody: funds from
-  // Safes are only ever held by Safes until final delivery.
+  // Source-kind exclusivity applies to SAFES only: their custody rules
+  // (funds never transit an EOA) and asynchronous co-signing make mixed plans
+  // incoherent — the Addresses / Safes tabs enforce this in the UI, planning
+  // re-checks as defense in depth. ERC-4337 smart wallets mix freely with
+  // EOAs: they're the same user's connected, synchronously-signing wallets;
+  // their only hard rule is deployed-chains-only, enforced per address.
   const sourceKinds = new Set(sourceTokens.map((t) => accountFor(accounts, t.walletAddress).kind));
-  if (sourceKinds.size > 1) {
+  if (sourceKinds.has("safe") && sourceKinds.size > 1) {
     throw new Error(
       "PlanningError: Safe-held and address-held tokens must be consolidated in separate runs. " +
         "Use the Addresses and Safes tabs to select one kind at a time.",
@@ -2419,18 +2485,13 @@ export async function planConsolidation(
 
   // Railgun (0zk) destination: everything consolidates to an intermediate
   // connected wallet first, then a final `shield` step deposits the token into
-  // the Railgun contract. There is no public destination wallet.
+  // the Railgun contract. There is no public destination wallet. Contract
+  // wallets can shield too — the shield private key is an ephemeral
+  // encryption key, not a depositor signature (see railgun-shield.ts): a
+  // Safe's key derives from the connected owner EOA, a smart wallet gets a
+  // random one, and the shield transaction itself is sent by the depositor
+  // account through its own transport.
   const isRailgun = destinationToken.railgunAddress !== undefined;
-
-  // Railgun's shield key derives from a deterministic personal_sign, which a
-  // Safe cannot produce — and in Safe mode the shielding wallet would have to
-  // be a Safe (an EOA must never custody the funds). Mutually exclusive.
-  if (safeMode && isRailgun) {
-    throw new Error(
-      "PlanningError: Railgun shielding isn't available for Safe-held funds (the shield key requires an EOA " +
-        "signature, and Safe custody rules forbid routing the funds through an EOA). Use the Addresses tab.",
-    );
-  }
 
   // Fast path: when every source is already the destination token on the
   // destination chain, the plan is pure transfers — no swap/bridge/claim is
@@ -2520,17 +2581,8 @@ export async function planConsolidation(
     isRailgun,
     accounts,
     safeMode,
+    needsMainnetHub,
   );
-
-  // Railgun's shield key derives from a deterministic personal_sign — a Safe
-  // returns an EIP-1271 contract signature, which cannot seed it. The
-  // intermediate performs the shield, so it must be an EOA (Safe mode is
-  // rejected earlier; this guards the EOA-mode Safe-destination edge).
-  if (isRailgun && isSafeAccount(accounts, intermediateWallet)) {
-    throw new Error(
-      "PlanningError: Railgun shielding requires an EOA wallet (its shield key derives from a signature a Safe cannot produce). Choose an EOA destination or disable the Safe.",
-    );
-  }
 
   // The intermediate target is a plain public token spec — drop the railgun
   // marker so swap/bridge outputs aren't tagged with it.
@@ -2544,9 +2596,11 @@ export async function planConsolidation(
   // is rejected with an actionable error.
   if (needsMainnetHub) {
     await assertAccountUsableOnChain(intermediateWallet, mainnet.id, accounts).catch((error) => {
-      if (isSafeAccount(accounts, intermediateWallet)) {
+      const kind = accountFor(accounts, intermediateWallet).kind;
+      if (kind !== "eoa") {
+        const label = kind === "safe" ? "Safe" : "smart wallet";
         throw new Error(
-          `PlanningError: This route needs an Ethereum mainnet hop, but Safe ${intermediateWallet} isn't ` +
+          `PlanningError: This route needs an Ethereum mainnet hop, but ${label} ${intermediateWallet} isn't ` +
             `deployed (or controlled by your connected owner) there. Pick an EOA destination or a non-Gnosis route.`,
         );
       }
@@ -2670,12 +2724,12 @@ export async function planConsolidation(
 
   // Tag Safe-executed steps (and compute their MultiSend batch groups) before
   // estimating so the execTransaction overhead can be layered per group.
-  tagSafeSteps(steps, accounts);
+  tagExecutionSteps(steps, accounts);
 
   // Attach per-step gas estimates (batched eth_simulateV1 with ladder
   // fallback), then derive gas deficits from the measured numbers.
   await attachGasEstimates(steps, gasCtx, artifacts);
-  addSafeExecGasOverhead(steps);
+  addExecutionGasOverhead(steps);
   const gaps = await reconcileGasGaps(steps, balances, log, accounts);
 
   // If any (chain, gas payer) can't cover its own gas, prepend a gas-topup
@@ -2703,7 +2757,7 @@ export async function planConsolidation(
     steps = [...gasTopUpSteps, ...steps];
   }
 
-  assertSafeChainConsistency(steps, accounts);
+  assertAccountChainConsistency(steps, accounts);
 
   // Validate plan constraints
   const attestationSteps = steps.filter((s) => s.type === "attestation");

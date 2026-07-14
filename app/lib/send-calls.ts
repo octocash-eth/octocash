@@ -36,6 +36,8 @@ export class SendCallsError extends Error {
   nonce?: number;
   maxFeePerGas?: bigint;
   maxPriorityFeePerGas?: bigint;
+  /** EIP-5792 bundle id, when the failure happened after wallet_sendCalls returned. */
+  bundleId?: string;
   constructor(
     message: string,
     opts: {
@@ -43,6 +45,7 @@ export class SendCallsError extends Error {
       nonce?: number;
       maxFeePerGas?: bigint;
       maxPriorityFeePerGas?: bigint;
+      bundleId?: string;
       cause?: unknown;
     } = {},
   ) {
@@ -51,6 +54,7 @@ export class SendCallsError extends Error {
     this.nonce = opts.nonce;
     this.maxFeePerGas = opts.maxFeePerGas;
     this.maxPriorityFeePerGas = opts.maxPriorityFeePerGas;
+    this.bundleId = opts.bundleId;
   }
 }
 
@@ -73,6 +77,23 @@ export class TransactionNotBroadcastError extends SendCallsError {
       transactionHash,
       ...context,
     });
+  }
+}
+
+/**
+ * EIP-5792 analog of {@link TransactionNotBroadcastError}: the wallet accepted
+ * a `wallet_sendCalls` bundle but no terminal status arrived within the wait
+ * budget. Recoverable — the persisted bundle id lets a resume re-enter
+ * `waitForCallsStatus` instead of re-sending (there is no pre-receipt tx hash
+ * to watchdog against; the id IS the anchor).
+ */
+export class BundleNotConfirmedError extends SendCallsError {
+  override name = "BundleNotConfirmedError";
+  constructor(bundleId: string, transactionHash?: string) {
+    super(
+      `BundleNotConfirmedError: call bundle ${bundleId} has no confirmed result yet — it may still be pending in your wallet`,
+      { bundleId, transactionHash },
+    );
   }
 }
 
@@ -226,6 +247,35 @@ const getNextNonce = async (
  * See: https://github.com/mds1/multicall3
  */
 const MULTICALL3_ADDRESS: Address = "0xcA11bde05977b3631167028862bE2a173976CA11";
+
+/**
+ * Wraps calls into one Multicall3 `aggregate3` call (allowFailure: false —
+ * the whole aggregate reverts if any inner call fails). Shared by the
+ * `atomic-multicall` mode and the smart-account path, which must preserve
+ * this wrapper for CCTP mints whose `destinationCaller` was pinned to
+ * Multicall3 at burn time.
+ */
+export const encodeMulticall3Call = (calls: Call[]): Call => {
+  if (calls.some((call) => (call.value ?? 0n) > 0n)) {
+    throw new Error("Sending value is not supported currently in multicall mode");
+  }
+  return {
+    to: MULTICALL3_ADDRESS,
+    data: encodeFunctionData({
+      abi: parseAbi([
+        "function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[])",
+      ]),
+      functionName: "aggregate3",
+      args: [
+        calls.map((call) => ({
+          target: call.to ?? ("0x0000000000000000000000000000000000000000" as Address),
+          allowFailure: false,
+          callData: call.data ?? "0x",
+        })),
+      ],
+    }),
+  };
+};
 
 /**
  * Switch to a chain in the connected wallet, adding it if missing.
@@ -382,6 +432,100 @@ const estimateAndSendTransaction = async (
   }
 };
 
+/** Wallet-popup + bundler-inclusion budget before pausing recoverable. */
+const BUNDLE_STATUS_TIMEOUT_MS = 10 * 60_000;
+const BUNDLE_POLL_INTERVAL_MS = 4_000;
+
+export interface BundleHooks {
+  /** Fires with the id IMMEDIATELY after wallet_sendCalls returns — persist before any waiting. */
+  onBundleSent?: (id: string) => void;
+  onBundleSettled?: (id: string, status: "confirmed" | "failed", transactionHash?: Hex) => void;
+}
+
+/**
+ * Hardened EIP-5792 submission: send a call bundle (atomic when `forceAtomic`)
+ * and wait for its terminal status. Used by the generic `atomic-batch` mode
+ * and by the smart-account router. No nonce/fee management and no mempool
+ * watchdog on this path — ordering, fee bumping, and replacement are the
+ * WALLET's job for 4337 accounts, and there is no pre-receipt hash to probe;
+ * the bundle id (surfaced via hooks and on thrown errors) is the resume
+ * anchor instead.
+ *
+ * `existingBundleId` skips the send entirely and re-enters the status wait —
+ * the resume path after a timeout or tab close.
+ */
+export const sendCallsBundle = async (
+  client: WalletClient<HttpTransport, Chain, Account>,
+  params: {
+    txId: string;
+    chainId: number;
+    from: Address;
+    calls: Call[];
+    forceAtomic: boolean;
+    hooks?: BundleHooks;
+    existingBundleId?: string;
+  },
+): Promise<[Hex, { address: Address; data: Hex; topics: Hex[] }[][]]> => {
+  const chain = chains[params.chainId as keyof typeof chains] as Chain;
+
+  let bundleId = params.existingBundleId;
+  if (bundleId === undefined) {
+    // Errors here carry no bundleId/hash — nothing was accepted, so the
+    // caller's USER_REJECTED / revert classification works through `cause`.
+    const sent = await client.sendCalls({
+      account: params.from,
+      chain,
+      forceAtomic: params.forceAtomic,
+      // For non-atomic submissions, let viem degrade to sequential
+      // eth_sendTransaction for wallets without wallet_sendCalls at all.
+      experimental_fallback: !params.forceAtomic,
+      calls: params.calls,
+    });
+    bundleId = sent.id;
+    params.hooks?.onBundleSent?.(bundleId);
+  }
+
+  let status: Awaited<ReturnType<typeof client.waitForCallsStatus>>;
+  try {
+    status = await client.waitForCallsStatus({
+      id: bundleId,
+      timeout: BUNDLE_STATUS_TIMEOUT_MS,
+      pollingInterval: BUNDLE_POLL_INTERVAL_MS,
+    });
+  } catch (error) {
+    if ((error as { name?: string })?.name === "WaitForCallsStatusTimeoutError") {
+      throw new BundleNotConfirmedError(bundleId);
+    }
+    throw new SendCallsError(error instanceof Error ? error.message : String(error), {
+      bundleId,
+      cause: error,
+    });
+  }
+
+  const receipts = status.receipts ?? [];
+  const reverted = receipts.find((receipt) => receipt.status !== "success");
+  const transactionHash = receipts.at(-1)?.transactionHash as Hex | undefined;
+  // Terminal success requires the bundle AND every receipt to succeed —
+  // non-atomic bundles can partially fail per receipt — plus a resolvable
+  // transaction hash (the executor's reconcile anchor).
+  if (status.status !== "success" || receipts.length === 0 || reverted || !transactionHash) {
+    const failureHash = (reverted?.transactionHash ?? transactionHash) as Hex | undefined;
+    const label =
+      status.status !== "success" ? (status.status ?? "failed") : reverted ? "reverted" : "returned no receipt";
+    params.hooks?.onBundleSettled?.(bundleId, "failed", failureHash);
+    throw new SendCallsError(`${params.txId} call bundle ${label}`, {
+      bundleId,
+      transactionHash: failureHash,
+    });
+  }
+
+  params.hooks?.onBundleSettled?.(bundleId, "confirmed", transactionHash);
+  const logs = receipts.map(
+    (receipt) => (receipt.logs ?? []) as unknown as { address: Address; data: Hex; topics: Hex[] }[],
+  );
+  return [transactionHash, logs];
+};
+
 export type SendCallsMode =
   | "atomic-batch" // All calls in one batch, atomic (all-or-nothing)
   | "atomic-steps" // One call at a time, stop on first failure
@@ -516,25 +660,7 @@ export const prepareSendCalls = (
 
     // Multicall3 mode
     if (mode === "atomic-multicall") {
-      if (calls.some((call) => (call.value ?? 0n) > 0n)) {
-        throw new Error("Sending value is not supported currently in multicall mode");
-      }
-
-      // Build Call3[] array for Multicall3
-      const call3Array = calls.map((call) => ({
-        target: call.to ?? "0x0000000000000000000000000000000000000000",
-        allowFailure: false,
-        callData: call.data ?? "0x",
-      }));
-
-      // Encode aggregate3 call
-      const callData = encodeFunctionData({
-        abi: parseAbi([
-          "function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[])",
-        ]),
-        functionName: "aggregate3",
-        args: [call3Array],
-      });
+      const multicall = encodeMulticall3Call(calls);
 
       // Estimate gas and send transaction to Multicall3
       let multicallHash: Hex | undefined;
@@ -544,8 +670,8 @@ export const prepareSendCalls = (
           client,
           {
             account: from,
-            to: MULTICALL3_ADDRESS,
-            data: callData,
+            to: multicall.to as Address,
+            data: multicall.data,
             chain,
           },
           retryHints,
@@ -591,21 +717,8 @@ export const prepareSendCalls = (
       }
     }
 
-    // Batch mode (using sendCalls)
-    const _calls = await client.sendCalls({
-      account: from,
-      chain,
-      forceAtomic: true,
-      calls,
-    });
-    const status = await client.waitForCallsStatus({ id: _calls.id });
-    const tx = status.receipts?.[0]?.transactionHash;
-
-    if (status.status !== "success" || !status.receipts || !tx) {
-      throw new SendCallsError(`${txId} transaction reverted`, { transactionHash: tx });
-    }
-
-    const logs = status.receipts.map((r) => r.logs ?? []);
-    return [tx, logs];
+    // Batch mode (EIP-5792): hardened shared primitive — status timeout,
+    // per-receipt success requirement, bundle-id error context.
+    return sendCallsBundle(client, { txId, chainId, from, calls, forceAtomic: true });
   };
 };

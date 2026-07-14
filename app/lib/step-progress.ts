@@ -73,3 +73,15 @@ export function safeStageMessage(
       return threshold > 1 ? "Threshold met — executing Safe transaction…" : "Executing Safe transaction…";
   }
 }
+
+/**
+ * Friendly line for the ERC-4337 smart-wallet (EIP-5792) submission: one
+ * approval popup in the wallet, then bundler inclusion. Sequential mode names
+ * the sub-call position.
+ */
+export function smartStageMessage(phase: "sending" | "confirming", call?: { index: number; total: number }): string {
+  const suffix = call && call.total > 1 ? ` (${call.index + 1}/${call.total})` : "";
+  return phase === "sending"
+    ? `Approve the batch in your smart wallet…${suffix}`
+    : `Waiting for the wallet to confirm…${suffix}`;
+}

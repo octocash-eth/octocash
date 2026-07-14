@@ -1,6 +1,6 @@
 import type { Account, Address, Call, Chain, Hex, HttpTransport, WalletClient } from "viem";
 import { isAddressEqual } from "viem";
-import { toAccountsMap } from "./accounts";
+import { accountFor, atomicOn, toAccountsMap } from "./accounts";
 import { getSafeTx, proposeSafeTx, type SafeServiceTx } from "./api/safe-transaction-service";
 import { abortableSleep } from "./cctp";
 import { getPublicClient, retryOnRateLimit } from "./public-client";
@@ -18,7 +18,14 @@ import {
   signSafeTx,
 } from "./safe";
 import { prepareSendCalls, SendCallsError, type SendCallsFn, switchChain } from "./send-calls";
-import type { ConsolidationState, SafeProposalRecord, SafeStepExecution, TransactionStep } from "./types";
+import { type SmartStepHooks, sendCallsViaSmart } from "./smart-send-calls";
+import type {
+  ConsolidationState,
+  SafeProposalRecord,
+  SafeStepExecution,
+  SmartStepExecution,
+  TransactionStep,
+} from "./types";
 
 /** How often the confirmation wait polls the Transaction Service. */
 const CONFIRMATION_POLL_INTERVAL_MS = 15_000;
@@ -57,43 +64,76 @@ export interface SafeStepHooks {
   rebuildCalls?: () => Promise<Call[]>;
 }
 
+export interface StepSendHooks {
+  safe: SafeStepHooks;
+  smart: SmartStepHooks;
+}
+
 /**
- * Wraps {@link prepareSendCalls} with a Safe-aware router: calls whose `from`
- * is the step's Safe execute as ONE Safe transaction (MultiSend-batched,
- * signed by the connected owner, proposed to the Transaction Service when
- * co-signers are needed); every other `from` — including the owner EOA's own
- * claim transactions — goes through the untouched EOA path.
+ * Wraps {@link prepareSendCalls} with an account-kind router:
+ * - `from` is the step's Safe → ONE Safe transaction (MultiSend-batched,
+ *   signed by the connected owner, proposed to the Transaction Service when
+ *   co-signers are needed);
+ * - `from` is an ERC-4337 smart wallet (connected as itself) → EIP-5792
+ *   bundles via `wallet_sendCalls` — routed by the ACCOUNT kind, not only by
+ *   the step tag, so untagged flows (permissionless claims, gas top-ups) get
+ *   the right transport too;
+ * - anything else — including the Safe owner EOA's claim transactions — goes
+ *   through the untouched EOA path.
  */
 export const prepareStepSendCalls = (
   client: WalletClient<HttpTransport, Chain, Account>,
   step: TransactionStep,
   state: ConsolidationState,
-  hooks: SafeStepHooks,
+  hooks: StepSendHooks,
 ): SendCallsFn => {
   const eoaSend = prepareSendCalls(client);
+  const accounts = toAccountsMap(state.accounts);
   const execution = step.execution;
   return async (txId, chainId, from, calls, mode, retryHints) => {
-    if (!execution || !isAddressEqual(from, execution.safeAddress)) {
-      return eoaSend(txId, chainId, from, calls, mode, retryHints);
+    if (execution?.via === "safe" && isAddressEqual(from, execution.safeAddress)) {
+      if (!calls?.length) return ["", []];
+      return sendCallsViaSafe({
+        client,
+        eoaSend,
+        txId,
+        chainId,
+        execution,
+        stepIds: batchStepIds(state, execution),
+        calls,
+        hooks: hooks.safe,
+        retryHints,
+        quotedAt: step.quotedAt,
+      });
     }
-    if (!calls?.length) return ["", []];
-    return sendCallsViaSafe({
-      client,
-      eoaSend,
-      txId,
-      chainId,
-      execution,
-      stepIds: batchStepIds(state, execution),
-      calls,
-      hooks,
-      retryHints,
-      quotedAt: step.quotedAt,
-    });
+
+    const fromAccount = accountFor(accounts, from);
+    if (fromAccount.kind === "smart") {
+      if (!calls?.length) return ["", []];
+      // Untagged flows (claims, top-ups) synthesize a singleton execution.
+      const smartExecution: SmartStepExecution =
+        execution?.via === "smart" && isAddressEqual(from, execution.smartAddress)
+          ? execution
+          : { via: "smart", smartAddress: from, atomic: atomicOn(fromAccount, chainId), batchId: step.id };
+      const groupIds = batchStepIds(state, smartExecution);
+      return sendCallsViaSmart({
+        client,
+        txId,
+        chainId,
+        execution: smartExecution,
+        stepIds: groupIds.length > 0 ? groupIds : [step.id],
+        calls,
+        mode,
+        hooks: hooks.smart,
+      });
+    }
+
+    return eoaSend(txId, chainId, from, calls, mode, retryHints);
   };
 };
 
 /** All plan steps sharing the step's batch group (order preserved). */
-function batchStepIds(state: ConsolidationState, execution: SafeStepExecution): string[] {
+function batchStepIds(state: ConsolidationState, execution: { batchId: string }): string[] {
   const ids = state.plan
     .filter((planStep) => planStep.execution?.batchId === execution.batchId)
     .map((planStep) => planStep.id);
