@@ -323,6 +323,36 @@ export function WalletTable({ connectedAddresses = [], accounts, showSafesTab = 
 
   const zerionApiKeyMissing = !import.meta.env.VITE_ZERION_API_KEY;
 
+  const walletTabs = showTabs ? (
+    <div
+      role="tablist"
+      aria-label="Wallet kind"
+      className="inline-flex rounded-md border border-border p-0.5 bg-muted/40"
+    >
+      {(
+        [
+          ["addresses", "Addresses"],
+          ["safes", "Safes"],
+        ] as const
+      ).map(([tab, label]) => (
+        <button
+          key={tab}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === tab}
+          onClick={() => switchTab(tab)}
+          className={
+            activeTab === tab
+              ? "rounded px-3 py-1 text-sm font-medium bg-background shadow-sm"
+              : "rounded px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
+          }
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
   return (
     <div className="space-y-4">
       {zerionApiKeyMissing && (
@@ -331,35 +361,6 @@ export function WalletTable({ connectedAddresses = [], accounts, showSafesTab = 
         </div>
       )}
       {error && <div className="p-4 text-red-700 rounded-md bg-red-50">{error}</div>}
-      {showTabs && (
-        <div
-          role="tablist"
-          aria-label="Wallet kind"
-          className="inline-flex rounded-md border border-border p-0.5 bg-muted/40"
-        >
-          {(
-            [
-              ["addresses", "Addresses"],
-              ["safes", "Safes"],
-            ] as const
-          ).map(([tab, label]) => (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab}
-              onClick={() => switchTab(tab)}
-              className={
-                activeTab === tab
-                  ? "rounded px-3 py-1 text-sm font-medium bg-background shadow-sm"
-                  : "rounded px-3 py-1 text-sm text-muted-foreground hover:text-foreground"
-              }
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
       {tokens.length > 0 || isLoading ? (
         <>
           <DataTable
@@ -373,6 +374,7 @@ export function WalletTable({ connectedAddresses = [], accounts, showSafesTab = 
             priceFor={priceFor}
             isPending={isPriceLoading}
             canSelectMore={Object.keys(rowSelection).length < MAX_SOURCE_TOKENS}
+            toolbarStart={walletTabs}
           />
           {/* Mobile: gradient scrim so the list fades out behind the floating buttons. */}
           <div
@@ -390,7 +392,12 @@ export function WalletTable({ connectedAddresses = [], accounts, showSafesTab = 
           </div>
         </>
       ) : (
-        <EmptyState hasAddresses={connectedAddresses.length > 0} />
+        <>
+          {/* Keep the tabs reachable so an empty tab (e.g. Safes with no
+              tokens) still offers a way back to the other one. */}
+          {walletTabs}
+          <EmptyState hasAddresses={connectedAddresses.length > 0} />
+        </>
       )}
     </div>
   );

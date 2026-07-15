@@ -45,6 +45,8 @@ interface DataTableProps<TData extends object, TValue> {
   priceFor?: (row: TData) => number | undefined;
   isPending?: (row: TData) => boolean;
   canSelectMore?: boolean;
+  /** Rendered inline at the start of the filter toolbar row. */
+  toolbarStart?: React.ReactNode;
 }
 
 function RenderedAddressCell({ address }: { address: string }) {
@@ -84,6 +86,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
   priceFor,
   isPending,
   canSelectMore = true,
+  toolbarStart,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
@@ -272,7 +275,8 @@ export function DataTable<TData extends TokenAmount, TValue>({
           {refreshButton}
         </Card>
 
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {toolbarStart}
           <WalletTableFilters setColumnFilters={setColumnFilters} filterConfigs={filterConfigs} />
           {/* Desktop: total + refresh inline in the header row. */}
           <div className="hidden md:flex items-center gap-3 ml-auto">
