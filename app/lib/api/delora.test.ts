@@ -732,13 +732,15 @@ describe("delora", () => {
       expect(result.get(deloraPriceKey(1, zeroAddress))).toBe(2286.97);
     });
 
-    test("chunks very large requests to bound URL length", async () => {
+    test("never requests more than Delora's 50-pair limit per call", async () => {
       mockFetch.mockResolvedValue({
         ok: true,
         json: () => Promise.resolve(pricesResponse([])),
       });
 
-      // 150 unique addresses -> 2 requests at a 100-pair chunk size.
+      // 150 unique addresses -> 3 requests at the 50-pair API limit; a
+      // larger chunk gets the whole request rejected with 400
+      // VALIDATION_ERROR "Too many token price requests. Max is 50."
       const tokens = Array.from({ length: 150 }, (_, i) => ({
         chainId: 1,
         token: `0x${(i + 1).toString(16).padStart(40, "0")}` as Address,
@@ -746,7 +748,11 @@ describe("delora", () => {
 
       await fetchDeloraPrices(tokens);
 
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      for (const call of mockFetch.mock.calls) {
+        const tokensParam = new URL(call[0] as string).searchParams.get("tokens") ?? "";
+        expect(tokensParam.split(",").length).toBeLessThanOrEqual(50);
+      }
     });
 
     test("forwards AbortSignal to fetch", async () => {

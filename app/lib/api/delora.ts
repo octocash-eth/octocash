@@ -157,10 +157,11 @@ export const deloraPriceKey = (chainId: number, address: Address): DeloraPriceKe
   `${chainId}:${address.toLowerCase()}`;
 
 /**
- * Maximum `chainId:address` pairs per `/v1/prices` request, to keep the URL
- * comfortably under common length limits (each pair is ~46 chars).
+ * Maximum `chainId:address` pairs per `/v1/prices` request. Delora rejects
+ * larger batches with 400 VALIDATION_ERROR "Too many token price requests.
+ * Max is 50." (verified live), so bigger wallets must be chunked.
  */
-const PRICES_CHUNK_SIZE = 100;
+const PRICES_CHUNK_SIZE = 50;
 
 /**
  * Fetch Delora token prices for the given (chainId, token) pairs.
