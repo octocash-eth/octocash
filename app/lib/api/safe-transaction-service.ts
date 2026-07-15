@@ -1,4 +1,4 @@
-import type { Address, Hex } from "viem";
+import { type Address, getAddress, type Hex } from "viem";
 import { SAFE_TX_SERVICE_SLUG } from "~/data/safe-contracts";
 
 /**
@@ -102,7 +102,8 @@ async function getJson<T>(url: string): Promise<T | null> {
 
 /** Addresses of Safes on `chainId` that list `owner` among their owners. */
 export async function getSafesByOwner(chainId: number, owner: Address): Promise<Address[]> {
-  const result = await getJson<{ safes: Address[] }>(`${serviceBase(chainId)}/v1/owners/${owner}/safes/`);
+  // The service 422s on non-checksummed addresses — normalize to EIP-55.
+  const result = await getJson<{ safes: Address[] }>(`${serviceBase(chainId)}/v1/owners/${getAddress(owner)}/safes/`);
   return result?.safes ?? [];
 }
 
@@ -117,7 +118,7 @@ export async function getSafeInfo(chainId: number, safe: Address): Promise<SafeI
     threshold: number;
     nonce: number | string;
     version: string | null;
-  }>(`${serviceBase(chainId)}/v1/safes/${safe}/`);
+  }>(`${serviceBase(chainId)}/v1/safes/${getAddress(safe)}/`);
   if (!result) return null;
   return {
     address: result.address,

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import type { Address } from "viem";
+import { getAddress, isAddress } from "viem";
 import type { SafeAccount } from "~/lib/accounts";
 import { mapWithConcurrency } from "~/lib/concurrency";
 import { useConnectedAddresses } from "./use-connected-addresses";
@@ -21,8 +21,16 @@ export function useEnabledSafeAccounts(enabledAddresses: readonly string[]): {
 } {
   const connectedAddresses = useConnectedAddresses();
 
+  // Stored lowercase; the Safe Transaction Service rejects non-checksummed
+  // addresses (422), so re-checksum before probing. Garbage entries are
+  // dropped rather than failing the whole hydration.
+  const safeAddresses = useMemo(
+    () => enabledAddresses.filter((address) => isAddress(address)).map((address) => getAddress(address)),
+    [enabledAddresses],
+  );
+
   const queryKey = useMemo(() => {
-    const enabledKey = Array.from(enabledAddresses)
+    const enabledKey = Array.from(safeAddresses)
       .map((address) => address.toLowerCase())
       .sort()
       .join(",");
@@ -31,13 +39,12 @@ export function useEnabledSafeAccounts(enabledAddresses: readonly string[]): {
       .sort()
       .join(",");
     return ["enabled-safe-accounts", enabledKey, connectedKey];
-  }, [enabledAddresses, connectedAddresses]);
+  }, [safeAddresses, connectedAddresses]);
 
   const query = useQuery({
     queryKey,
-    queryFn: () =>
-      mapWithConcurrency(enabledAddresses, 3, (address) => probeSafeAccount(address as Address, connectedAddresses)),
-    enabled: enabledAddresses.length > 0 && connectedAddresses.length > 0,
+    queryFn: () => mapWithConcurrency(safeAddresses, 3, (address) => probeSafeAccount(address, connectedAddresses)),
+    enabled: safeAddresses.length > 0 && connectedAddresses.length > 0,
     staleTime: 60_000,
   });
 
