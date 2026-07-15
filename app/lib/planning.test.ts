@@ -27,7 +27,8 @@ vi.mock("./api/delora", () => ({
   fetchDeloraPrices: vi.fn().mockResolvedValue(new Map()),
   deloraPriceKey: (chainId: number, address: string) => `${chainId}:${address.toLowerCase()}`,
 }));
-vi.mock("./gas-refuel", () => ({
+vi.mock("./gas-refuel", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gas-refuel")>()),
   getGasRefuelQuote: vi.fn(),
 }));
 vi.mock("./gas-estimation", () => ({
@@ -2068,6 +2069,60 @@ describe("planConsolidation", () => {
         perOperation: [],
       });
       vi.mocked(findRichestSource).mockResolvedValue(null);
+    });
+
+    test("dust candidates below the Delora refuel floor are skipped without quoting", async () => {
+      const { getNativeBalance, findRichestSource } = await import("./gas");
+      const { getGasRefuelQuote } = await import("./gas-refuel");
+      const { estimateChainGasCosts, estimateOperationsForChainWallet } = await import("./gas-estimation");
+
+      // Every ETH-chain wallet holds dust — far below the 0.0012 ETH Delora
+      // minimum — and there is no POL/xDAI balance to quote cross-token. No
+      // candidate can possibly fund a top-up, and planning must reject them
+      // from their balances alone, without a single quote request.
+      vi.mocked(getNativeBalance).mockImplementation(async (chain) =>
+        chain.id === 137 || chain.id === 100 ? 0n : 100_000_000_000n,
+      );
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 1_000_000_000_000_000n, // 0.001 ETH per chain → gaps everywhere
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
+      vi.mocked(estimateOperationsForChainWallet).mockReturnValue(["cctp-approval", "cctp-burn"]);
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+      vi.mocked(findRichestSource).mockResolvedValue(null);
+      vi.mocked(getGasRefuelQuote).mockClear();
+
+      const sourceTokens: TokenAmount[] = [
+        {
+          token: USDC_OPTIMISM,
+          amount: 1_000_000n,
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ];
+
+      const destinationToken = {
+        token: USDC_ADDRESS,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(
+        /PlanningError:.*minimum refuel amount/,
+      );
+      expect(getGasRefuelQuote).not.toHaveBeenCalled();
+
+      vi.mocked(getNativeBalance).mockResolvedValue(1_000_000_000_000_000_000n);
+      vi.mocked(estimateChainGasCosts).mockResolvedValue({
+        totalGasCost: 100_000_000_000_000n,
+        maxFeePerGas: 20_000_000_000n,
+        perOperation: [],
+      });
     });
 
     test("ERC20-only source wallet (no native, no USDC) → PlanningError when no funding source", async () => {

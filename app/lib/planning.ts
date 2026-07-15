@@ -33,7 +33,7 @@ import {
   type PlanArtifacts,
   type SimOp,
 } from "./gas-estimation";
-import { getGasRefuelQuote } from "./gas-refuel";
+import { flooredDeloraTarget, getGasRefuelQuote } from "./gas-refuel";
 import { getOmnibridgeMinPerTx, type OmnibridgeTokenPair, resolveOmnibridgeTokenPair } from "./omnibridge";
 import { getPublicClient } from "./public-client";
 import { decodeRailgunAddress, getShieldedAmountAfterFee, isRailgunAddress } from "./railgun";
@@ -1968,6 +1968,35 @@ async function createGasTopUpSteps(
 
     const sourceOwnGap = gaps.get(gapKey(candidate.chainId, candidate.address))?.deficitWei ?? 0n;
     const sourceUsableBalance = candidate.balance > sourceOwnGap ? candidate.balance - sourceOwnGap : 0n;
+
+    // Cheap lower bound BEFORE any quotes: a cross-chain refuel is never
+    // quoted below the destination chain's Delora floor, and the deposit
+    // always exceeds the delivered amount. When source and destination share
+    // a native currency that floor is directly comparable to the candidate's
+    // balance, so a dust candidate is skipped without spending two quote
+    // requests per gap to learn what the floor already told us. Pairs with
+    // different natives (e.g. POL→ETH) aren't comparable and still quote.
+    const sourceSymbol = sourceChain.nativeCurrency.symbol;
+    let comparableDepositFloor = 0n;
+    for (const gap of gapEntries) {
+      if (gap.chainId === candidate.chainId) {
+        if (!isAddressEqual(gap.walletAddress, candidate.address)) comparableDepositFloor += gap.deficitWei;
+        continue;
+      }
+      const gapChain = chains[gap.chainId as keyof typeof chains];
+      if (gapChain && gapChain.nativeCurrency.symbol === sourceSymbol) {
+        comparableDepositFloor += flooredDeloraTarget(gap.chainId, gap.deficitWei);
+      }
+    }
+    if (sourceUsableBalance < comparableDepositFloor) {
+      log(
+        `🔍 [DEBUG] Gas top-up: ${candidate.label} can't reach the refuel floor (${comparableDepositFloor.toString()} wei), skipping without quoting`,
+      );
+      lastError = new Error(
+        `PlanningError: Insufficient funds for gas top-up. Wallet ${candidate.address} on ${sourceChain.name} cannot cover the minimum refuel amount.`,
+      );
+      continue;
+    }
 
     const destinations: { chainId: number; address: Address; amountWei: string; depositRequired: bigint }[] = [];
 

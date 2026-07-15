@@ -23,7 +23,8 @@ vi.mock("./api/delora", () => ({
   fetchDeloraPrices: vi.fn().mockResolvedValue(new Map()),
   deloraPriceKey: (chainId: number, address: string) => `${chainId}:${address.toLowerCase()}`,
 }));
-vi.mock("./gas-refuel", () => ({
+vi.mock("./gas-refuel", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gas-refuel")>()),
   getGasRefuelQuote: vi.fn(),
 }));
 // Accept the test's synthetic 0zk address so the Safe-mode Railgun rejection
