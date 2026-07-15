@@ -4,7 +4,7 @@ import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ETH_ADDRESS, makeToken, WALLET } from "../../test/test-helpers";
 
-import { buildDeloraCalls, executeDeloraSwap, getSwapQuote } from "./delora";
+import { buildDeloraCalls, clearSwapQuoteCache, executeDeloraSwap, getSwapQuote } from "./delora";
 
 type SendCallsReturn = [Hex, Log[][]];
 type SendCallsFn = Mock<(...args: unknown[]) => Promise<SendCallsReturn>>;
@@ -85,6 +85,11 @@ function makeSimResult(logs: Log[] = []) {
 }
 
 describe("delora", () => {
+  beforeEach(() => {
+    // The planning quote cache is module state — isolate every test.
+    clearSwapQuoteCache();
+  });
+
   const mockTokenUSDC = makeToken(USDC_TOKEN, 1000000n, 1, { walletAddress: WALLET });
   const mockTokenUSDT = makeToken(USDT_TOKEN, 2000000n, 1, { walletAddress: WALLET, symbol: "USDT" });
   const mockTokenNative = makeToken(ETH_ADDRESS, 1000000000000000000n, 1, {
@@ -138,6 +143,24 @@ describe("delora", () => {
           value: 2n,
         },
       ]);
+    });
+
+    test("always fetches fresh quotes, even when planning cached the same input", async () => {
+      const fetchMock = stubQuoteFetch();
+      const outputToken = {
+        token: mockTokenUSDC.token,
+        chainId: mockTokenUSDC.chainId,
+        symbol: mockTokenUSDC.symbol,
+        decimals: mockTokenUSDC.decimals,
+        walletAddress: mockTokenNative.walletAddress,
+      };
+
+      // Planning caches this exact request...
+      await getSwapQuote(mockTokenNative, outputToken);
+      // ...but execution must send fresh calldata, never a cached quote.
+      await buildDeloraCalls([mockTokenNative], mockTokenUSDC);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     test("skips approval for native token (zero address)", async () => {
@@ -303,6 +326,64 @@ describe("delora", () => {
       expect(result.amount).toBe(6000000n);
     });
 
+    test("reuses the cached quote for identical inputs within the TTL", async () => {
+      const fetchMock = stubQuoteFetch();
+      const outputToken = {
+        token: mockTokenUSDT.token,
+        chainId: mockTokenUSDT.chainId,
+        symbol: mockTokenUSDT.symbol,
+        decimals: mockTokenUSDT.decimals,
+        walletAddress: mockTokenUSDC.walletAddress,
+      };
+
+      const first = await getSwapQuote(mockTokenUSDC, outputToken);
+      const second = await getSwapQuote(mockTokenUSDC, outputToken);
+
+      // A retried plan re-quotes the same tokens — only one request goes out.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(second).toEqual(first);
+    });
+
+    test("a different amount misses the cache", async () => {
+      const fetchMock = stubQuoteFetch();
+      const outputToken = {
+        token: mockTokenUSDT.token,
+        chainId: mockTokenUSDT.chainId,
+        symbol: mockTokenUSDT.symbol,
+        decimals: mockTokenUSDT.decimals,
+        walletAddress: mockTokenUSDC.walletAddress,
+      };
+
+      await getSwapQuote(mockTokenUSDC, outputToken);
+      await getSwapQuote({ ...mockTokenUSDC, amount: mockTokenUSDC.amount + 1n }, outputToken);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    test("failed quotes are not cached — the retry refetches", async () => {
+      const failing = vi.fn(async () => ({
+        ok: false,
+        status: 500,
+        json: async () => ({}),
+        text: async () => JSON.stringify({ code: "UNKNOWN", message: "server error" }),
+      }));
+      vi.stubGlobal("fetch", failing);
+      const outputToken = {
+        token: mockTokenUSDT.token,
+        chainId: mockTokenUSDT.chainId,
+        symbol: mockTokenUSDT.symbol,
+        decimals: mockTokenUSDT.decimals,
+        walletAddress: mockTokenUSDC.walletAddress,
+      };
+
+      await expect(getSwapQuote(mockTokenUSDC, outputToken)).rejects.toThrow();
+
+      const fetchMock = stubQuoteFetch();
+      const result = await getSwapQuote(mockTokenUSDC, outputToken);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(result.amount).toBe(3000000n);
+    });
+
     test("sends the expected query parameters", async () => {
       const fetchMock = stubQuoteFetch();
       const outputToken = {
@@ -344,6 +425,9 @@ describe("delora", () => {
       expect(headers["x-api-key"]).toBeUndefined();
 
       vi.stubEnv("VITE_DELORA_API_KEY", "test-key");
+      // Same inputs would hit the planning cache; the header isn't part of
+      // the cache key, so clear it to force a second real request.
+      clearSwapQuoteCache();
       await getSwapQuote(mockTokenUSDC, outputToken);
       headers = fetchMock.mock.calls[1][1]?.headers as Record<string, string>;
       expect(headers["x-api-key"]).toBe("test-key");

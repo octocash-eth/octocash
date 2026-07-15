@@ -46,6 +46,28 @@ export interface DeloraQuote {
 const deloraQuoteUrl = () => `${deloraBaseUrl()}/v1/quotes`;
 
 /**
+ * Planning-time quote cache. A failed planning attempt auto-retries (see
+ * transaction-plan-executor.tsx), and each attempt re-quotes every selected
+ * token sequentially at ~1.5–3s per request — without a cache a retry pays
+ * the full sweep again and burns Delora's per-minute request budget on
+ * quotes that already succeeded. Entries are keyed by the full request URL
+ * (sender, chain pair, amount, currencies, fee), so any input change misses.
+ *
+ * Only planning opts in ({@link getSwapQuoteWithLegs}); execution paths
+ * ({@link buildDeloraCalls}, {@link getDeloraRefuelQuote}) always fetch fresh
+ * calldata. The TTL is short — plan estimates may lag the market by up to a
+ * minute, but execution re-quotes and the drift check in execution.ts pauses
+ * on divergence beyond {@link SLIPPAGE_LIMIT}.
+ */
+const QUOTE_CACHE_TTL_MS = 60_000;
+const quoteCache = new Map<string, { quote: DeloraQuote; fetchedAt: number }>();
+
+/** Test-only: the cache is module state, so suites must isolate from each other. */
+export function clearSwapQuoteCache(): void {
+  quoteCache.clear();
+}
+
+/**
  * Slippage tolerance as a fraction (0.005 = 0.5%), enforced on-chain via the
  * quote's `minOutputAmount`. Also reused as the quote-drift tolerance at
  * execution time: a fresh quote that under-delivers the planned amount by more
@@ -69,6 +91,7 @@ async function fetchSwapQuote(
   input: Pick<TokenAmount, "token" | "amount" | "chainId" | "walletAddress">,
   outputToken: Pick<TokenAmount, "token" | "chainId">,
   receiverAddress?: Address,
+  options?: { cache?: boolean },
 ): Promise<DeloraQuote> {
   const url = new URL(deloraQuoteUrl());
   url.searchParams.set("senderAddress", input.walletAddress);
@@ -86,7 +109,13 @@ async function fetchSwapQuote(
     url.searchParams.set("fee", String(OCTOCASH_SWAP_FEE));
   }
 
-  const res = await fetch(url.toString(), {
+  const cacheKey = url.toString();
+  if (options?.cache) {
+    const hit = quoteCache.get(cacheKey);
+    if (hit && Date.now() - hit.fetchedAt < QUOTE_CACHE_TTL_MS) return hit.quote;
+  }
+
+  const res = await fetch(cacheKey, {
     headers: deloraHeaders({ accept: "application/json" }),
   });
   if (!res.ok) {
@@ -100,7 +129,15 @@ async function fetchSwapQuote(
     }
     throw new Error(`Request failed (${res.status}): ${detail}`);
   }
-  return (await res.json()) as DeloraQuote;
+  const quote = (await res.json()) as DeloraQuote;
+  if (options?.cache) {
+    // Drop expired entries before storing so the map stays bounded.
+    for (const [key, entry] of quoteCache) {
+      if (Date.now() - entry.fetchedAt >= QUOTE_CACHE_TTL_MS) quoteCache.delete(key);
+    }
+    quoteCache.set(cacheKey, { quote, fetchedAt: Date.now() });
+  }
+  return quote;
 }
 
 /**
@@ -408,7 +445,9 @@ export async function getSwapQuoteWithLegs(
       if (token.amount <= 0n) continue;
       // `outputAmount` is already net of Delora's routing costs and our
       // integrator fee (deducted from the input side), so it's used as-is.
-      const quote = await fetchSwapQuote(token, outputToken);
+      // Planning-only, so cached: an auto-retried plan reuses quotes that
+      // already succeeded instead of re-sweeping every token.
+      const quote = await fetchSwapQuote(token, outputToken, undefined, { cache: true });
       outputAmount += BigInt(quote.outputAmount);
       legs.push({
         input: token,
