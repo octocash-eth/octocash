@@ -114,6 +114,13 @@ vi.mock("~/components/site/gated-connect-button", () => ({
   GatedConnectButton: () => mockGatedConnectButton(),
 }));
 
+// Mock lazy loaded ConnectSafesButton — the real one pulls wagmi + TanStack
+// Query through its dialog, neither of which we exercise here.
+const mockConnectSafesButton = vi.fn(() => <button type="button">Connect Safes</button>);
+vi.mock("~/components/site/connect-safes-button", () => ({
+  ConnectSafesButton: () => mockConnectSafesButton(),
+}));
+
 // Mock lazy loaded CurrencySelector — its real implementation pulls in the
 // CoinGecko fetcher and the modal stack, neither of which we exercise here.
 vi.mock("~/components/site/currency-selector", () => ({
@@ -194,6 +201,11 @@ describe("SiteHeader", () => {
       expect(dashboardButton).toBeInTheDocument();
     });
 
+    test("does not render Connect Safes button on marketing pages", () => {
+      render(<SiteHeader />);
+      expect(screen.queryByText("Connect Safes")).not.toBeInTheDocument();
+    });
+
     test("Go to Dashboard button links to /dashboard", () => {
       render(<SiteHeader />);
       const dashboardLink = screen.getByText("Go to Dashboard").closest("a");
@@ -249,6 +261,13 @@ describe("SiteHeader", () => {
       // The Suspense fallback is a disabled "Connect Wallet" button
       const buttons = screen.getAllByText("Connect Wallet");
       expect(buttons.length).toBeGreaterThan(0);
+    });
+
+    test("renders Connect Safes button next to the wallet button", async () => {
+      render(<SiteHeader />);
+      await waitFor(() => {
+        expect(screen.getAllByText("Connect Safes").length).toBeGreaterThan(0);
+      });
     });
   });
 

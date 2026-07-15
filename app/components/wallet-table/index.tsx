@@ -26,12 +26,11 @@ interface WalletTableProps {
   /** Account-kind lookup for `connectedAddresses`; absent entries are EOAs. */
   accounts?: AccountsMap;
   /**
-   * Rendered above the table while the Safes tab is active (the Safe accounts
-   * panel). Its presence enables the Addresses / Safes tabs — token selection
-   * is scoped to one wallet kind per consolidation, so Safe-held funds always
-   * plan with a Safe intermediate (funds never transit an EOA).
+   * Shows the Addresses / Safes tabs — token selection is scoped to one
+   * wallet kind per consolidation, so Safe-held funds always plan with a
+   * Safe intermediate (funds never transit an EOA).
    */
-  safesPanel?: React.ReactNode;
+  showSafesTab?: boolean;
 }
 
 type WalletTab = "addresses" | "safes";
@@ -46,10 +45,10 @@ const EmptyState = ({ hasAddresses }: { hasAddresses: boolean }) => (
   </div>
 );
 
-export function WalletTable({ connectedAddresses = [], accounts, safesPanel }: WalletTableProps) {
+export function WalletTable({ connectedAddresses = [], accounts, showSafesTab = false }: WalletTableProps) {
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({});
   const [activeTab, setActiveTab] = React.useState<WalletTab>("addresses");
-  const showTabs = safesPanel !== undefined;
+  const showTabs = showSafesTab;
 
   // Selection must never span both kinds — clear it when switching tabs.
   const switchTab = React.useCallback((tab: WalletTab) => {
@@ -361,7 +360,6 @@ export function WalletTable({ connectedAddresses = [], accounts, safesPanel }: W
           ))}
         </div>
       )}
-      {showTabs && activeTab === "safes" && safesPanel}
       {tokens.length > 0 || isLoading ? (
         <>
           <DataTable

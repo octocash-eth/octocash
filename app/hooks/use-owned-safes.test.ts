@@ -1,7 +1,7 @@
 import type { Address } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { getSafeInfo, getSafesByOwner } from "~/lib/api/safe-transaction-service";
-import { discoverOwnedSafes } from "./use-owned-safes";
+import { discoverSafesForOwner, probeSafeAccount } from "./use-owned-safes";
 
 vi.mock("~/lib/api/safe-transaction-service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/api/safe-transaction-service")>()),
@@ -18,7 +18,7 @@ beforeEach(() => {
   vi.mocked(getSafeInfo).mockReset();
 });
 
-describe("discoverOwnedSafes", () => {
+describe("discoverSafesForOwner", () => {
   test("dedupes across chains and probes every chain, flagging uncontrolled deployments", async () => {
     // The owner's Safe shows up in the by-owner query on mainnet and Base.
     vi.mocked(getSafesByOwner).mockImplementation(async (chainId) => (chainId === 1 || chainId === 8453 ? [SAFE] : []));
@@ -34,7 +34,7 @@ describe("discoverOwnedSafes", () => {
       return null;
     });
 
-    const safes = await discoverOwnedSafes([OWNER], 123);
+    const safes = await discoverSafesForOwner(OWNER, [OWNER], 123);
 
     expect(safes).toHaveLength(1);
     const [safe] = safes;
@@ -59,13 +59,56 @@ describe("discoverOwnedSafes", () => {
       return null;
     });
 
-    const [safe] = await discoverOwnedSafes([OWNER]);
+    const [safe] = await discoverSafesForOwner(OWNER, [OWNER]);
     expect(safe.deployments[10]).toBeUndefined();
     expect(safe.deployments[1]).toBeDefined();
   });
 
-  test("no owners, no requests", async () => {
-    expect(await discoverOwnedSafes([])).toEqual([]);
+  test("throws when every by-owner request fails — throttling is not 'no safes'", async () => {
+    vi.mocked(getSafesByOwner).mockRejectedValue(new Error("ExternalAPIError: 429"));
+
+    await expect(discoverSafesForOwner(OWNER, [OWNER])).rejects.toThrow("ExternalAPIError: 429");
+    expect(getSafeInfo).not.toHaveBeenCalled();
+  });
+
+  test("partial by-owner failures still return the safes the other chains found", async () => {
+    vi.mocked(getSafesByOwner).mockImplementation(async (chainId) => {
+      if (chainId === 1) return [SAFE];
+      throw new Error("ExternalAPIError: 429");
+    });
+    vi.mocked(getSafeInfo).mockImplementation(async (chainId) =>
+      chainId === 1 ? { address: SAFE, owners: [OWNER], threshold: 1, nonce: 0, version: "1.4.1" } : null,
+    );
+
+    const safes = await discoverSafesForOwner(OWNER, [OWNER]);
+    expect(safes).toHaveLength(1);
+    expect(safes[0].address).toBe(SAFE);
+  });
+});
+
+describe("probeSafeAccount", () => {
+  test("hydrates a safe from its address alone, computing controlled against the connected set", async () => {
+    vi.mocked(getSafeInfo).mockImplementation(async (chainId) => {
+      if (chainId === 1) return { address: SAFE, owners: [OWNER, STRANGER], threshold: 2, nonce: 7, version: "1.4.1" };
+      if (chainId === 100) return { address: SAFE, owners: [STRANGER], threshold: 1, nonce: 0, version: "1.3.0" };
+      return null;
+    });
+
+    const safe = await probeSafeAccount(SAFE, [OWNER], 42);
+
+    expect(safe).toMatchObject({ kind: "safe", address: SAFE, ownerAddress: OWNER, fetchedAt: 42 });
+    expect(safe.deployments[1]).toMatchObject({ controlled: true, threshold: 2 });
+    expect(safe.deployments[100]).toMatchObject({ controlled: false });
     expect(getSafesByOwner).not.toHaveBeenCalled();
+  });
+
+  test("falls back to the provided owner when no deployment is controlled", async () => {
+    vi.mocked(getSafeInfo).mockImplementation(async (chainId) =>
+      chainId === 1 ? { address: SAFE, owners: [STRANGER], threshold: 1, nonce: 0, version: "1.4.1" } : null,
+    );
+
+    const safe = await probeSafeAccount(SAFE, [OWNER], 42);
+    expect(safe.ownerAddress).toBe(OWNER);
+    expect(safe.deployments[1]).toMatchObject({ controlled: false });
   });
 });

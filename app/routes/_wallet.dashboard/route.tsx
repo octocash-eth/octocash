@@ -1,5 +1,4 @@
 import { Wallet } from "lucide-react";
-import { SafeAccountsPanel } from "~/components/safe/safe-accounts-panel";
 import { GatedConnectButton, SiteHeader } from "~/components/site";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "~/components/ui/empty";
 import { WalletTable } from "~/components/wallet-table";
@@ -18,7 +17,7 @@ export function meta() {
 
 export default function Dashboard() {
   const connectedAddresses = useConnectedAddresses();
-  const { addresses, accounts, discoveredSafes, isDiscovering, isSafeEnabled, setSafeEnabled } = useSpendableAccounts();
+  const { addresses, accounts, enabledSafeCount } = useSpendableAccounts();
 
   return (
     <div className="flex flex-col min-h-svh bg-linear-to-br from-background to-accent/10">
@@ -30,18 +29,9 @@ export default function Dashboard() {
             <WalletTable
               connectedAddresses={addresses}
               accounts={accounts}
-              // The Safes tab (and the panel inside it) only appears once
-              // discovery finds something — everyone else keeps the plain table.
-              safesPanel={
-                discoveredSafes.length > 0 || isDiscovering ? (
-                  <SafeAccountsPanel
-                    safes={discoveredSafes}
-                    isDiscovering={isDiscovering}
-                    isSafeEnabled={isSafeEnabled}
-                    setSafeEnabled={setSafeEnabled}
-                  />
-                ) : undefined
-              }
+              // Gated on the localStorage opt-in count, not on network
+              // discovery — the tabs can't vanish when the Safe API throttles.
+              showSafesTab={enabledSafeCount > 0}
             />
           </div>
         </div>

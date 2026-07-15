@@ -79,14 +79,25 @@ function requestHeaders(json = false): HeadersInit {
   return headers;
 }
 
+/** Read retries on 429 — the anonymous tier throttles bursts hard. */
+const MAX_THROTTLE_RETRIES = 3;
+
 async function getJson<T>(url: string): Promise<T | null> {
-  const response = await fetch(url, { headers: requestHeaders() });
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    // "ExternalAPIError:" prefix maps to the retryable EXTERNAL_API_ERROR code.
-    throw new Error(`ExternalAPIError: Safe Transaction Service returned ${response.status} for ${url}`);
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(url, { headers: requestHeaders() });
+    if (response.status === 404) return null;
+    if (response.status === 429 && attempt < MAX_THROTTLE_RETRIES) {
+      const retryAfter = Number(response.headers.get("Retry-After"));
+      const delayMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 500 * 2 ** attempt;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+    if (!response.ok) {
+      // "ExternalAPIError:" prefix maps to the retryable EXTERNAL_API_ERROR code.
+      throw new Error(`ExternalAPIError: Safe Transaction Service returned ${response.status} for ${url}`);
+    }
+    return (await response.json()) as T;
   }
-  return (await response.json()) as T;
 }
 
 /** Addresses of Safes on `chainId` that list `owner` among their owners. */

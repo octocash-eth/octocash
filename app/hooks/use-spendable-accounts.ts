@@ -3,25 +3,25 @@ import useLocalStorageState from "use-local-storage-state";
 import type { Address } from "viem";
 import { type AccountsMap, controlledOn, type WalletAccount } from "~/lib/accounts";
 import { useConnectedAddresses } from "./use-connected-addresses";
-import { useOwnedSafes } from "./use-owned-safes";
+import { useEnabledSafeAccounts } from "./use-enabled-safe-accounts";
 import { useSmartAccounts } from "./use-smart-accounts";
 
 const STORAGE_KEY = "octocash:enabled-safes";
 
 /**
  * The full set of addresses the app can spend from — connected EOAs plus the
- * Safes the user has explicitly enabled from the Safes panel — together with
- * the accounts map that tells planning/execution which of them are Safes or
- * ERC-4337 smart wallets. Discovered Safes are opt-in (persisted across
- * sessions) so a treasury signer's dashboard isn't suddenly flooded with
- * every DAO Safe they sit on; smart accounts need no opt-in — they ARE the
- * connected wallet, the map entry just annotates their kind.
+ * Safes the user has explicitly enabled from the Connect Safes dialog —
+ * together with the accounts map that tells planning/execution which of them
+ * are Safes or ERC-4337 smart wallets. Discovered Safes are opt-in (persisted
+ * across sessions) so a treasury signer's dashboard isn't suddenly flooded
+ * with every DAO Safe they sit on; smart accounts need no opt-in — they ARE
+ * the connected wallet, the map entry just annotates their kind.
  */
 export function useSpendableAccounts() {
   const connectedAddresses = useConnectedAddresses();
-  const { safes, isLoading } = useOwnedSafes();
-  const { smartAccounts } = useSmartAccounts();
   const [enabledSafes, setEnabledSafes] = useLocalStorageState<string[]>(STORAGE_KEY, { defaultValue: [] });
+  const { safes, isLoading } = useEnabledSafeAccounts(enabledSafes);
+  const { smartAccounts } = useSmartAccounts();
 
   const enabledSet = useMemo(() => new Set(enabledSafes.map((address) => address.toLowerCase())), [enabledSafes]);
 
@@ -66,8 +66,12 @@ export function useSpendableAccounts() {
     addresses,
     /** Account-kind lookup for everything in `addresses`. */
     accounts,
-    /** All discovered Safes (enabled or not), for the Safes panel. */
-    discoveredSafes: safes,
+    /**
+     * How many Safes the user has opted in, straight from localStorage —
+     * network-independent, so UI gated on it (the Safes tab) can't vanish
+     * when the Safe API throttles.
+     */
+    enabledSafeCount: enabledSafes.length,
     isDiscovering: isLoading,
     isSafeEnabled,
     setSafeEnabled,

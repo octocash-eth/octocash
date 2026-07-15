@@ -12,6 +12,11 @@ const GatedConnectButton = lazy(() =>
   import("~/components/site/gated-connect-button").then((m) => ({ default: m.GatedConnectButton })),
 );
 
+// Lazy for the same reason: it pulls wagmi + TanStack Query via its dialog.
+const ConnectSafesButton = lazy(() =>
+  import("~/components/site/connect-safes-button").then((m) => ({ default: m.ConnectSafesButton })),
+);
+
 // Lazy load currency selector — it lives inside <CurrencyProvider> (which is
 // only mounted on /dashboard and /history) and depends on TanStack Query +
 // the CoinGecko fetcher, so we keep it out of the marketing bundle.
@@ -45,9 +50,20 @@ function MainButton({ isAppPage }: { isAppPage: boolean }) {
     );
   }
   return (
-    <Suspense fallback={<Button disabled>Connect Wallet</Button>}>
-      <GatedConnectButton />
-    </Suspense>
+    <>
+      <Suspense
+        fallback={
+          <Button variant="outline" disabled>
+            Connect Safes
+          </Button>
+        }
+      >
+        <ConnectSafesButton />
+      </Suspense>
+      <Suspense fallback={<Button disabled>Connect Wallet</Button>}>
+        <GatedConnectButton />
+      </Suspense>
+    </>
   );
 }
 
