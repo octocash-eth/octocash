@@ -3,16 +3,18 @@ import { chains, transports } from "~/data/supported-chains";
 import { getNativeBalance } from "./gas";
 
 /**
- * Cross-chain native gas refuel, provider-agnostic. Gas.zip is the primary
- * route (purpose-built for refuels, accepts deposits from ~$0.25, delivers in
- * seconds); Delora's cross-chain native→native routing is the fallback when
- * Gas.zip can't serve a chain pair or its API is down.
+ * Cross-chain native gas refuel, provider-agnostic. Delora's cross-chain
+ * native→native routing is the sole active provider: Gas.zip (previously the
+ * primary) is disabled — its quote API throttles mainnet-bound refuels hard
+ * ("Quote: Chain Throttled"), failing plans that Delora serves fine. The
+ * Gas.zip client (`gas-zip.ts`) is kept intact should it recover.
  *
  * Delivery is confirmed by watching the destination wallet's native balance
  * (see {@link waitForRefuelDelivery}) rather than a provider status API — the
  * balance is the ground truth, works identically for both providers, and
  * keeps the wait step functional even when a provider's backend is
- * unreachable.
+ * unreachable. The `"gaszip"` provider tag remains in the types because
+ * persisted `GasRefuelRecord`s from past runs may still carry it.
  */
 
 /** A quoted refuel ready to send from the source wallet. */
@@ -60,27 +62,20 @@ const MIN_DELORA_TARGET_WEI: Record<string, bigint> = {
 };
 
 /**
- * Lower floor for the Gas.zip route, which accepts deposits as small as
- * ~$0.25 (https://dev.gas.zip/gas/overview) — far below what general-purpose
- * bridges enforce. Sized to clear that minimum + price movement + Gas.zip's
- * flat fee. Natives absent from the map get no floor.
+ * The native amount a Delora refuel to `toChainId` will actually be quoted
+ * for — `targetOutputWei` raised to the per-chain minimum. Exported so
+ * planning can skip funding candidates that obviously can't cover a top-up
+ * without spending two quote requests per candidate to find out.
  */
-const MIN_GASZIP_TARGET_WEI: Record<string, bigint> = {
-  ETH: 200_000_000_000_000n, // ~0.0002 ETH (≈ $0.30–0.80 across regimes)
-  POL: 2_000_000_000_000_000_000n, // ~2 POL    (≈ $0.30–1.00 across regimes)
-  XDAI: 400_000_000_000_000_000n, // ~0.4 xDAI (≈ $0.40, stable)
-};
-
-function flooredTarget(toChainId: number, targetWei: bigint, floors: Record<string, bigint>): bigint {
+export function flooredDeloraTarget(toChainId: number, targetOutputWei: bigint): bigint {
   const symbol = chains[toChainId as keyof typeof chains]?.nativeCurrency.symbol;
-  const floor = (symbol && floors[symbol]) || 0n;
-  return targetWei > floor ? targetWei : floor;
+  const floor = (symbol && MIN_DELORA_TARGET_WEI[symbol]) || 0n;
+  return targetOutputWei > floor ? targetOutputWei : floor;
 }
 
 /**
  * Quote a cross-chain gas refuel delivering at least `targetOutputWei` native
- * to `to` on `toChainId`: Gas.zip first, Delora as fallback. Throws only when
- * both providers fail, with both reasons in the message.
+ * to `to` on `toChainId` via Delora.
  */
 export async function getGasRefuelQuote(
   fromChainId: number,
@@ -89,35 +84,20 @@ export async function getGasRefuelQuote(
   from: Address,
   to: Address,
 ): Promise<GasRefuelQuote> {
-  // Lazy imports keep a clean one-way dependency: provider modules import the
+  // Lazy import keeps a clean one-way dependency: provider modules import the
   // GasRefuelQuote type from here, this orchestrator imports their runtime.
-  const { getGasZipRefuelQuote } = await import("./gas-zip");
-  let gasZipReason: string;
-  try {
-    return await getGasZipRefuelQuote(
-      fromChainId,
-      toChainId,
-      flooredTarget(toChainId, targetOutputWei, MIN_GASZIP_TARGET_WEI),
-      from,
-      to,
-    );
-  } catch (error) {
-    gasZipReason = error instanceof Error ? error.message : String(error);
-    console.warn(`[gas-refuel] Gas.zip quote failed (${fromChainId}→${toChainId}); trying Delora.`, error);
-  }
-
   const { getDeloraRefuelQuote } = await import("./delora");
   try {
     return await getDeloraRefuelQuote(
       fromChainId,
       toChainId,
-      flooredTarget(toChainId, targetOutputWei, MIN_DELORA_TARGET_WEI),
+      flooredDeloraTarget(toChainId, targetOutputWei),
       from,
       to,
     );
   } catch (error) {
     const deloraReason = error instanceof Error ? error.message : String(error);
-    throw new Error(`GasRefuelError: No refuel route available. Gas.zip: ${gasZipReason}. Delora: ${deloraReason}`);
+    throw new Error(`GasRefuelError: No refuel route available. Delora: ${deloraReason}`);
   }
 }
 

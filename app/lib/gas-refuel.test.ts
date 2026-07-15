@@ -1,9 +1,6 @@
 import type { Address } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-vi.mock("./gas-zip", () => ({
-  getGasZipRefuelQuote: vi.fn(),
-}));
 vi.mock("./delora", () => ({
   getDeloraRefuelQuote: vi.fn(),
 }));
@@ -23,7 +20,6 @@ vi.mock("~/data/supported-chains", () => ({
 import { getDeloraRefuelQuote } from "./delora";
 import { getNativeBalance } from "./gas";
 import { type GasRefuelQuote, type GasRefuelRecord, getGasRefuelQuote, waitForRefuelDelivery } from "./gas-refuel";
-import { getGasZipRefuelQuote } from "./gas-zip";
 
 const WALLET = "0x1111111111111111111111111111111111111111" as Address;
 const RECIPIENT = "0x2222222222222222222222222222222222222222" as Address;
@@ -43,61 +39,38 @@ beforeEach(() => {
 });
 
 describe("getGasRefuelQuote", () => {
-  test("returns the Gas.zip quote when available", async () => {
-    vi.mocked(getGasZipRefuelQuote).mockResolvedValue(quote("gaszip"));
+  test("quotes via Delora directly (Gas.zip is disabled)", async () => {
+    vi.mocked(getDeloraRefuelQuote).mockResolvedValue(quote("delora"));
 
-    const result = await getGasRefuelQuote(1, 10, 1_000_000_000_000_000n, WALLET, RECIPIENT);
+    const result = await getGasRefuelQuote(1, 10, 2_000_000_000_000_000n, WALLET, RECIPIENT);
 
-    expect(result.provider).toBe("gaszip");
-    expect(getDeloraRefuelQuote).not.toHaveBeenCalled();
+    expect(result.provider).toBe("delora");
+    expect(getDeloraRefuelQuote).toHaveBeenCalledWith(1, 10, 2_000_000_000_000_000n, WALLET, RECIPIENT);
   });
 
-  test("applies the Gas.zip floor to tiny targets", async () => {
-    vi.mocked(getGasZipRefuelQuote).mockResolvedValue(quote("gaszip"));
+  test("applies the ETH floor to tiny targets", async () => {
+    vi.mocked(getDeloraRefuelQuote).mockResolvedValue(quote("delora"));
 
     await getGasRefuelQuote(1, 10, 1n, WALLET, RECIPIENT);
 
-    // ETH gas.zip floor = 0.0002 ETH
-    expect(getGasZipRefuelQuote).toHaveBeenCalledWith(1, 10, 200_000_000_000_000n, WALLET, RECIPIENT);
-  });
-
-  test("falls back to Delora (with its higher floor) when Gas.zip fails", async () => {
-    vi.mocked(getGasZipRefuelQuote).mockRejectedValue(new Error("GasZipError: down"));
-    vi.mocked(getDeloraRefuelQuote).mockResolvedValue(quote("delora"));
-
-    const result = await getGasRefuelQuote(1, 10, 1n, WALLET, RECIPIENT);
-
-    expect(result.provider).toBe("delora");
     // ETH cross-chain floor = 0.0012 ETH
     expect(getDeloraRefuelQuote).toHaveBeenCalledWith(1, 10, 1_200_000_000_000_000n, WALLET, RECIPIENT);
   });
 
-  test("applies the XDAI Gas.zip floor for Gnosis destinations", async () => {
-    vi.mocked(getGasZipRefuelQuote).mockResolvedValue(quote("gaszip"));
+  test("applies the XDAI floor for Gnosis destinations", async () => {
+    vi.mocked(getDeloraRefuelQuote).mockResolvedValue(quote("delora"));
 
     await getGasRefuelQuote(1, 100, 1n, WALLET, RECIPIENT);
 
-    // XDAI gas.zip floor = 0.4 xDAI
-    expect(getGasZipRefuelQuote).toHaveBeenCalledWith(1, 100, 400_000_000_000_000_000n, WALLET, RECIPIENT);
-  });
-
-  test("applies the XDAI Delora floor when falling back for Gnosis destinations", async () => {
-    vi.mocked(getGasZipRefuelQuote).mockRejectedValue(new Error("GasZipError: down"));
-    vi.mocked(getDeloraRefuelQuote).mockResolvedValue(quote("delora"));
-
-    const result = await getGasRefuelQuote(1, 100, 1n, WALLET, RECIPIENT);
-
-    expect(result.provider).toBe("delora");
-    // XDAI cross-chain fallback floor = 1.5 xDAI
+    // XDAI cross-chain floor = 1.5 xDAI
     expect(getDeloraRefuelQuote).toHaveBeenCalledWith(1, 100, 1_500_000_000_000_000_000n, WALLET, RECIPIENT);
   });
 
-  test("throws with both reasons when both providers fail", async () => {
-    vi.mocked(getGasZipRefuelQuote).mockRejectedValue(new Error("GasZipError: no route"));
+  test("throws GasRefuelError with the Delora reason on failure", async () => {
     vi.mocked(getDeloraRefuelQuote).mockRejectedValue(new Error("ExternalAPIError: no adapters"));
 
     await expect(getGasRefuelQuote(1, 10, 10n ** 15n, WALLET, RECIPIENT)).rejects.toThrow(
-      /GasRefuelError:.*GasZipError: no route.*ExternalAPIError: no adapters/,
+      /GasRefuelError:.*ExternalAPIError: no adapters/,
     );
   });
 });
