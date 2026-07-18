@@ -80,6 +80,7 @@ vi.mock("./gas-estimation", () => ({
 import { getBridgeFee } from "./cctp";
 import { getSwapQuote, getSwapQuoteWithLegs } from "./delora";
 import { planConsolidation } from "./planning";
+import type { PlanningPhase } from "./planning-progress";
 import { getPublicClient } from "./public-client";
 
 // Planning consumes getSwapQuoteWithLegs; the tests configure the amount-only
@@ -3746,5 +3747,127 @@ describe("planConsolidation", () => {
         expect(finalSwap.outputToken.token).toBe(WBTC_ADDRESS);
       });
     });
+  });
+});
+
+describe("planning progress", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const CANONICAL_ORDER: PlanningPhase[] = [
+    "gas-data",
+    "wallets",
+    "swap-quotes",
+    "bridge-fees",
+    "final-swaps",
+    "gas-estimation",
+    "gas-topups",
+  ];
+
+  /** Collapse consecutive duplicate emissions. */
+  const dedupedPhases = (events: PlanningPhase[]): PlanningPhase[] =>
+    events.filter((e, i) => i === 0 || e !== events[i - 1]);
+
+  const expectInCanonicalOrder = (phases: PlanningPhase[]) => {
+    const indices = phases.map((p) => CANONICAL_ORDER.indexOf(p));
+    expect(indices).not.toContain(-1);
+    expect(indices).toEqual([...indices].sort((a, b) => a - b));
+  };
+
+  test("multi-chain plan emits phases in canonical order", async () => {
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: ETH_ADDRESS,
+        amount: 200000000000000000n,
+        chainId: 137,
+        walletAddress: WALLET,
+        symbol: "POL",
+        decimals: 18,
+      },
+      {
+        token: USDC_ADDRESS,
+        amount: 1000000n,
+        chainId: 10,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      },
+    ];
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+    vi.mocked(getSwapQuote).mockResolvedValueOnce({
+      token: USDC_ADDRESS,
+      amount: 800000000n,
+      chainId: 137,
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    });
+    vi.mocked(getSwapQuote).mockResolvedValueOnce({
+      token: WBTC_ADDRESS,
+      amount: 800000n,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    });
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+    const events: PlanningPhase[] = [];
+    await planConsolidation(sourceTokens, destinationToken, [WALLET], undefined, undefined, undefined, (p) =>
+      events.push(p),
+    );
+
+    const phases = dedupedPhases(events);
+    expect(phases[0]).toBe("gas-data");
+    expect(phases).toContain("swap-quotes");
+    expect(phases).toContain("gas-estimation");
+    expectInCanonicalOrder(phases);
+  });
+
+  test("transfer-only plan emits the fast-path subset", async () => {
+    const WALLET_2 = "0x2222222222222222222222222222222222222222" as Address;
+    const sourceTokens: TokenAmount[] = [
+      {
+        token: WBTC_ADDRESS,
+        amount: 10000000n,
+        chainId: 1,
+        walletAddress: WALLET_2,
+        symbol: "WBTC",
+        decimals: 8,
+      },
+    ];
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    const events: PlanningPhase[] = [];
+    const result = await planConsolidation(
+      sourceTokens,
+      destinationToken,
+      [WALLET, WALLET_2],
+      undefined,
+      undefined,
+      undefined,
+      (p) => events.push(p),
+    );
+
+    expect(result[0].type).toBe("transfer");
+    const phases = dedupedPhases(events);
+    expect(phases[0]).toBe("gas-data");
+    expect(phases).toContain("gas-estimation");
+    expect(phases).not.toContain("swap-quotes");
+    expect(phases).not.toContain("final-swaps");
+    expectInCanonicalOrder(phases);
   });
 });

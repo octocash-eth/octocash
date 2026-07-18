@@ -31,6 +31,7 @@ export function TransactionPlanExecutor({
   const {
     state: plannedState,
     isPlanning,
+    planningPhase,
     planError,
     planWarnings,
     generatePlan,
@@ -56,7 +57,7 @@ export function TransactionPlanExecutor({
 
   // Show loading state while planning
   if (isPlanning) {
-    return <PlanningLoader />;
+    return <PlanningLoader phase={planningPhase} />;
   }
 
   // Show error if planning failed. Auto-retry only for transient external API

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { type AccountsMap, toAccountsRecord } from "~/lib/accounts";
 import { planConsolidation } from "~/lib/planning";
+import type { PlanningPhase } from "~/lib/planning-progress";
 import type { ConsolidationState, DestinationToken, SourceToken } from "~/lib/types";
 import { useConnectedAddresses } from "./use-connected-addresses";
 
@@ -71,11 +72,24 @@ export function useConsolidationPlanning({
     return `${eoaKey}|${accountKey}`;
   }, [connectedWallets, accounts]);
 
+  // Live phase reported by planConsolidation while the query runs; null
+  // outside planning so a settled (or cached) plan never shows a stale label.
+  const [planningPhase, setPlanningPhase] = useState<PlanningPhase | null>(null);
+
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["consolidation-plan", planId, walletKey],
     queryFn: async () => {
+      setPlanningPhase(null);
       const warnings: string[] = [];
-      const steps = await planConsolidation(sourceTokens, destinationToken, allWallets, undefined, accounts, warnings);
+      const steps = await planConsolidation(
+        sourceTokens,
+        destinationToken,
+        allWallets,
+        undefined,
+        accounts,
+        warnings,
+        setPlanningPhase,
+      );
       return { steps, warnings };
     },
     enabled: enabled && sourceTokens.length > 0,
@@ -119,11 +133,14 @@ export function useConsolidationPlanning({
   useEffect(() => {
     if (error) setAttemptCount((n) => n + 1);
     else if (plan) setAttemptCount(0);
+    if (error || plan) setPlanningPhase(null);
   }, [error, plan]);
 
   return {
     state,
     isPlanning: isLoading,
+    /** Live planning phase while `isPlanning`; null otherwise. */
+    planningPhase,
     planError: error instanceof Error ? error.message : "",
     /** Non-fatal planning notes, e.g. Gnosis tokens dropped below the hop value floor. */
     planWarnings,

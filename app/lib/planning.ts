@@ -35,6 +35,7 @@ import {
 } from "./gas-estimation";
 import { flooredDeloraTarget, getGasRefuelQuote } from "./gas-refuel";
 import { getOmnibridgeMinPerTx, type OmnibridgeTokenPair, resolveOmnibridgeTokenPair } from "./omnibridge";
+import type { OnPlanningProgress } from "./planning-progress";
 import { getPublicClient } from "./public-client";
 import { decodeRailgunAddress, getShieldedAmountAfterFee, isRailgunAddress } from "./railgun";
 import { groupTokensByChainAndWallet } from "./tokens";
@@ -2429,10 +2430,12 @@ async function planTransferOnly(
   connectedWallets: readonly Address[],
   log: (...args: unknown[]) => void,
   accounts?: AccountsMap,
+  onProgress?: OnPlanningProgress,
 ): Promise<TransactionStep[]> {
   const destChainId = destinationToken.chainId;
   const destIsNative = isAddressEqual(destinationToken.token, zeroAddress);
   const transferOp: OperationType = destIsNative ? "transfer-native" : "transfer-erc20";
+  onProgress?.("gas-data");
   const gasCtx = await buildGasContext([destChainId]);
   const balances: NativeBalances = new Map();
   const steps: TransactionStep[] = [];
@@ -2506,6 +2509,7 @@ async function planTransferOnly(
   // Measure first (batched eth_simulateV1 with ladder fallback), then size
   // top-ups from the measured deficits.
   tagExecutionSteps(steps, accounts);
+  onProgress?.("gas-estimation");
   await attachGasEstimates(steps, gasCtx);
   addExecutionGasOverhead(steps);
   let { gaps, requirements } = await reconcileGasGaps(steps, balances, log, accounts);
@@ -2521,6 +2525,7 @@ async function planTransferOnly(
 
   let finalSteps = steps;
   if (gaps.size > 0) {
+    onProgress?.("gas-topups");
     const executorAddresses = new Set<Address>();
     executorAddresses.add(getAddress(executorFor(accounts, destinationToken.walletAddress)) as Address);
     for (const step of steps) {
@@ -2597,7 +2602,10 @@ export async function planConsolidation(
   log: (...args: unknown[]) => void = () => {},
   accounts?: AccountsMap,
   warnings?: string[],
+  onProgress?: OnPlanningProgress,
 ): Promise<TransactionStep[]> {
+  onProgress?.("gas-data");
+
   // Validate inputs
   validateInputs(sourceTokens, destinationToken, connectedWallets, log);
   await assertAccountsUsable(sourceTokens, destinationToken, connectedWallets, accounts);
@@ -2647,7 +2655,7 @@ export async function planConsolidation(
     const sourceWalletSet = new Set(sourceTokens.map((t) => getAddress(t.walletAddress)));
     const destConnected = connectedWallets.some((w) => isAddressEqual(w, destinationToken.walletAddress));
     if (sourceWalletSet.size === 1 || destConnected) {
-      return planTransferOnly(sourceTokens, destinationToken, connectedWallets, log, accounts);
+      return planTransferOnly(sourceTokens, destinationToken, connectedWallets, log, accounts, onProgress);
     }
   }
 
@@ -2738,6 +2746,7 @@ export async function planConsolidation(
   const artifacts = emptyPlanArtifacts();
 
   // Find a suitable intermediate wallet using gas estimation
+  onProgress?.("wallets");
   const intermediateWallet = await resolveIntermediateWallet(
     sourceTokens,
     destinationToken,
@@ -2789,6 +2798,7 @@ export async function planConsolidation(
   }
 
   // Build consolidation pipeline (native amounts gas-adjusted per wallet)
+  onProgress?.("swap-quotes");
   let { steps, tokens } = await processChainWalletSwaps(
     sourceTokens,
     intermediateToken,
@@ -2800,6 +2810,7 @@ export async function planConsolidation(
     accounts,
   );
 
+  onProgress?.("bridge-fees");
   if (sourceHasGnosis && !isGnosisDest) {
     // Egress: the Gnosis-side bridgeable token (USDC.e, or the destination
     // token's twin on a direct route) exits through the Omnibridge to the hub
@@ -2830,6 +2841,7 @@ export async function planConsolidation(
       log,
     ));
     ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, hubToken));
+    onProgress?.("final-swaps");
     ({ steps, tokens } = await createGnosisIngressSteps(
       steps,
       tokens,
@@ -2860,6 +2872,7 @@ export async function planConsolidation(
   // `createFinalTransfer` (with its floor/dust trade-offs) is needed at all.
   const deliversDirectly = safeMode && needsFinalTransfer;
   const finalTarget = deliversDirectly ? { ...publicDestination } : intermediateToken;
+  onProgress?.("final-swaps");
   ({ steps, tokens } = await createFinalSwaps(
     steps,
     tokens,
@@ -2886,6 +2899,7 @@ export async function planConsolidation(
 
   // Attach per-step gas estimates (batched eth_simulateV1 with ladder
   // fallback), then derive gas deficits from the measured numbers.
+  onProgress?.("gas-estimation");
   await attachGasEstimates(steps, gasCtx, artifacts);
   addExecutionGasOverhead(steps);
   let { gaps, requirements } = await reconcileGasGaps(steps, balances, log, accounts);
@@ -2914,6 +2928,7 @@ export async function planConsolidation(
       executorAddresses.add(getAddress(stepGasPayer(step, accounts)) as Address);
     }
   }
+  if (gaps.size > 0) onProgress?.("gas-topups");
   const gasTopUpSteps = await createGasTopUpSteps(
     gaps,
     intermediateWallet,

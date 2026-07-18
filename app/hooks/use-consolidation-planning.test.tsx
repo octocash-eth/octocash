@@ -154,6 +154,7 @@ describe("useConsolidationPlanning", () => {
           undefined,
           undefined,
           [], // warnings out-array, filled by planning when tokens are dropped
+          expect.any(Function), // onProgress
         );
       });
     });
@@ -212,6 +213,42 @@ describe("useConsolidationPlanning", () => {
       await waitFor(() => {
         expect(result.current.isPlanning).toBe(false);
       });
+    });
+
+    test("exposes planningPhase while planning and clears it on settle", async () => {
+      let resolvePlan: (steps: TransactionStep[]) => void = () => {};
+      mockPlanConsolidation.mockImplementation((...args: unknown[]) => {
+        const onProgress = args[6] as (phase: string) => void;
+        onProgress("swap-quotes");
+        return new Promise<TransactionStep[]>((resolve) => {
+          resolvePlan = resolve;
+        });
+      });
+
+      const { result } = renderHook(
+        () =>
+          useConsolidationPlanning({
+            sourceTokens: [createMockSourceToken()],
+            destinationToken: createMockDestinationToken(),
+            enabled: true,
+            planId: "test-plan-1",
+          }),
+        { wrapper: createWrapper() },
+      );
+
+      await waitFor(() => {
+        expect(result.current.planningPhase).toBe("swap-quotes");
+      });
+      expect(result.current.isPlanning).toBe(true);
+
+      act(() => {
+        resolvePlan(createMockPlan());
+      });
+
+      await waitFor(() => {
+        expect(result.current.state).not.toBeNull();
+      });
+      expect(result.current.planningPhase).toBeNull();
     });
 
     test("handles planning errors", async () => {
