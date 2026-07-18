@@ -8,9 +8,12 @@ const mockWalletClient = {
   account: { address: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd" as `0x${string}` },
   chain: { id: 1 },
 };
-const mockUseWalletClient = vi.fn();
+const mockGetWalletClient = vi.fn();
 vi.mock("wagmi", () => ({
-  useWalletClient: () => mockUseWalletClient(),
+  useConfig: () => ({}),
+}));
+vi.mock("wagmi/actions", () => ({
+  getWalletClient: (...args: unknown[]) => mockGetWalletClient(...args),
 }));
 
 // Mock cctp-contracts data
@@ -62,7 +65,7 @@ describe("useCCTPClaim", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUseWalletClient.mockReturnValue({ data: mockWalletClient });
+    mockGetWalletClient.mockResolvedValue(mockWalletClient);
   });
 
   describe("initialization", () => {
@@ -75,7 +78,7 @@ describe("useCCTPClaim", () => {
 
   describe("claim", () => {
     test("throws error when wallet client is not available", async () => {
-      mockUseWalletClient.mockReturnValue({ data: undefined });
+      mockGetWalletClient.mockRejectedValue(new Error("ConnectorNotConnectedError"));
 
       const { result } = renderHook(() => useCCTPClaim());
 
@@ -303,7 +306,7 @@ describe("useCCTPClaim", () => {
         account: { address: "0x9876543210987654321098765432109876543210" as `0x${string}` },
         chain: { id: 1 },
       };
-      mockUseWalletClient.mockReturnValue({ data: customWalletClient });
+      mockGetWalletClient.mockResolvedValue(customWalletClient);
 
       const attestations = [createMockAttestation("0")];
       mockRetrieveAttestations.mockResolvedValue(attestations);

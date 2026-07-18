@@ -1,6 +1,7 @@
 import type { Account, Chain, HttpTransport, WalletClient } from "viem";
 import { mainnet } from "viem/chains";
-import { useWalletClient } from "wagmi";
+import { useConfig } from "wagmi";
+import { getWalletClient } from "wagmi/actions";
 import { USDC } from "~/data/token-contracts";
 import { executeOmnibridgeClaim, retrieveOmnibridgeClaims } from "~/lib/omnibridge";
 import { prepareSendCalls, type SendCallsFn } from "~/lib/send-calls";
@@ -12,9 +13,13 @@ import { prepareSendCalls, type SendCallsFn } from "~/lib/send-calls";
  * Analog of {@link useCCTPClaim} for chain-100 sources.
  */
 export function useOmnibridgeClaim() {
-  const { data: walletClient } = useWalletClient();
+  const config = useConfig();
 
   const claim = async (transactionHash: string, signal?: AbortSignal) => {
+    // Resolved lazily (not via useWalletClient) so the always-mounted
+    // manual-claim dialog doesn't keep a wallet-client query subscription
+    // alive that refetches over RPC on every remount while closed.
+    const walletClient = await getWalletClient(config).catch(() => null);
     if (!walletClient) {
       throw new Error("Wallet client is not available.");
     }
