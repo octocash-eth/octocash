@@ -5,6 +5,9 @@ import { planConsolidation } from "~/lib/planning";
 import type { ConsolidationState, DestinationToken, SourceToken } from "~/lib/types";
 import { useConnectedAddresses } from "./use-connected-addresses";
 
+/** Stable empty array so consumers' deps don't churn between renders. */
+const EMPTY_WARNINGS: string[] = [];
+
 interface UseConsolidationPlanningOptions {
   sourceTokens: SourceToken[];
   destinationToken: DestinationToken;
@@ -68,17 +71,23 @@ export function useConsolidationPlanning({
     return `${eoaKey}|${accountKey}`;
   }, [connectedWallets, accounts]);
 
-  const {
-    data: plan,
-    isLoading,
-    error,
-    refetch,
-  } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["consolidation-plan", planId, walletKey],
-    queryFn: () => planConsolidation(sourceTokens, destinationToken, allWallets, undefined, accounts),
+    queryFn: async () => {
+      const warnings: string[] = [];
+      const steps = await planConsolidation(sourceTokens, destinationToken, allWallets, undefined, accounts, warnings);
+      return { steps, warnings };
+    },
     enabled: enabled && sourceTokens.length > 0,
     staleTime: Number.POSITIVE_INFINITY, // Cache indefinitely within a component lifecycle
+    // Planning failures are deterministic (validation, value floors, unusable
+    // accounts) — TanStack's default 3 background retries would silently
+    // re-run the whole RPC-heavy pipeline against an unchanged outcome. The
+    // PlanError UI owns retrying (countdown for transient API errors).
+    retry: false,
   });
+  const plan = data?.steps;
+  const planWarnings = data?.warnings ?? EMPTY_WARNINGS;
 
   // Transform plan into ConsolidationState - use the provided planId
   const state = useMemo<ConsolidationState | null>(() => {
@@ -116,6 +125,8 @@ export function useConsolidationPlanning({
     state,
     isPlanning: isLoading,
     planError: error instanceof Error ? error.message : "",
+    /** Non-fatal planning notes, e.g. Gnosis tokens dropped below the hop value floor. */
+    planWarnings,
     generatePlan,
     attemptCount,
   };

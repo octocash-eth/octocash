@@ -309,26 +309,28 @@ const GNOSIS_HOP_MAX_GAS_SHARE = 5;
 /** One bridged flavor of a Gnosis route, for the value-floor check. */
 type RoutedValue = { token: Address; chainId: number; decimals: number; amount: bigint };
 
+/** Figures explaining why a Gnosis route falls below the value floor. */
+type GnosisFloorShortfall = { totalUsd: number; minUsd: number; hopGasUsd: number };
+
 /**
- * Rejects a Gnosis route whose mainnet hop (Omnibridge claim and/or CCTP leg)
- * would eat too much of the routed value. Runs where the route's real bridged
- * totals are known — inside the egress/ingress step creators — and is a hard
- * reject, consistent with the dust policy elsewhere in planning.
+ * Evaluates whether a Gnosis route's mainnet hop (Omnibridge claim and/or
+ * CCTP leg) would eat too much of the routed value. Returns the shortfall
+ * figures when the route isn't worth it, or `null` when it is — or when it
+ * can't be judged (a transient price outage must not fail an otherwise valid
+ * plan).
  *
  * `routed` lists each bridged flavor: USDC on the fallback route, the
  * destination token's bridge twin on the direct route, or both in a mixed
  * ingress. USDC counts $1 per unit outright; other tokens use the Delora
- * spot price, and when any price is unavailable the check is skipped (a
- * transient price outage must not fail an otherwise valid plan). When only
- * the ETH price is unavailable the absolute $10 floor still applies.
+ * spot price. When only the ETH price is unavailable the absolute $10 floor
+ * still applies.
  */
-async function assertGnosisRouteWorthIt(
+async function gnosisRouteShortfall(
   routed: RoutedValue[],
   hopOps: OperationType[],
   gasCtx: GasContext,
-  direction: "from" | "to",
   log: (...args: unknown[]) => void,
-): Promise<void> {
+): Promise<GnosisFloorShortfall | null> {
   const isUsdc = (entry: RoutedValue) =>
     isAddressEqual(
       entry.token,
@@ -367,21 +369,44 @@ async function assertGnosisRouteWorthIt(
     if (totalUsd === null) {
       // The price fetch itself failed. All-USDC routes are $1/unit without a
       // price, so the absolute floor still applies; otherwise skip the check.
-      if (needsPrice.length > 0) return;
+      if (needsPrice.length > 0) return null;
       totalUsd = routed.reduce((sum, entry) => sum + Number(formatUnits(entry.amount, entry.decimals)), 0);
     }
   }
 
-  if (totalUsd === null) return;
+  if (totalUsd === null) return null;
+  if (totalUsd < minUsd) return { totalUsd, minUsd, hopGasUsd };
+  return null;
+}
 
-  if (totalUsd < minUsd) {
-    const gasNote = hopGasUsd > 0 ? ` costing ~$${hopGasUsd.toFixed(2)} in gas` : "";
-    throw new Error(
-      `PlanningError: Consolidating $${totalUsd.toFixed(2)} ${direction === "from" ? "from" : "to"} Gnosis requires an ` +
-        `Ethereum mainnet hop${gasNote}, which isn't worth it below ~$${minUsd.toFixed(2)}. ` +
-        `Add more value or ${direction === "from" ? "deselect the Gnosis tokens" : "choose a different destination chain"}.`,
-    );
-  }
+/** Human sentence explaining a {@link GnosisFloorShortfall}, shared by the
+ * hard reject (ingress / all-Gnosis egress) and the drop-with-warning path. */
+function gnosisFloorMessage({ totalUsd, minUsd, hopGasUsd }: GnosisFloorShortfall, direction: "from" | "to"): string {
+  const gasNote = hopGasUsd > 0 ? ` costing ~$${hopGasUsd.toFixed(2)} in gas` : "";
+  return (
+    `Consolidating $${totalUsd.toFixed(2)} ${direction === "from" ? "from" : "to"} Gnosis requires an ` +
+    `Ethereum mainnet hop${gasNote}, which isn't worth it below ~$${minUsd.toFixed(2)}.`
+  );
+}
+
+/**
+ * Hard-reject flavor of {@link gnosisRouteShortfall}: used on ingress (the
+ * hop IS the route to the destination, nothing can be left out) — egress
+ * instead drops the Gnosis tokens with a warning in `planConsolidation`.
+ */
+async function assertGnosisRouteWorthIt(
+  routed: RoutedValue[],
+  hopOps: OperationType[],
+  gasCtx: GasContext,
+  direction: "from" | "to",
+  log: (...args: unknown[]) => void,
+): Promise<void> {
+  const shortfall = await gnosisRouteShortfall(routed, hopOps, gasCtx, log);
+  if (!shortfall) return;
+  throw new Error(
+    `PlanningError: ${gnosisFloorMessage(shortfall, direction)} ` +
+      `Add more value or ${direction === "from" ? "deselect the Gnosis tokens" : "choose a different destination chain"}.`,
+  );
 }
 
 /**
@@ -1370,8 +1395,6 @@ async function createGnosisEgressSteps(
   steps: TransactionStep[],
   tokens: TokenAmount[],
   hubWallet: Address,
-  destinationChainId: number,
-  gasCtx: GasContext,
   log: (...args: unknown[]) => void,
   route: GnosisDirectRoute | null = null,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
@@ -1384,16 +1407,10 @@ async function createGnosisEgressSteps(
     : { token: USDC_ADDRESSES[mainnet.id] as Address, symbol: "USDC", decimals: 6 };
   const gnosisSideToken = route ? route.pair.gnosisToken : (USDC_ADDRESSES[gnosis.id] as Address);
 
+  // The value floor for this leg runs in `planConsolidation` BEFORE any
+  // Gnosis swaps are quoted, so a not-worth-it hop drops the Gnosis tokens
+  // (with a warning) instead of failing here mid-pipeline.
   const totalAmount = gnosisTokens.reduce((sum, t) => sum + t.amount, 0n);
-  const hopOps: OperationType[] = ["omnibridge-claim"];
-  if (destinationChainId !== mainnet.id) hopOps.push("cctp-approval", "cctp-burn");
-  await assertGnosisRouteWorthIt(
-    [{ token: gnosisSideToken, chainId: gnosis.id, decimals: claimSpec.decimals, amount: totalAmount }],
-    hopOps,
-    gasCtx,
-    "from",
-    log,
-  );
 
   const walletGroups = groupTokensByChainAndWallet(gnosisTokens);
   if (route) {
@@ -2579,6 +2596,7 @@ export async function planConsolidation(
   connectedWallets: readonly Address[],
   log: (...args: unknown[]) => void = () => {},
   accounts?: AccountsMap,
+  warnings?: string[],
 ): Promise<TransactionStep[]> {
   // Validate inputs
   validateInputs(sourceTokens, destinationToken, connectedWallets, log);
@@ -2637,8 +2655,8 @@ export async function planConsolidation(
   // Omnibridge (egress when Gnosis is a source, ingress when it's the
   // destination), so those plans also need mainnet gas data and an EOA hub.
   const isGnosisDest = destinationToken.chainId === gnosis.id;
-  const sourceHasGnosis = sourceTokens.some((t) => t.chainId === gnosis.id);
-  const needsMainnetHub =
+  let sourceHasGnosis = sourceTokens.some((t) => t.chainId === gnosis.id);
+  let needsMainnetHub =
     (sourceHasGnosis && !isGnosisDest) || (isGnosisDest && sourceTokens.some((t) => t.chainId !== gnosis.id));
 
   // The Omnibridge is a multi-token bridge, so when the destination token
@@ -2681,6 +2699,38 @@ export async function planConsolidation(
     ]),
   ];
   const gasCtx = await buildGasContext(allChainIds);
+
+  // Egress value floor, evaluated BEFORE any Gnosis swaps are quoted: the
+  // routed value can never exceed the Gnosis holdings' spot value, so when
+  // that already can't justify the mainnet hop, drop the Gnosis tokens with a
+  // warning and consolidate the rest — unless they're all the plan has, in
+  // which case the hard reject stands. (Ingress keeps its hard reject inside
+  // `createGnosisIngressSteps`: the hop IS the route to the destination.)
+  if (sourceHasGnosis && !isGnosisDest) {
+    const gnosisSources = sourceTokens.filter((t) => t.chainId === gnosis.id);
+    const hopOps: OperationType[] = ["omnibridge-claim"];
+    if (destinationToken.chainId !== mainnet.id) hopOps.push("cctp-approval", "cctp-burn");
+    const shortfall = await gnosisRouteShortfall(
+      gnosisSources.map((t) => ({ token: t.token, chainId: t.chainId, decimals: t.decimals, amount: t.amount })),
+      hopOps,
+      gasCtx,
+      log,
+    );
+    if (shortfall) {
+      const message = gnosisFloorMessage(shortfall, "from");
+      if (gnosisSources.length === sourceTokens.length) {
+        throw new Error(`PlanningError: ${message} Add more value or deselect the Gnosis tokens.`);
+      }
+      warnings?.push(`Gnosis tokens not included: ${message.charAt(0).toLowerCase()}${message.slice(1)}`);
+      log(`⚠️ [DEBUG] Dropping ${gnosisSources.length} Gnosis token(s) below the hop value floor: ${message}`);
+      sourceTokens = sourceTokens.filter((t) => t.chainId !== gnosis.id);
+      sourceHasGnosis = false;
+      // Not a Gnosis destination here, so no other leg needs the mainnet hub
+      // or the (egress-flavored) direct Omnibridge route.
+      needsMainnetHub = false;
+      omniDirectRoute = null;
+    }
+  }
 
   // Native balances observed while drafting (reused by reconcileGasGaps) and
   // planning-side simulation artifacts (Delora quote calldata per swap step).
@@ -2754,15 +2804,7 @@ export async function planConsolidation(
     // Egress: the Gnosis-side bridgeable token (USDC.e, or the destination
     // token's twin on a direct route) exits through the Omnibridge to the hub
     // wallet on mainnet; the claim output then joins the stages below.
-    ({ steps, tokens } = await createGnosisEgressSteps(
-      steps,
-      tokens,
-      intermediateWallet,
-      destinationToken.chainId,
-      gasCtx,
-      log,
-      omniDirectRoute,
-    ));
+    ({ steps, tokens } = await createGnosisEgressSteps(steps, tokens, intermediateWallet, log, omniDirectRoute));
   }
 
   if (isGnosisDest) {

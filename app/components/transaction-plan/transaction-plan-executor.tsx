@@ -1,4 +1,6 @@
+import { TriangleAlertIcon } from "lucide-react";
 import * as React from "react";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { useConsolidationExecution } from "~/hooks/use-consolidation-execution";
 import { useConsolidationPlanning } from "~/hooks/use-consolidation-planning";
 import { createTransactionError } from "~/lib/errors";
@@ -30,6 +32,7 @@ export function TransactionPlanExecutor({
     state: plannedState,
     isPlanning,
     planError,
+    planWarnings,
     generatePlan,
     attemptCount,
   } = useConsolidationPlanning({
@@ -78,6 +81,20 @@ export function TransactionPlanExecutor({
 
   return (
     <div className="flex flex-col gap-3 sm:gap-4 min-h-0 max-h-[calc(100dvh-16rem)] sm:max-h-[calc(100dvh-21rem)]">
+      {/* Non-fatal planning notes (e.g. Gnosis tokens dropped below the hop
+          value floor): the plan is valid but covers less than was selected. */}
+      {planWarnings.length > 0 && (
+        <Alert className="shrink-0">
+          <TriangleAlertIcon className="h-4 w-4" />
+          <AlertTitle>Some tokens were left out</AlertTitle>
+          <AlertDescription>
+            {planWarnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Transaction Cards Preview — the only scrollable region; shrinks to keep
           the status alert and actions fixed and visible. */}
       <PlanList state={state} liveProgress={liveProgress} maxHeight="25rem" className="min-h-0" />

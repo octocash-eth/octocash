@@ -3407,6 +3407,37 @@ describe("planConsolidation", () => {
       });
     });
 
+    test("mixed sources below the egress floor: Gnosis tokens are dropped with a warning, rest still plans", async () => {
+      const sourceTokens: TokenAmount[] = [
+        { token: USDC_GNOSIS, amount: 5_000_000n, chainId: 100, walletAddress: WALLET, symbol: "USDC.e", decimals: 6 },
+        { token: USDC_BASE, amount: 50_000_000n, chainId: 8453, walletAddress: WALLET, symbol: "USDC", decimals: 6 },
+      ];
+
+      const destinationToken = {
+        token: USDC_ARBITRUM,
+        chainId: 42161,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      };
+
+      vi.mocked(getBridgeFee).mockResolvedValue(0n);
+
+      const warnings: string[] = [];
+      const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET], undefined, undefined, warnings);
+
+      // The Base leg plans normally; nothing touches Gnosis or the mainnet hop.
+      expect(plan.length).toBeGreaterThan(0);
+      expect(plan.every((s: TransactionStep) => s.chainId !== 100)).toBe(true);
+      const types = plan.map((s: TransactionStep) => s.type);
+      expect(types).not.toContain("gnosis-bridge");
+      expect(types).toContain("bridge");
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/Gnosis tokens not included/);
+      expect(warnings[0]).toMatch(/\$5\.00/);
+    });
+
     describe("direct Omnibridge token routes", () => {
       const GNO_MAINNET = "0x6810e776880C02933D47DB1b9fc05908e5386b96" as Address;
       const DAI_MAINNET = "0x6B175474E89094C44Da98b954EedeAC495271d0F" as Address;

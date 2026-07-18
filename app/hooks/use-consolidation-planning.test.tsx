@@ -153,6 +153,7 @@ describe("useConsolidationPlanning", () => {
           connectedWallets,
           undefined,
           undefined,
+          [], // warnings out-array, filled by planning when tokens are dropped
         );
       });
     });
