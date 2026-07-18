@@ -139,10 +139,13 @@ export function atomicOn(account: WalletAccount, chainId: number): boolean {
 }
 
 /**
- * Who signs and pays gas for transactions of `wallet`: the owner EOA for a
- * Safe (execTransaction's msg.sender); the wallet itself for an EOA or a
- * smart account (a 4337 account prefunds its own operations from its native
- * balance — paymasters are the wallet app's business).
+ * Who signs and pays gas for transactions of `wallet`, by default: the owner
+ * EOA for a Safe (execTransaction's msg.sender); the wallet itself for an
+ * EOA or a smart account (a 4337 account prefunds its own operations from
+ * its native balance — paymasters are the wallet app's business). For Safe
+ * steps the plan may stamp a per-step `executorAddress` override when the
+ * owner lacks gas (see `SafeStepExecution`); step-aware callers should
+ * prefer that marker over this default.
  */
 export function executorFor(accounts: AccountsMap | undefined, wallet: Address): Address {
   const account = accountFor(accounts, wallet);

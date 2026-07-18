@@ -180,9 +180,10 @@ function mergeConfirmations(
 }
 
 /**
- * The executing owner's own confirmation must be the approved-hash sentinel
- * ONLY when they are the execTransaction sender; a persisted sentinel from a
- * previous session's owner is invalid if a different owner executes now.
+ * An approved-hash sentinel is valid ONLY when its owner is the
+ * execTransaction sender; a persisted sentinel is foreign — unusable — when a
+ * different account (another owner, or a separate plan-stamped executor)
+ * submits now. EIP-712 signatures never match the sentinel shape.
  */
 function isForeignApprovedHash(confirmation: { owner: Address; signature: Hex }, executor: Address): boolean {
   return (
@@ -219,22 +220,27 @@ interface SafeSendContext {
  *           (executed elsewhere → done; nonce consumed → superseded) or
  *           re-enters AWAIT/EXEC with its stored signatures.
  * BUILD   — on-chain owners/threshold/nonce are the source of truth.
- * SIGN    — threshold met by the executor alone: approved-hash sentinel, no
- *           popup, no service round-trip. Otherwise: EIP-712 signTypedData.
+ * SIGN    — 1/1 with the owner submitting: approved-hash sentinel, no popup,
+ *           no service round-trip. Otherwise: EIP-712 signTypedData from the
+ *           owner — required when a separate executor submits, since the
+ *           sentinel only validates for msg.sender.
  * PROPOSE — POST to the Transaction Service; the record persists BEFORE any
  *           waiting so a tab close never loses the proposal.
  * AWAIT   — poll confirmations; executed-by-someone-else and nonce
  *           supersession are detected here; 20 min → recoverable pause.
  * EXEC    — optional revalidate (quote staleness), then execTransaction goes
  *           out as ONE plain EOA call through the existing hardened
- *           send-calls machinery (nonce mgmt, fee bump, watchdog).
+ *           send-calls machinery (nonce mgmt, fee bump, watchdog), sent from
+ *           the plan-stamped executor (owner by default; execTransaction
+ *           with threshold signatures is permissionless).
  */
 async function sendCallsViaSafe(
   context: SafeSendContext,
 ): Promise<[string, { address: Address; data: Hex; topics: Hex[] }[][]]> {
   const { client, chainId, execution, hooks } = context;
   const safe = execution.safeAddress;
-  const executor = client.account.address;
+  const owner = execution.ownerAddress;
+  const submitter = execution.executorAddress ?? execution.ownerAddress;
 
   // RESUME: a prior attempt left a live proposal for this batch.
   const existing = hooks.getProposal();
@@ -247,8 +253,8 @@ async function sendCallsViaSafe(
   // BUILD — verify against the chain, never against a discovery snapshot.
   await switchChain(client, chainId);
   const info = await readSafeInfo(chainId, safe);
-  if (!isOwnerOf(info, executor)) {
-    throw new SafeNotOwnerError(executor, safe, chainId);
+  if (!isOwnerOf(info, owner)) {
+    throw new SafeNotOwnerError(owner, safe, chainId);
   }
 
   const safeTx = buildSafeTx(context.calls, info.nonce, info.version);
@@ -262,23 +268,30 @@ async function sendCallsViaSafe(
     tx: { to: safeTx.to, value: safeTx.value.toString(), data: safeTx.data, operation: safeTx.operation },
     threshold: info.threshold,
     confirmations: [],
-    executor,
+    executor: submitter,
     proposedAt: Date.now(),
     quotedAt: context.quotedAt,
     status: "proposed",
   };
 
   if (info.threshold === 1) {
-    // 1/1 fast path: msg.sender == owner validates the approved-hash sentinel,
-    // so no signature popup and no Transaction Service dependency at all.
-    record.confirmations = [{ owner: executor, signature: approvedHashSignature(executor) }];
+    if (isAddressEqual(submitter, owner)) {
+      // 1/1 fast path: msg.sender == owner validates the approved-hash
+      // sentinel, so no signature popup and no Transaction Service dependency.
+      record.confirmations = [{ owner, signature: approvedHashSignature(owner) }];
+      return executeSafeTx(context, record);
+    }
+    // A separate executor submits, so the sentinel can't validate — one
+    // EIP-712 signature from the owner, still no service dependency.
+    hooks.onProgress?.({ phase: "signing", confirmed: 0, threshold: info.threshold, chainId });
+    record.confirmations = [{ owner, signature: await signSafeTx(client, chainId, safe, safeTx, owner) }];
     return executeSafeTx(context, record);
   }
 
   // SIGN + PROPOSE
   hooks.onProgress?.({ phase: "signing", confirmed: 0, threshold: info.threshold, chainId });
-  const signature = await signSafeTx(client, chainId, safe, safeTx);
-  record.confirmations = [{ owner: executor, signature }];
+  const signature = await signSafeTx(client, chainId, safe, safeTx, owner);
+  record.confirmations = [{ owner, signature }];
   await proposeSafeTx(chainId, safe, {
     to: safeTx.to,
     value: safeTx.value.toString(),
@@ -291,7 +304,7 @@ async function sendCallsViaSafe(
     refundReceiver: "0x0000000000000000000000000000000000000000",
     nonce: info.nonce,
     contractTransactionHash: safeTxHash,
-    sender: executor,
+    sender: owner,
     signature,
     origin: JSON.stringify({ name: "octo.cash", url: "https://octo.cash" }),
   });
@@ -312,7 +325,7 @@ async function reconcileProposal(
   record: SafeProposalRecord,
 ): Promise<[string, { address: Address; data: Hex; topics: Hex[] }[][]] | null> {
   const { chainId, execution, hooks } = context;
-  const executor = context.client.account.address;
+  const submitter = execution.executorAddress ?? execution.ownerAddress;
 
   let service: SafeServiceTx | null = null;
   try {
@@ -340,15 +353,16 @@ async function reconcileProposal(
     throw new SafeTxSupersededError(record.safeTxHash, "its Safe nonce was consumed by another transaction");
   }
 
-  // A 1/1 record whose approved-hash sentinel belongs to a different owner
-  // than the currently connected one can't be executed by us — rebuild.
-  const usable = record.confirmations.filter((confirmation) => !isForeignApprovedHash(confirmation, executor));
+  // A 1/1 record whose approved-hash sentinel belongs to an owner other than
+  // the current submitter can't be executed by us — rebuild. (EIP-712
+  // signatures never match the sentinel shape and always survive.)
+  const usable = record.confirmations.filter((confirmation) => !isForeignApprovedHash(confirmation, submitter));
   if (usable.length === 0 && record.confirmations.length > 0 && record.threshold === 1) {
     hooks.persistProposal({ ...record, status: "superseded" });
     return null;
   }
 
-  return awaitConfirmationsAndExecute(context, { ...record, confirmations: usable, executor });
+  return awaitConfirmationsAndExecute(context, { ...record, confirmations: usable, executor: submitter });
 }
 
 /** Fetches the receipt of a proposal someone else executed and settles from it. */
@@ -436,13 +450,13 @@ async function awaitConfirmationsAndExecute(
   return executeSafeTx(context, { ...record, confirmations, threshold });
 }
 
-/** EXEC: submit execTransaction from the owner EOA. */
+/** EXEC: submit execTransaction from the plan-stamped executor (owner by default). */
 async function executeSafeTx(
   context: SafeSendContext,
   record: SafeProposalRecord,
 ): Promise<[string, { address: Address; data: Hex; topics: Hex[] }[][]]> {
-  const { client, eoaSend, txId, chainId, execution, hooks } = context;
-  const executor = client.account.address;
+  const { eoaSend, txId, chainId, execution, hooks } = context;
+  const executor = execution.executorAddress ?? execution.ownerAddress;
 
   const execCall: Call = {
     to: execution.safeAddress,
@@ -500,7 +514,8 @@ async function refreshProposal(
 ): Promise<[string, { address: Address; data: Hex; topics: Hex[] }[][]]> {
   const { client, chainId, execution, hooks } = context;
   const safe = execution.safeAddress;
-  const executor = client.account.address;
+  const owner = execution.ownerAddress;
+  const submitter = execution.executorAddress ?? execution.ownerAddress;
   // biome-ignore lint/style/noNonNullAssertion: caller gates on hooks.rebuildCalls
   const calls = await hooks.rebuildCalls!();
 
@@ -513,19 +528,21 @@ async function refreshProposal(
     safeNonce: info.nonce,
     tx: { to: safeTx.to, value: safeTx.value.toString(), data: safeTx.data, operation: safeTx.operation },
     threshold: info.threshold,
-    executor,
+    executor: submitter,
     proposedAt: Date.now(),
     quotedAt: Date.now(),
     status: "proposed",
   };
 
   if (info.threshold === 1) {
-    record.confirmations = [{ owner: executor, signature: approvedHashSignature(executor) }];
+    record.confirmations = isAddressEqual(submitter, owner)
+      ? [{ owner, signature: approvedHashSignature(owner) }]
+      : [{ owner, signature: await signSafeTx(client, chainId, safe, safeTx, owner) }];
     return executeSafeTx({ ...context, isRefreshAttempt: true }, record);
   }
 
-  const signature = await signSafeTx(client, chainId, safe, safeTx);
-  record.confirmations = [{ owner: executor, signature }];
+  const signature = await signSafeTx(client, chainId, safe, safeTx, owner);
+  record.confirmations = [{ owner, signature }];
   await proposeSafeTx(chainId, safe, {
     to: safeTx.to,
     value: safeTx.value.toString(),
@@ -538,7 +555,7 @@ async function refreshProposal(
     refundReceiver: "0x0000000000000000000000000000000000000000",
     nonce: info.nonce,
     contractTransactionHash: safeTxHash,
-    sender: executor,
+    sender: owner,
     signature,
     origin: JSON.stringify({ name: "octo.cash", url: "https://octo.cash" }),
   });

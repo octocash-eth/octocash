@@ -1,5 +1,5 @@
 import type { Call } from "viem";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { MULTI_SEND_CALL_ONLY, multiSendCallOnlyFor, safeAppQueueUrl } from "~/data/safe-contracts";
 import {
   approvedHashSignature,
@@ -8,6 +8,7 @@ import {
   encodeMultiSendTransactions,
   hashSafeTx,
   isOwnerOf,
+  signSafeTx,
 } from "./safe";
 
 // Golden vector: a real executed multiSend transaction of mainnet Safe
@@ -75,6 +76,19 @@ describe("approvedHashSignature", () => {
     const signature = approvedHashSignature(OWNER_LOW);
     expect(signature).toBe(`0x${"0".repeat(24)}${OWNER_LOW.slice(2)}${"0".repeat(64)}01`);
     expect((signature.length - 2) / 2).toBe(65);
+  });
+});
+
+describe("signSafeTx", () => {
+  test("requests the signature from the explicit owner, not the client's active account", async () => {
+    const signTypedData = vi.fn().mockResolvedValue("0x5170");
+    const client = { account: { address: OWNER_HIGH }, signTypedData } as never;
+    const tx = buildSafeTx([{ to: OWNER_LOW, value: 0n, data: "0x" }], 0, "1.4.1");
+
+    await signSafeTx(client, 10, GOLDEN_SAFE, tx, OWNER_LOW);
+
+    expect(signTypedData).toHaveBeenCalledTimes(1);
+    expect(signTypedData.mock.calls[0][0]).toMatchObject({ account: OWNER_LOW, primaryType: "SafeTx" });
   });
 });
 

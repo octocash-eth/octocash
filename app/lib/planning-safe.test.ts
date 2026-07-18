@@ -1,6 +1,6 @@
 import { USDC_ETHEREUM as USDC_ADDRESS, USDC_OPTIMISM, WALLET, WBTC_ADDRESS } from "test/test-helpers";
 import type { Address } from "viem";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AccountsMap, SafeAccount } from "./accounts";
 import type { TokenAmount, TransactionStep } from "./types";
 
@@ -68,11 +68,14 @@ vi.mock("./gas-estimation", () => ({
 
 import { getBridgeFee } from "./cctp";
 import { getSwapQuote, getSwapQuoteWithLegs } from "./delora";
+import { getNativeBalance } from "./gas";
+import { getGasRefuelQuote } from "./gas-refuel";
 import { planConsolidation } from "./planning";
 import { getPublicClient } from "./public-client";
 
 const SAFE = "0xAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAa" as Address;
 const OWNER = "0x1111111111111111111111111111111111111111" as Address;
+const EXECUTOR2 = "0x4444444444444444444444444444444444444444" as Address;
 const TOKEN_A = "0x00000000000000000000000000000000000000aa" as Address;
 const TOKEN_B = "0x00000000000000000000000000000000000000bb" as Address;
 
@@ -349,6 +352,139 @@ describe("planConsolidation with a Safe source", () => {
     await expect(
       planConsolidation(sourceTokens, destinationToken, [WALLET, CONTRACT], undefined, undefined),
     ).rejects.toThrow(/Smart-account wallets must be detected before use.*Safe accounts panel/s);
+  });
+});
+
+describe("separate executor when the owner lacks gas", () => {
+  const USDC_DEST = { token: USDC_OPTIMISM, chainId: 10, walletAddress: WALLET, symbol: "USDC", decimals: 6 };
+
+  /** Per-(chain, wallet) balances; anything unlisted is broke. */
+  function mockBalances(table: Record<string, bigint>) {
+    vi.mocked(getNativeBalance).mockImplementation(async (chain, wallet) => {
+      return table[`${chain.id}:${wallet.toLowerCase()}`] ?? 0n;
+    });
+  }
+
+  afterEach(() => {
+    // Restore the module-level default (10 ETH everywhere) — clearAllMocks
+    // clears calls, not implementations, so an override would leak forward.
+    vi.mocked(getNativeBalance).mockReset().mockResolvedValue(10_000_000_000_000_000_000n);
+  });
+
+  test("stamps a funded connected EOA as executor instead of refueling the owner", async () => {
+    const sourceTokens = [erc20(USDC_OPTIMISM, 5_000_000n, 10, SAFE, "USDC")];
+    mockBalances({
+      [`10:${OWNER.toLowerCase()}`]: 0n, // the signer can't pay execTransaction gas
+      [`10:${EXECUTOR2.toLowerCase()}`]: 5n * 10n ** 18n,
+      [`10:${WALLET.toLowerCase()}`]: 1n * 10n ** 18n,
+    });
+
+    const steps = await planConsolidation(
+      sourceTokens,
+      USDC_DEST,
+      [WALLET, OWNER, EXECUTOR2, SAFE],
+      undefined,
+      safeAccounts([10]),
+    );
+
+    const transfer = steps.find((s) => s.type === "transfer");
+    expect(transfer?.execution).toMatchObject({ via: "safe", ownerAddress: OWNER });
+    // Richest sufficient candidate wins (EXECUTOR2 over the 1-ETH destination).
+    expect(transfer?.execution?.via === "safe" && transfer.execution.executorAddress).toBe(EXECUTOR2);
+    expect(steps.filter((s) => s.type === "gas-topup")).toHaveLength(0);
+  });
+
+  test("a funded owner keeps executing itself — no stamp, no top-up", async () => {
+    const sourceTokens = [erc20(USDC_OPTIMISM, 5_000_000n, 10, SAFE, "USDC")];
+    mockBalances({
+      [`10:${OWNER.toLowerCase()}`]: 1n * 10n ** 18n,
+      [`10:${EXECUTOR2.toLowerCase()}`]: 5n * 10n ** 18n,
+    });
+
+    const steps = await planConsolidation(
+      sourceTokens,
+      USDC_DEST,
+      [WALLET, OWNER, EXECUTOR2, SAFE],
+      undefined,
+      safeAccounts([10]),
+    );
+
+    const transfer = steps.find((s) => s.type === "transfer");
+    expect(transfer?.execution?.via === "safe" && transfer.execution.executorAddress).toBeUndefined();
+    expect(steps.filter((s) => s.type === "gas-topup")).toHaveLength(0);
+  });
+
+  test("no funded candidate on the chain → falls back to refueling the owner", async () => {
+    const sourceTokens = [erc20(USDC_OPTIMISM, 5_000_000n, 10, SAFE, "USDC")];
+    // Everyone is broke on chain 10; WALLET holds 10 POL on Polygon, so the
+    // refuel fallback bridges gas to the owner instead.
+    mockBalances({
+      [`137:${WALLET.toLowerCase()}`]: 10n * 10n ** 18n,
+    });
+    vi.mocked(getGasRefuelQuote).mockResolvedValue({
+      provider: "delora",
+      fromChainId: 137,
+      toChainId: 10,
+      depositWei: 5_500_000_000_000_000n,
+      expectedWei: 2_000_000_000_000_000n,
+      minDeliveredWei: 2_000_000_000_000_000n,
+      tx: { to: EXECUTOR2, data: "0x" as `0x${string}`, value: 5_500_000_000_000_000n },
+    });
+
+    const steps = await planConsolidation(
+      sourceTokens,
+      USDC_DEST,
+      [WALLET, OWNER, EXECUTOR2, SAFE],
+      undefined,
+      safeAccounts([10]),
+    );
+
+    const topUp = steps.find((s) => s.type === "gas-topup");
+    expect(topUp).toBeDefined();
+    expect(topUp?.gasTopUpDestinations?.some((d) => d.chainId === 10 && d.address === OWNER)).toBe(true);
+    const transfer = steps.find((s) => s.type === "transfer");
+    expect(transfer?.execution?.via === "safe" && transfer.execution.executorAddress).toBeUndefined();
+  });
+
+  test("full pipeline: stamps only the chains where the owner is broke", async () => {
+    const sourceTokens = [erc20(TOKEN_A, 10n ** 18n, 10, SAFE, "AAA")];
+    const destinationToken = { token: USDC_ADDRESS, chainId: 1, walletAddress: WALLET, symbol: "USDC", decimals: 6 };
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: USDC_OPTIMISM,
+      amount: 5_000_000n,
+      chainId: 10,
+      walletAddress: SAFE,
+      symbol: "USDC",
+      decimals: 6,
+    });
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
+    mockBalances({
+      [`10:${OWNER.toLowerCase()}`]: 0n, // broke on the source chain...
+      [`1:${OWNER.toLowerCase()}`]: 1n * 10n ** 18n, // ...but funded on mainnet
+      [`10:${EXECUTOR2.toLowerCase()}`]: 5n * 10n ** 18n,
+    });
+
+    const steps = await planConsolidation(
+      sourceTokens,
+      destinationToken,
+      [WALLET, OWNER, EXECUTOR2, SAFE],
+      undefined,
+      safeAccounts([10, 1]),
+    );
+
+    // Chain-10 Safe steps (swap, bridge) get the separate executor...
+    const chain10Safe = steps.filter((s) => s.chainId === 10 && s.execution?.via === "safe");
+    expect(chain10Safe.length).toBeGreaterThan(0);
+    for (const step of chain10Safe) {
+      expect(step.execution?.via === "safe" && step.execution.executorAddress).toBe(EXECUTOR2);
+    }
+    // ...while mainnet Safe steps stay with the funded owner.
+    const chain1Safe = steps.filter((s) => s.chainId === 1 && s.execution?.via === "safe");
+    expect(chain1Safe.length).toBeGreaterThan(0);
+    for (const step of chain1Safe) {
+      expect(step.execution?.via === "safe" && step.execution.executorAddress).toBeUndefined();
+    }
+    expect(steps.filter((s) => s.type === "gas-topup")).toHaveLength(0);
   });
 });
 

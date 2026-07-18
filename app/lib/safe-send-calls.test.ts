@@ -37,11 +37,12 @@ const SAFE = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Address;
 const OWNER = "0x1111111111111111111111111111111111111111" as Address;
 const CO_SIGNER = "0x2222222222222222222222222222222222222222" as Address;
 const EOA = "0x3333333333333333333333333333333333333333" as Address;
+const EXECUTOR = "0x4444444444444444444444444444444444444444" as Address;
 const CALLS = [{ to: EOA, data: "0xabcdef" as Hex, value: 0n }];
 
 const walletClient = { account: { address: OWNER } } as never;
 
-function makeStep(threshold: number, withExecution = true): TransactionStep {
+function makeStep(threshold: number, withExecution = true, executorAddress?: Address): TransactionStep {
   return {
     id: "step-1",
     type: "swap",
@@ -55,6 +56,7 @@ function makeStep(threshold: number, withExecution = true): TransactionStep {
             via: "safe" as const,
             safeAddress: SAFE,
             ownerAddress: OWNER,
+            ...(executorAddress ? { executorAddress } : {}),
             threshold,
             safeVersion: "1.4.1",
             batchId: "batch-1",
@@ -344,6 +346,119 @@ describe("N-of-M propose-and-wait", () => {
     // No re-sign, no re-propose: the stored proposal carried our signature.
     expect(signSafeTx).not.toHaveBeenCalled();
     expect(proposeSafeTx).not.toHaveBeenCalled();
+  });
+});
+
+describe("separated executor (owner signs, another wallet submits)", () => {
+  test("1/1: the owner signs EIP-712 (no sentinel) and the executor submits execTransaction", async () => {
+    const step = makeStep(1, true, EXECUTOR);
+    const state = makeState(step);
+    const hooks = makeHooks(state);
+    const sendCalls = prepareStepSendCalls(walletClient, step, state, hooks);
+
+    const [hash] = await sendCalls("swap", 10, SAFE, CALLS, "atomic-steps", undefined);
+
+    expect(hash).toBe("0xexechash");
+    // The sentinel is invalid when msg.sender ≠ owner, so exactly one EIP-712
+    // signature is requested FROM THE OWNER — still no service round-trip.
+    expect(signSafeTx).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(signSafeTx).mock.calls[0][4]).toBe(OWNER);
+    expect(proposeSafeTx).not.toHaveBeenCalled();
+    // execTransaction goes out from the separate executor, not the owner.
+    const [txId, chainId, from, calls] = eoaSend.mock.calls[0];
+    expect([txId, chainId, from]).toEqual(["swap", 10, EXECUTOR]);
+    expect(calls[0].to).toBe(SAFE);
+    expect(calls[0].data).toContain("6a761202"); // execTransaction selector
+    expect(hooks.persisted.at(-1)).toMatchObject({ status: "executed", executor: EXECUTOR });
+  });
+
+  test("resume: a persisted owner sentinel is foreign to the executor — superseded and rebuilt via EIP-712", async () => {
+    const record: SafeProposalRecord = {
+      chainId: 10,
+      safeAddress: SAFE,
+      stepIds: ["step-1"],
+      safeTxHash: `0x${"aa".repeat(32)}` as Hex,
+      safeNonce: 7,
+      tx: { to: EOA, value: "0", data: "0xabcdef", operation: 0 },
+      threshold: 1,
+      confirmations: [{ owner: OWNER, signature: approvedHashSignature(OWNER) }],
+      executor: OWNER,
+      proposedAt: 0,
+      status: "proposed",
+    };
+    const step = makeStep(1, true, EXECUTOR);
+    const state = makeState(step, record);
+    const hooks = makeHooks(state);
+    const sendCalls = prepareStepSendCalls(walletClient, step, state, hooks);
+
+    const [hash] = await sendCalls("swap", 10, SAFE, CALLS, "atomic-steps", undefined);
+
+    expect(hash).toBe("0xexechash");
+    // The pre-feature sentinel can't validate for the executor: the record is
+    // superseded and the step rebuilds with a real owner signature.
+    expect(hooks.persisted[0]).toMatchObject({ status: "superseded" });
+    expect(signSafeTx).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(signSafeTx).mock.calls[0][4]).toBe(OWNER);
+    expect(eoaSend.mock.calls[0][2]).toBe(EXECUTOR);
+    expect(hooks.persisted.at(-1)).toMatchObject({ status: "executed", executor: EXECUTOR });
+  });
+
+  test("N-of-M: proposes with sender = owner and submits execTransaction from the executor", async () => {
+    vi.mocked(readSafeInfo).mockResolvedValue({
+      address: SAFE,
+      owners: [OWNER, CO_SIGNER],
+      threshold: 2,
+      nonce: 7,
+      version: "1.4.1",
+    });
+    vi.mocked(getSafeTx).mockResolvedValue({
+      safeTxHash: "0x00" as Hex,
+      nonce: 7,
+      to: EOA,
+      value: "0",
+      data: "0x",
+      operation: 0,
+      isExecuted: false,
+      isSuccessful: null,
+      transactionHash: null,
+      confirmations: [
+        { owner: OWNER, signature: "0x5170" as Hex, signatureType: "EOA" },
+        { owner: CO_SIGNER, signature: `0x${"11".repeat(65)}` as Hex, signatureType: "EOA" },
+      ],
+      confirmationsRequired: 2,
+    });
+
+    const step = makeStep(2, true, EXECUTOR);
+    const state = makeState(step);
+    const hooks = makeHooks(state);
+    const sendCalls = prepareStepSendCalls(walletClient, step, state, hooks);
+
+    const [hash] = await sendCalls("swap", 10, SAFE, CALLS, "atomic-steps", undefined);
+
+    expect(hash).toBe("0xexechash");
+    // The Transaction Service verifies sender-vs-signature: the proposal is
+    // authored by the signing owner even though the executor submits later.
+    expect(vi.mocked(proposeSafeTx).mock.calls[0][2]).toMatchObject({ sender: OWNER, signature: "0x5170" });
+    expect(eoaSend.mock.calls[0][2]).toBe(EXECUTOR);
+    expect(hooks.persisted.at(-1)).toMatchObject({ status: "executed", executor: EXECUTOR });
+  });
+
+  test("BUILD validates ownership of the OWNER, not the executor", async () => {
+    vi.mocked(readSafeInfo).mockResolvedValue({
+      address: SAFE,
+      owners: [CO_SIGNER], // the marker's owner is not in the owner set
+      threshold: 1,
+      nonce: 7,
+      version: "1.4.1",
+    });
+    const step = makeStep(1, true, EXECUTOR);
+    const state = makeState(step);
+    const sendCalls = prepareStepSendCalls(walletClient, step, state, makeHooks(state));
+
+    await expect(sendCalls("swap", 10, SAFE, CALLS, "atomic-steps", undefined)).rejects.toThrow(
+      new RegExp(`SafeNotOwnerError.*${OWNER}`, "s"),
+    );
+    expect(eoaSend).not.toHaveBeenCalled();
   });
 });
 

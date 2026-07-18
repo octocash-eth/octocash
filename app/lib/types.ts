@@ -138,8 +138,15 @@ export type StepExecution = SafeStepExecution | SmartStepExecution;
 export interface SafeStepExecution {
   via: "safe";
   safeAddress: Address;
-  /** Connected owner EOA that signs, proposes, executes, and pays gas. */
+  /** Connected owner EOA that signs and proposes the Safe transaction. */
   ownerAddress: Address;
+  /**
+   * Connected EOA that submits execTransaction and pays its gas. Stamped at
+   * planning time when the owner can't cover the gas but another connected
+   * wallet can (execTransaction is permissionless once signatures meet the
+   * threshold). Absent ⇒ ownerAddress (pre-feature plans, and the default).
+   */
+  executorAddress?: Address;
   /** Signatures required; 1 ⇒ sign-and-execute immediately, no proposal wait. */
   threshold: number;
   safeVersion: string;
@@ -207,7 +214,7 @@ export interface SafeProposalRecord {
   threshold: number;
   /** Collected owner signatures (ours at minimum; merged from the service while polling). */
   confirmations: { owner: Address; signature: Hex }[];
-  /** Owner EOA that executes (and pays gas for) execTransaction. */
+  /** EOA that submits (and pays gas for) execTransaction — may differ from the signing owner. */
   executor: Address;
   proposedAt: number;
   /** When the underlying swap calldata was quoted (staleness gate before exec). */

@@ -719,7 +719,7 @@ async function tryReconcileFromChain(
           step.execution?.via === "safe" ? state.metadata?.safe?.proposals?.[step.execution.batchId] : undefined;
         const broadcaster =
           step.execution?.via === "safe"
-            ? (proposal?.executor ?? step.execution.ownerAddress)
+            ? (proposal?.executor ?? step.execution.executorAddress ?? step.execution.ownerAddress)
             : (step.inputTokens[0]?.walletAddress ?? step.outputToken.walletAddress);
         try {
           const latest = await retryOnRateLimit(() =>

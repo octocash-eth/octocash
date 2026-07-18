@@ -663,6 +663,48 @@ describe("executeConsolidationPlan", () => {
     expect(executeDeloraSwap).not.toHaveBeenCalled();
   });
 
+  test("Safe step nonce probe targets the plan-stamped executor, not the owner", async () => {
+    const EXECUTOR = "0x4444444444444444444444444444444444444444" as Address;
+    const swapStep: TransactionStep = {
+      id: "swap-1",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_ADDRESS, 1000000n, 1, { walletAddress: WALLET })],
+      outputToken: makeToken(USDC_ADDRESS, 1000000n, 1),
+      transactionHash: "0xreplaced",
+      retryHints: { nonce: 7, maxFeePerGas: 10000000000n },
+      execution: {
+        via: "safe",
+        safeAddress: WALLET,
+        ownerAddress: "0x1111111111111111111111111111111111111111" as Address,
+        executorAddress: EXECUTOR,
+        threshold: 1,
+        safeVersion: "1.4.1",
+        batchId: "batch-1",
+      },
+    };
+
+    mockState.plan = [swapStep];
+
+    class TransactionReceiptNotFoundError extends Error {
+      override name = "TransactionReceiptNotFoundError";
+    }
+    const getTransactionCount = vi.fn().mockResolvedValue(8);
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockRejectedValue(new TransactionReceiptNotFoundError("not found")),
+      getTransactionCount,
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any);
+
+    await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    // The broadcaster of a separated Safe step is the stamped executor — its
+    // account nonce, not the owner's, tells whether our tx was replaced.
+    expect(getTransactionCount).toHaveBeenCalledWith(expect.objectContaining({ address: EXECUTOR }));
+  });
+
   test("bridge retry does not falsely reconcile from an approve receipt", async () => {
     // The exact production failure the user hit: a bridge step's first attempt
     // landed the approve on chain but the burn submission was rejected by the

@@ -12,6 +12,7 @@ import { chains } from "~/data/supported-chains";
 import type { StepLiveProgress } from "~/hooks/use-consolidation-execution";
 import { consolidateTokenAmounts } from "~/lib/tokens";
 import type { StepGasEstimate, StepResult, TokenAmount, TransactionStep } from "~/lib/types";
+import { formatAddress } from "~/lib/utils";
 import { ChainIcon } from "../chain/chain-icon";
 
 interface PlanCardProps {
@@ -428,14 +429,22 @@ function SafeExecutionBadge({ step, showQueueLink }: { step: TransactionStep; sh
   }
 
   const queueUrl = safeAppQueueUrl(step.chainId, execution.safeAddress);
+  const separateExecutor =
+    execution.executorAddress && execution.executorAddress.toLowerCase() !== execution.ownerAddress.toLowerCase()
+      ? execution.executorAddress
+      : undefined;
   return (
     <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
       <span
         className="rounded-full border border-border bg-muted/50 px-1.5 py-px"
-        title={`Executes as a Safe transaction (${execution.threshold} signature${execution.threshold > 1 ? "s" : ""} required)`}
+        title={
+          `Executes as a Safe transaction (${execution.threshold} signature${execution.threshold > 1 ? "s" : ""} required)` +
+          (separateExecutor ? `, submitted and gas paid by ${separateExecutor}` : "")
+        }
       >
         Safe {execution.threshold > 1 ? `${execution.threshold}✕` : ""}
       </span>
+      {separateExecutor && <span className="text-muted-foreground/70">via {formatAddress(separateExecutor)}</span>}
       {showQueueLink && execution.threshold > 1 && queueUrl && (
         <a
           href={queueUrl}

@@ -108,7 +108,7 @@ async function reconcileGasGaps(
   balances: NativeBalances,
   log: (...args: unknown[]) => void,
   accounts?: AccountsMap,
-): Promise<GasGaps> {
+): Promise<{ gaps: GasGaps; requirements: Map<string, bigint> }> {
   const gaps: GasGaps = new Map();
   // Gas is charged to whoever SIGNS the step: the wallet itself for EOAs, the
   // owner EOA for Safe steps (execTransaction's msg.sender pays). Native
@@ -136,7 +136,7 @@ async function reconcileGasGaps(
       continue;
     const wallet = step.inputTokens[0]?.walletAddress;
     if (!wallet) continue;
-    const gasPayer = executorFor(accounts, wallet);
+    const gasPayer = stepGasPayer(step, accounts);
     groupFor(step.chainId, gasPayer).gasWei += step.estimatedGas?.gasCostWei ?? 0n;
     for (const input of step.inputTokens) {
       if (
@@ -171,7 +171,82 @@ async function reconcileGasGaps(
     );
   }
 
-  return gaps;
+  const requirements = new Map<string, bigint>();
+  for (const [key, group] of groups) requirements.set(key, group.gasWei + group.nativeSpendWei);
+  return { gaps, requirements };
+}
+
+/**
+ * Who pays a step's gas: the plan-stamped executor for Safe steps (see
+ * {@link assignSafeExecutors}), otherwise {@link executorFor}'s default —
+ * the owner EOA for a Safe, the wallet itself for an EOA or smart account.
+ */
+function stepGasPayer(step: TransactionStep, accounts: AccountsMap | undefined): Address {
+  if (step.execution?.via === "safe") return step.execution.executorAddress ?? step.execution.ownerAddress;
+  return executorFor(accounts, step.inputTokens[0].walletAddress);
+}
+
+/**
+ * Prefers a separate executor over a refuel: when a Safe's gas payer can't
+ * cover the execTransaction gas on a chain, re-stamps those steps'
+ * `executorAddress` onto another connected plain EOA whose balance covers
+ * them ON TOP of its own obligations, so re-reconciliation shrinks or erases
+ * the gap without bridging a top-up. execTransaction is permissionless once
+ * signatures meet the threshold, so the executor needs no Safe ownership.
+ * All-or-nothing per gap: partial reassignment (per batch group) is a
+ * possible future refinement. Returns whether anything was stamped — the
+ * caller then re-runs {@link reconcileGasGaps} under the new payers, and any
+ * residual gap falls back to the gas-topup path.
+ */
+async function assignSafeExecutors(
+  steps: TransactionStep[],
+  gaps: GasGaps,
+  requirements: Map<string, bigint>,
+  connectedWallets: readonly Address[],
+  accounts: AccountsMap | undefined,
+  balances: NativeBalances,
+  log: (...args: unknown[]) => void,
+): Promise<boolean> {
+  let stamped = false;
+  for (const gap of gaps.values()) {
+    const safeSteps = steps.filter(
+      (step) =>
+        step.chainId === gap.chainId &&
+        step.execution?.via === "safe" &&
+        isAddressEqual(step.execution.executorAddress ?? step.execution.ownerAddress, gap.walletAddress),
+    );
+    if (safeSteps.length === 0) continue; // pure EOA gap — refuel handles it
+    const safeGasWei = safeSteps.reduce((sum, step) => sum + (step.estimatedGas?.gasCostWei ?? 0n), 0n);
+    if (safeGasWei === 0n) continue;
+
+    let chosen: { wallet: Address; balance: bigint } | null = null;
+    for (const wallet of connectedWallets) {
+      // Plain EOAs only: they keep the eoaSend submission semantics (Safes
+      // can't submit for other Safes; smart wallets route via EIP-5792).
+      if (accountFor(accounts, wallet).kind !== "eoa") continue;
+      if (isAddressEqual(wallet, gap.walletAddress)) continue;
+      // The candidate must cover the Safe gas ON TOP of its own gas and
+      // native-value obligations on this chain — never create a new gap.
+      const needed = safeGasWei + (requirements.get(gapKey(gap.chainId, wallet)) ?? 0n);
+      const balance = await getCachedNativeBalance(balances, gap.chainId, wallet);
+      if (balance < needed) continue;
+      // Richest sufficient candidate: deterministic, max headroom for fee drift.
+      if (!chosen || balance > chosen.balance) chosen = { wallet: getAddress(wallet) as Address, balance };
+    }
+    if (!chosen) continue; // no funded candidate — refuel fallback
+
+    for (const step of safeSteps) {
+      if (step.execution?.via === "safe") step.execution.executorAddress = chosen.wallet;
+    }
+    const key = gapKey(gap.chainId, chosen.wallet);
+    requirements.set(key, (requirements.get(key) ?? 0n) + safeGasWei);
+    stamped = true;
+    log(
+      `🔍 [DEBUG] Safe executor reassigned on chain ${gap.chainId}: ${gap.walletAddress} lacks gas, ` +
+        `${chosen.wallet} submits execTransaction for ${safeSteps.length} step(s) (${safeGasWei.toString()} wei)`,
+    );
+  }
+  return stamped;
 }
 
 /**
@@ -2334,6 +2409,7 @@ function assertAccountChainConsistency(steps: TransactionStep[], accounts: Accou
 async function planTransferOnly(
   sourceTokens: TokenAmount[],
   destinationToken: DestinationToken,
+  connectedWallets: readonly Address[],
   log: (...args: unknown[]) => void,
   accounts?: AccountsMap,
 ): Promise<TransactionStep[]> {
@@ -2415,14 +2491,25 @@ async function planTransferOnly(
   tagExecutionSteps(steps, accounts);
   await attachGasEstimates(steps, gasCtx);
   addExecutionGasOverhead(steps);
-  const gaps = await reconcileGasGaps(steps, balances, log, accounts);
+  let { gaps, requirements } = await reconcileGasGaps(steps, balances, log, accounts);
+
+  // Same preference as planConsolidation: a funded connected EOA submits the
+  // Safe's execTransaction before any refuel is considered.
+  if (
+    gaps.size > 0 &&
+    (await assignSafeExecutors(steps, gaps, requirements, connectedWallets, accounts, balances, log))
+  ) {
+    ({ gaps } = await reconcileGasGaps(steps, balances, log, accounts));
+  }
 
   let finalSteps = steps;
   if (gaps.size > 0) {
     const executorAddresses = new Set<Address>();
     executorAddresses.add(getAddress(executorFor(accounts, destinationToken.walletAddress)) as Address);
-    for (const t of sourceTokens) {
-      executorAddresses.add(getAddress(executorFor(accounts, t.walletAddress)) as Address);
+    for (const step of steps) {
+      if (step.inputTokens[0]?.walletAddress) {
+        executorAddresses.add(getAddress(stepGasPayer(step, accounts)) as Address);
+      }
     }
     const gasTopUpSteps = await createGasTopUpSteps(
       gaps,
@@ -2542,7 +2629,7 @@ export async function planConsolidation(
     const sourceWalletSet = new Set(sourceTokens.map((t) => getAddress(t.walletAddress)));
     const destConnected = connectedWallets.some((w) => isAddressEqual(w, destinationToken.walletAddress));
     if (sourceWalletSet.size === 1 || destConnected) {
-      return planTransferOnly(sourceTokens, destinationToken, log, accounts);
+      return planTransferOnly(sourceTokens, destinationToken, connectedWallets, log, accounts);
     }
   }
 
@@ -2759,18 +2846,30 @@ export async function planConsolidation(
   // fallback), then derive gas deficits from the measured numbers.
   await attachGasEstimates(steps, gasCtx, artifacts);
   addExecutionGasOverhead(steps);
-  const gaps = await reconcileGasGaps(steps, balances, log, accounts);
+  let { gaps, requirements } = await reconcileGasGaps(steps, balances, log, accounts);
+
+  // A Safe gas payer with a gap first tries a separate executor: another
+  // connected EOA that already has gas submits execTransaction instead of
+  // bridging a refuel to the owner. One re-reconciliation under the stamped
+  // payers resolves the executor↔gas circularity; residual gaps (the owner's
+  // own claim/EOA steps) still refuel below.
+  if (
+    gaps.size > 0 &&
+    (await assignSafeExecutors(steps, gaps, requirements, connectedWallets, accounts, balances, log))
+  ) {
+    ({ gaps } = await reconcileGasGaps(steps, balances, log, accounts));
+  }
 
   // If any (chain, gas payer) can't cover its own gas, prepend a gas-topup
   // step funded preferentially from the destination wallet, falling back to
   // the richest executor balance across all supported chains. Safe steps'
-  // gas payer is the owner EOA (a real EOA, same address everywhere), so
-  // top-ups never target or draw from a Safe.
+  // gas payer is a real EOA (owner or stamped executor, same address
+  // everywhere), so top-ups never target or draw from a Safe.
   const executorAddresses = new Set<Address>();
   executorAddresses.add(getAddress(executorFor(accounts, intermediateWallet)) as Address);
   for (const step of steps) {
     if (step.inputTokens[0]?.walletAddress) {
-      executorAddresses.add(getAddress(executorFor(accounts, step.inputTokens[0].walletAddress)) as Address);
+      executorAddresses.add(getAddress(stepGasPayer(step, accounts)) as Address);
     }
   }
   const gasTopUpSteps = await createGasTopUpSteps(

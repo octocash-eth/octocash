@@ -187,14 +187,20 @@ export function hashSafeTx(chainId: number, safe: Address, tx: SafeTxData): Hex 
   return hashTypedData(safeTxTypedData(chainId, safe, tx));
 }
 
-/** EIP-712 signature over the SafeTx by the connected owner EOA. */
+/**
+ * EIP-712 signature over the SafeTx, requested from `owner` — which the
+ * connector may expose alongside other accounts (the same multi-account
+ * assumption eoaSend's `from` forwarding relies on), so the signer need not
+ * be the wallet's active account.
+ */
 export async function signSafeTx(
   client: WalletClient<HttpTransport, Chain, ViemAccount>,
   chainId: number,
   safe: Address,
   tx: SafeTxData,
+  owner: Address,
 ): Promise<Hex> {
-  return client.signTypedData({ account: client.account, ...safeTxTypedData(chainId, safe, tx) });
+  return client.signTypedData({ account: owner, ...safeTxTypedData(chainId, safe, tx) });
 }
 
 /**
