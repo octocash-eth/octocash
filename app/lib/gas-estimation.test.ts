@@ -593,6 +593,61 @@ describe("gas-estimation", () => {
       expect(steps[0].estimatedGas?.source).toBe("delora-hint");
     });
 
+    test("keeps measurements from calls after a failed one (per-call failure policy)", async () => {
+      const artifacts = emptyPlanArtifacts();
+      artifacts.swapLegs.set("s1", [
+        {
+          input: baseToken(),
+          call: { to: "0x2222222222222222222222222222222222222222" as Address, data: "0xdeadbeef", value: 0n },
+          approvalAddress: "0x3333333333333333333333333333333333333333" as Address,
+          gasLimitHint: 400_000n,
+        },
+      ]);
+      // The approval reverts (index 0) but the swap's own measurement (index 1)
+      // survives — a reverted call rolls back atomically, so it must not drag
+      // subsequent results down the ladder.
+      mockClient.simulateCalls.mockResolvedValueOnce({
+        results: [
+          { status: "failure", error: new Error("execution reverted") },
+          { status: "success", gasUsed: 200_000n },
+        ],
+      });
+      const steps = [{ ...swapStep }];
+
+      await attachGasEstimates(steps, ctx, artifacts);
+
+      // approval budget 65_000 × 1.3 + swap simulated 200_000 × 1.25
+      expect(steps[0].estimatedGas?.gasUnits).toBe(84_500n + 250_000n);
+      expect(steps[0].estimatedGas?.source).toBe("simulated");
+    });
+
+    test("skips simulating swap calldata from a stale cached quote, keeping the approval", async () => {
+      const artifacts = emptyPlanArtifacts();
+      const leg: DeloraSwapLeg = {
+        input: baseToken(),
+        call: { to: "0x2222222222222222222222222222222222222222" as Address, data: "0xdeadbeef", value: 0n },
+        approvalAddress: "0x3333333333333333333333333333333333333333" as Address,
+        gasLimitHint: 400_000n,
+        // Older than SWAP_SIM_MAX_QUOTE_AGE_MS: RFQ order deadline has passed,
+        // simulating the calldata would revert with RFQ_OrderExpired.
+        quoteFetchedAt: Date.now() - 30_000,
+      };
+      artifacts.swapLegs.set("s1", [leg]);
+      mockClient.simulateCalls.mockResolvedValueOnce({
+        results: [{ status: "success", gasUsed: 46_000n }],
+      });
+      const steps = [{ ...swapStep }];
+
+      await attachGasEstimates(steps, ctx, artifacts);
+
+      // Only the approval reached the batch; the swap resolved via its hint.
+      const params = mockClient.simulateCalls.mock.calls[0][0];
+      expect(params.calls).toHaveLength(1);
+      // approval 46_000 × 1.25 + swap hint 400_000 × 1.15
+      expect(steps[0].estimatedGas?.gasUnits).toBe(57_500n + 460_000n);
+      expect(steps[0].estimatedGas?.source).toBe("delora-hint");
+    });
+
     test("overrides the sender's native balance and the wallet's USDC balance slot", async () => {
       mockClient.simulateCalls.mockResolvedValueOnce({
         results: [{ status: "success", gasUsed: 21_000n }],

@@ -92,7 +92,7 @@ async function fetchSwapQuote(
   outputToken: Pick<TokenAmount, "token" | "chainId">,
   receiverAddress?: Address,
   options?: { cache?: boolean },
-): Promise<DeloraQuote> {
+): Promise<{ quote: DeloraQuote; fetchedAt: number }> {
   const url = new URL(deloraQuoteUrl());
   url.searchParams.set("senderAddress", input.walletAddress);
   url.searchParams.set("originChainId", String(input.chainId));
@@ -112,7 +112,10 @@ async function fetchSwapQuote(
   const cacheKey = url.toString();
   if (options?.cache) {
     const hit = quoteCache.get(cacheKey);
-    if (hit && Date.now() - hit.fetchedAt < QUOTE_CACHE_TTL_MS) return hit.quote;
+    // `fetchedAt` rides along so callers can judge quote age: RFQ-style
+    // adapters embed an on-chain order deadline shorter than the cache TTL,
+    // so a cache hit may be fine for amounts yet stale for simulation.
+    if (hit && Date.now() - hit.fetchedAt < QUOTE_CACHE_TTL_MS) return hit;
   }
 
   const res = await fetch(cacheKey, {
@@ -130,14 +133,15 @@ async function fetchSwapQuote(
     throw new Error(`Request failed (${res.status}): ${detail}`);
   }
   const quote = (await res.json()) as DeloraQuote;
+  const fetchedAt = Date.now();
   if (options?.cache) {
     // Drop expired entries before storing so the map stays bounded.
     for (const [key, entry] of quoteCache) {
       if (Date.now() - entry.fetchedAt >= QUOTE_CACHE_TTL_MS) quoteCache.delete(key);
     }
-    quoteCache.set(cacheKey, { quote, fetchedAt: Date.now() });
+    quoteCache.set(cacheKey, { quote, fetchedAt });
   }
-  return quote;
+  return { quote, fetchedAt };
 }
 
 /**
@@ -184,7 +188,7 @@ export async function buildDeloraCalls(
   for (const input of dedupeSwapInputs(tokensToSwap)) {
     // Nothing to swap for this address; a zero-amount quote would be rejected.
     if (input.amount <= 0n) continue;
-    const quote = await fetchSwapQuote(input, tokenOut);
+    const { quote } = await fetchSwapQuote(input, tokenOut);
     // The integrator fee is already baked into this calldata by Delora (see
     // `fetchSwapQuote`), so the swap is sent verbatim. The spender for the
     // approval is Delora's per-chain entrypoint; `calldata.to` can differ
@@ -402,6 +406,13 @@ export interface DeloraSwapLeg {
   call: { to: Address; data: Hex; value: bigint };
   approvalAddress: Address;
   gasLimitHint?: bigint;
+  /**
+   * Epoch ms when the quote behind `call` was fetched from Delora (a cache
+   * hit reports the original fetch time). RFQ-style adapters embed an
+   * on-chain order deadline ~30s from issuance, so gas simulation skips
+   * calldata older than that. Absent legs are treated as fresh.
+   */
+  quoteFetchedAt?: number;
 }
 
 /**
@@ -447,7 +458,7 @@ export async function getSwapQuoteWithLegs(
       // integrator fee (deducted from the input side), so it's used as-is.
       // Planning-only, so cached: an auto-retried plan reuses quotes that
       // already succeeded instead of re-sweeping every token.
-      const quote = await fetchSwapQuote(token, outputToken, undefined, { cache: true });
+      const { quote, fetchedAt } = await fetchSwapQuote(token, outputToken, undefined, { cache: true });
       outputAmount += BigInt(quote.outputAmount);
       legs.push({
         input: token,
@@ -458,6 +469,7 @@ export async function getSwapQuoteWithLegs(
         },
         approvalAddress: quote.approvalAddress ?? quote.calldata.to,
         gasLimitHint: quote.gas?.gasLimit ? BigInt(quote.gas.gasLimit) : undefined,
+        quoteFetchedAt: fetchedAt,
       });
     }
     return {
@@ -511,12 +523,14 @@ export async function getDeloraRefuelQuote(
   from: Address,
   to: Address,
 ): Promise<import("./gas-refuel").GasRefuelQuote> {
-  const quoteAt = (amount: bigint) =>
-    fetchSwapQuote(
+  const quoteAt = async (amount: bigint) => {
+    const { quote } = await fetchSwapQuote(
       { token: zeroAddress, amount, chainId: fromChainId, walletAddress: from },
       { token: zeroAddress, chainId: toChainId },
       to,
     );
+    return quote;
+  };
 
   const probe = await quoteAt(targetOutputWei);
   const probeOut = BigInt(probe.outputAmount);

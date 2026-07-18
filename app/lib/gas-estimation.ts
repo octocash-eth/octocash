@@ -622,9 +622,21 @@ interface OpGasResult {
 }
 
 /**
+ * Delora's RFQ-style adapters (RELAY, OKX RFQ) embed an on-chain order
+ * deadline ~30s from quote issuance in the calldata itself. A cache-served
+ * quote older than this is guaranteed to revert in simulation
+ * (`RFQ_OrderExpired`), so such legs skip the batch call and resolve through
+ * the `gasLimit` hint instead.
+ */
+const SWAP_SIM_MAX_QUOTE_AGE_MS = 20_000;
+
+/**
  * Builds SimOps for a set of Delora swap legs: each ERC20 leg gets an approval
  * call (to the quote's spender) before the verbatim quote calldata; the leg's
- * `gasLimit` hint rides along as the first fallback rung.
+ * `gasLimit` hint rides along as the first fallback rung. Legs whose quote is
+ * older than {@link SWAP_SIM_MAX_QUOTE_AGE_MS} keep the approval (its gas is
+ * quote-age independent) but drop the swap call — expired RFQ calldata can
+ * only waste the batch.
  */
 export function buildSwapLegSimOps(legs: DeloraSwapLeg[]): SimOp[] {
   const ops: SimOp[] = [];
@@ -642,7 +654,8 @@ export function buildSwapLegSimOps(legs: DeloraSwapLeg[]): SimOp[] {
         },
       });
     }
-    ops.push({ op: "swap", call: leg.call, hint: leg.gasLimitHint });
+    const stale = leg.quoteFetchedAt !== undefined && Date.now() - leg.quoteFetchedAt > SWAP_SIM_MAX_QUOTE_AGE_MS;
+    ops.push(stale ? { op: "swap", hint: leg.gasLimitHint } : { op: "swap", call: leg.call, hint: leg.gasLimitHint });
   }
   return ops;
 }
@@ -880,10 +893,12 @@ function buildStepSimOps(step: TransactionStep, artifacts: PlanArtifacts): SimOp
  * source chains) doesn't exist at simulation time but will at execution.
  * Allowances are NOT overridden: approvals execute inside the batch.
  *
- * Failure policy mirrors `simulateSwapDelivery`: a failed call inside the
- * batch invalidates the simulated state, so that call and everything after it
- * fall down the ladder; a thrown batch (RPC without `eth_simulateV1`) degrades
- * the whole group — never the plan.
+ * Failure policy: a failed call inside the batch falls down the ladder alone —
+ * eth_simulateV1 reverts atomically per call, so the remaining calls still
+ * execute against a coherent state and keep their measurements (a doomed
+ * Delora swap at index 0 must not discard the bridge measurements behind it).
+ * A thrown batch (RPC without `eth_simulateV1`) degrades the whole group —
+ * never the plan.
  */
 async function resolveGroupOpGas(
   chainId: number,
@@ -921,9 +936,13 @@ async function resolveGroupOpGas(
       for (let i = 0; i < results.length && i < positions.length; i++) {
         const result = results[i] as { status: "success" | "failure"; gasUsed?: bigint };
         if (result.status !== "success" || result.gasUsed === undefined) {
-          // Post-failure simulated state is unreliable — everything from this
-          // call onward falls down the ladder; earlier results are kept.
-          break;
+          // A reverted call rolls back atomically, so later calls still run
+          // against a coherent state: only this call falls down the ladder.
+          // Ops that depended on its output (e.g. a relay consuming a failed
+          // swap's proceeds) revert in turn and degrade individually —
+          // ERC20/bridge calls revert rather than cheap-succeed on missing
+          // funds, so surviving successes are real measurements.
+          continue;
         }
         const { entryIdx, opIdx } = positions[i];
         simulated[entryIdx][opIdx] = result.gasUsed;
