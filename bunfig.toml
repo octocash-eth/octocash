@@ -1,0 +1,3 @@
+[test]
+# `bun test` is not supported — tests need vitest (see test/enforce-vitest.ts)
+preload = ["./test/enforce-vitest.ts"]
