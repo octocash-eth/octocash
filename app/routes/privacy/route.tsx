@@ -6,7 +6,7 @@ import { generateMeta } from "~/utils/meta";
 export function meta() {
   return generateMeta({
     title: "Privacy Policy",
-    description: "Privacy Policy for OctoCash - cross-chain token consolidation.",
+    description: "Privacy Policy for Octocash - cross-chain token consolidation.",
     url: "/privacy",
     noIndex: true,
   });
@@ -27,7 +27,7 @@ export default function PrivacyPolicy() {
           <p>
             This Privacy Policy describes how OtoCo WY LLC - Octocash - Series 435, a Wyoming limited liability company
             (&quot;Company,&quot; &quot;we,&quot; &quot;us,&quot; or &quot;our&quot;), collects, uses, and shares
-            information in connection with the OctoCash website and application located at{" "}
+            information in connection with the Octocash website and application located at{" "}
             <a href="https://octo.cash" target="_blank" rel="noopener noreferrer">
               https://octo.cash
             </a>{" "}
@@ -40,7 +40,7 @@ export default function PrivacyPolicy() {
 
           <h2>1. Information We Collect</h2>
           <p>
-            OctoCash is designed with privacy in mind. We minimize data collection to what is strictly necessary for the
+            Octocash is designed with privacy in mind. We minimize data collection to what is strictly necessary for the
             Service to function.
           </p>
           <h3>Information you provide</h3>
@@ -141,7 +141,7 @@ export default function PrivacyPolicy() {
 
           <h2>4. Data Storage</h2>
           <p>
-            OctoCash is a client-side application. We do not operate a server-side database that stores your personal
+            Octocash is a client-side application. We do not operate a server-side database that stores your personal
             data. The Service stores minimal preferences locally on your device using browser localStorage, including:
           </p>
           <ul>

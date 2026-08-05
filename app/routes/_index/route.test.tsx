@@ -113,7 +113,7 @@ vi.mock("~/components/ui/accordion", () => ({
 // Mock meta utilities
 vi.mock("~/utils/meta", () => ({
   generateMeta: vi.fn(() => [
-    { title: "OctoCash - Consolidate Your Tokens" },
+    { title: "Octocash - Consolidate Your Tokens" },
     { name: "description", content: "Test description" },
   ]),
 }));
@@ -122,7 +122,7 @@ vi.mock("~/utils/structured-data", () => ({
   generateHomepageStructuredData: vi.fn(() => ({
     "@context": "https://schema.org",
     "@type": "WebSite",
-    name: "OctoCash",
+    name: "Octocash",
   })),
   structuredDataToMetaTags: vi.fn((data) => [
     {
@@ -137,13 +137,13 @@ describe("Home route - Unit tests", () => {
       const result = meta();
 
       expect(result).toEqual([
-        { title: "OctoCash - Consolidate Your Tokens" },
+        { title: "Octocash - Consolidate Your Tokens" },
         { name: "description", content: "Test description" },
         {
           "script:ld+json": {
             "@context": "https://schema.org",
             "@type": "WebSite",
-            name: "OctoCash",
+            name: "Octocash",
           },
         },
       ]);

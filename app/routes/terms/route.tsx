@@ -6,7 +6,7 @@ import { generateMeta } from "~/utils/meta";
 export function meta() {
   return generateMeta({
     title: "Terms of Service",
-    description: "Terms of Service for OctoCash - cross-chain token consolidation.",
+    description: "Terms of Service for Octocash - cross-chain token consolidation.",
     url: "/terms",
     noIndex: true,
   });
@@ -25,7 +25,7 @@ export default function TermsOfService() {
           <p className="text-muted-foreground">Last updated: June 16, 2026</p>
 
           <p>
-            These Terms of Service (&quot;Terms&quot;) govern your access to and use of the OctoCash website and
+            These Terms of Service (&quot;Terms&quot;) govern your access to and use of the Octocash website and
             application located at{" "}
             <a href="https://octo.cash" target="_blank" rel="noopener noreferrer">
               https://octo.cash
@@ -40,7 +40,7 @@ export default function TermsOfService() {
 
           <h2>1. Description of Service</h2>
           <p>
-            OctoCash is a non-custodial, cross-chain token consolidation interface. The Service allows users to view
+            Octocash is a non-custodial, cross-chain token consolidation interface. The Service allows users to view
             token balances across multiple blockchain networks and consolidate them into a single wallet address on a
             chosen destination chain. The Service coordinates token swaps through Delora (a token routing and swap
             protocol) and cross-chain bridges through Circle&apos;s Cross-Chain Transfer Protocol v2 (CCTPv2).
@@ -165,7 +165,7 @@ export default function TermsOfService() {
             </li>
           </ul>
           <p>
-            A small portion of swap and bridge fees supports the continued development and operation of OctoCash. All
+            A small portion of swap and bridge fees supports the continued development and operation of Octocash. All
             applicable fees are shown upfront before you approve any transaction. The Company reserves the right to
             modify the fee structure at any time, with updated fees displayed in the Service interface.
           </p>

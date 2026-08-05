@@ -71,9 +71,14 @@ export const FAQ_CONTENT = {
 
 export const FAQ_ITEMS = [
   {
+    question: "What is Octocash?",
+    answer:
+      "Octocash is a non-custodial app that consolidates your tokens scattered across multiple chains into a single wallet, token, and chain of your choice. Octo shows your tokens, you pick what to consolidate and where to send it, and Octo presents a plan with the swaps and bridges. As you sign them, the plan updates live until your treasures reach their destination, all through trusted protocols like Circle's CCTP, Delora, and the Gnosis Omnibridge.",
+  },
+  {
     question: "Which chains does Octo support?",
     answer:
-      "Octo currently supports Ethereum, Polygon, Arbitrum One, Optimism, Base, Unichain, and Linea Mainnet. We're constantly working to add more chains to help you consolidate tokens wherever they are.",
+      "Octo currently supports Ethereum, Polygon, Arbitrum One, Optimism, Base, Unichain, Linea Mainnet, and Gnosis. We're constantly working to add more chains to help you consolidate tokens wherever they are.",
   },
   {
     question: "Does Octo decide which tokens to consolidate?",
@@ -83,7 +88,7 @@ export const FAQ_ITEMS = [
   {
     question: "Are there fees when consolidating?",
     answer:
-      "Yes. On top of gas fees, you'll pay: 0.1% on token swaps (plus each route's own costs, shown in the quote), 0.01% for USDC bridges (0.14% on Linea), and 0.25% when shielding into Railgun (charged by the Railgun protocol). These fees go to the protocols (Delora, CCTP, and Railgun), with a small portion supporting Octo. All costs are shown upfront.",
+      "Yes. On top of gas fees, you'll pay: 0.25% on token swaps (0.15% Delora protocol fee + 0.1% supporting Octo), around 0.01-0.02% for USDC bridges (0.13% when bridging out of Linea), as quoted live from Circle, and 0.25% when shielding into Railgun (charged by the Railgun protocol). These fees go to the protocols (Delora, CCTP, and Railgun), with a small portion supporting Octo. All costs are shown upfront.",
   },
   {
     question: "Is it safe?",
@@ -101,9 +106,9 @@ export const FAQ_ITEMS = [
       "Yes. You can consolidate into a private Railgun (0zk) address, which shields your tokens inside Railgun's privacy pool. It's available on Ethereum, Polygon, and Arbitrum, and works with any ERC20 — though WETH, USDC, and WBTC are suggested for the best privacy since they have the largest pools (native coins like ETH can't be shielded). Railgun charges a 0.25% shield fee, and it stays fully non-custodial. This integration is currently in beta.",
   },
   {
-    question: "Who operates OctoCash?",
+    question: "Who operates Octocash?",
     answer:
-      "OctoCash is operated by OtoCo WY LLC - Octocash - Series 435, a Wyoming limited liability company. For full details, see our Terms of Service.",
+      "Octocash is operated by OtoCo WY LLC - Octocash - Series 435, a Wyoming limited liability company. For full details, see our Terms of Service.",
   },
 ];
 

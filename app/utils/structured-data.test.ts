@@ -415,13 +415,14 @@ describe("structured-data utils", () => {
     test("FAQ schema includes all expected questions", () => {
       const faqSchema = generateFAQPageSchema() as SchemaType;
       const expectedQuestions = [
+        "What is Octocash?",
         "Which chains does Octo support?",
         "Does Octo decide which tokens to consolidate?",
         "Are there fees when consolidating?",
         "Is it safe?",
         "Can I choose where my tokens end up?",
         "Can I consolidate privately?",
-        "Who operates OctoCash?",
+        "Who operates Octocash?",
       ];
 
       const actualQuestions = faqSchema.mainEntity.map((entity: SchemaType) => entity.name);
