@@ -13,6 +13,9 @@ vi.mock("./delora", async () => {
     executeDeloraSwap: vi.fn(),
     getSwapQuote: vi.fn(),
     buildDeloraCalls: vi.fn(),
+    executeDeloraCrossChainSwap: vi.fn(),
+    getCrossChainSwapQuoteWithLegs: vi.fn(),
+    waitForCrossChainDelivery: vi.fn(),
   };
 });
 vi.mock("./cctp");
@@ -51,7 +54,14 @@ vi.mock("./gas", () => ({
 import { estimateGas, waitForTransactionReceipt } from "viem/actions";
 import { FOREIGN_OMNIBRIDGE, USDC_ON_XDAI } from "~/data/omnibridge-contracts";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
-import { executeDeloraSwap, getSwapQuote } from "./delora";
+import {
+  type CrossChainDeliveryRecord,
+  executeDeloraCrossChainSwap,
+  executeDeloraSwap,
+  getCrossChainSwapQuoteWithLegs,
+  getSwapQuote,
+  waitForCrossChainDelivery,
+} from "./delora";
 import {
   estimateRemainingChainOps,
   executeConsolidationPlan,
@@ -4235,5 +4245,284 @@ describe("estimateRemainingChainOps - omnibridge ops", () => {
     const state = makeState({ plan: [step], sourceTokens: [], destinationToken: makeToken(USDC_MAINNET, 0n, 1) });
 
     expect(estimateRemainingChainOps(step, state)).toEqual(["omnibridge-claim", "omnibridge-claim"]);
+  });
+});
+
+describe("crosschain swap steps", () => {
+  const DAI_MAINNET = "0x6B175474E89094C44Da98b954EedeAC495271d0F" as Address;
+  const USDC_MAINNET = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" as Address;
+  const USDC_POLYGON = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359" as Address;
+  const RECEIVER = "0x0000000000000000000000000000000000000909" as Address;
+  const POLYGON = 137;
+
+  const makeDeliveryRecord = (overrides?: Partial<CrossChainDeliveryRecord>): CrossChainDeliveryRecord => ({
+    txHash: "0xcxswap",
+    fromChainId: 1,
+    toChainId: POLYGON,
+    toAddress: RECEIVER,
+    tokenAddress: USDC_POLYGON,
+    baselineUnits: "0",
+    minDeliveredUnits: "4925000",
+    expectedUnits: "4950000",
+    ...overrides,
+  });
+
+  let mockState: ConsolidationState;
+  let mockWalletClient: WalletClient<HttpTransport, Chain, Account>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    mockWalletClient = {
+      account: { address: WALLET } as Account,
+      chain: { id: 1 } as Chain,
+      switchChain: vi.fn(),
+      addChain: vi.fn(),
+    } as unknown as WalletClient<HttpTransport, Chain, Account>;
+
+    vi.mocked(getPublicClient).mockImplementation(
+      () => ({ readContract: vi.fn().mockResolvedValue(2n ** 128n) }) as never,
+    );
+    vi.mocked(getNativeBalance).mockResolvedValue(2n ** 128n);
+    vi.mocked(prepareSendCalls).mockReturnValue(vi.fn().mockResolvedValue(["0xtxhash", []]));
+
+    // Pre-execution refresh: pass-through, like the getSwapQuote default.
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockImplementation(async (_inputs, outputToken) => {
+      const ot = outputToken as TokenAmount;
+      return { output: { ...ot, amount: ot.amount ?? 0n }, legs: [], minOutputAmount: ot.amount ?? 0n };
+    });
+    vi.mocked(executeDeloraCrossChainSwap).mockResolvedValue({
+      expectedAmount: 4950000n,
+      minDeliveredAmount: 4925000n,
+      transactionHash: "0xcxswap",
+    });
+    vi.mocked(waitForCrossChainDelivery).mockResolvedValue(4940000n);
+
+    mockState = {
+      id: "test-crosschain",
+      plan: [],
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens: [],
+      destinationToken: makeToken(USDC_POLYGON, 0n, POLYGON, { walletAddress: RECEIVER }),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+  });
+
+  const makeCrossChainSwapStep = (overrides?: Partial<TransactionStep>): TransactionStep => ({
+    id: "cx-1",
+    type: "crosschain-swap",
+    status: "pending",
+    chainId: 1,
+    inputTokens: [makeToken(DAI_MAINNET, 5000000n, 1, { symbol: "DAI", decimals: 18 })],
+    outputToken: makeToken(USDC_POLYGON, 4900000n, POLYGON, { walletAddress: RECEIVER, provenance: "cx-1" }),
+    quotedAt: Date.now(), // fresh — skip the pre-execution refresh by default
+    ...overrides,
+  });
+
+  test("crosschain-swap executes with the receiver, carries the quote forward, and persists a delivery record", async () => {
+    mockState.plan = [makeCrossChainSwapStep()];
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.status).toBe("completed");
+    expect(executeDeloraCrossChainSwap).toHaveBeenCalledWith(
+      [expect.objectContaining({ token: DAI_MAINNET, chainId: 1, amount: 5000000n })],
+      expect.objectContaining({ token: USDC_POLYGON, chainId: POLYGON, walletAddress: RECEIVER }),
+      RECEIVER,
+      expect.any(Function),
+      undefined,
+    );
+
+    const result = finalState.results["cx-1"];
+    expect(result.status).toBe("success");
+    expect(result.transactionHash).toBe("0xcxswap");
+    // Origin receipts can't reveal the destination output — the fresh quote
+    // stands until the crosschain-wait measures the real delivery.
+    expect(result.actualOutput?.amount).toBe(4950000n);
+    expect(result.actualOutput?.provenance).toBe("cx-1");
+
+    const deliveries = finalState.metadata?.crosschain?.deliveries;
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries?.[0]).toMatchObject({
+      txHash: "0xcxswap",
+      fromChainId: 1,
+      toChainId: POLYGON,
+      toAddress: RECEIVER,
+      tokenAddress: USDC_POLYGON,
+      baselineUnits: (2n ** 128n).toString(), // receiver balance read before the send
+      minDeliveredUnits: "4925000",
+      expectedUnits: "4950000",
+    });
+  });
+
+  test("crosschain-wait waits on its own provenance records only and adopts the measured delivery", async () => {
+    const swapStep = makeCrossChainSwapStep({ status: "success" });
+    const waitStep: TransactionStep = {
+      id: "cx-wait",
+      type: "crosschain-wait",
+      status: "pending",
+      chainId: POLYGON,
+      inputTokens: [makeToken(USDC_POLYGON, 4950000n, POLYGON, { walletAddress: RECEIVER, provenance: "cx-1" })],
+      outputToken: makeToken(USDC_POLYGON, 4950000n, POLYGON, { walletAddress: RECEIVER, provenance: "cx-wait" }),
+    };
+    const own = makeDeliveryRecord();
+    const foreign = makeDeliveryRecord({ txHash: "0xunrelated" });
+    mockState.plan = [swapStep, waitStep];
+    mockState.results = {
+      "cx-1": {
+        stepId: "cx-1",
+        status: "success",
+        chainId: 1,
+        transactionHash: "0xcxswap",
+        actualOutput: swapStep.outputToken,
+      },
+    };
+    mockState.metadata = { crosschain: { deliveries: [own, foreign] } };
+    mockState.currentStepIndex = 1;
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.status).toBe("completed");
+    expect(waitForCrossChainDelivery).toHaveBeenCalledWith([own], undefined, undefined, expect.any(Function));
+    const result = finalState.results["cx-wait"];
+    expect(result.status).toBe("success");
+    // The wait corrects the quoted amount to the measured balance delta.
+    expect(result.actualOutput?.amount).toBe(4940000n);
+    expect(result.actualOutput?.provenance).toBe("cx-wait");
+  });
+
+  test("crosschain-wait is skipped when every upstream crosschain-swap failed", async () => {
+    const swapStep = makeCrossChainSwapStep({ status: "failed" });
+    const waitStep: TransactionStep = {
+      id: "cx-wait",
+      type: "crosschain-wait",
+      status: "pending",
+      chainId: POLYGON,
+      inputTokens: [makeToken(USDC_POLYGON, 4950000n, POLYGON, { walletAddress: RECEIVER, provenance: "cx-1" })],
+      outputToken: makeToken(USDC_POLYGON, 4950000n, POLYGON, { walletAddress: RECEIVER, provenance: "cx-wait" }),
+    };
+    mockState.plan = [swapStep, waitStep];
+    mockState.results = { "cx-1": { stepId: "cx-1", status: "failed", chainId: 1 } };
+    mockState.currentStepIndex = 1;
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.results["cx-wait"].status).toBe("skipped");
+    expect(waitForCrossChainDelivery).not.toHaveBeenCalled();
+  });
+
+  test("crosschain-wait timeout pauses the plan with a recoverable CROSSCHAIN_DELIVERY_TIMEOUT", async () => {
+    vi.mocked(waitForCrossChainDelivery).mockRejectedValue(
+      new Error("CROSSCHAIN_DELIVERY_TIMEOUT: Cross-chain swap delivery confirmation timed out"),
+    );
+    const waitStep: TransactionStep = {
+      id: "cx-wait",
+      type: "crosschain-wait",
+      status: "pending",
+      chainId: POLYGON,
+      inputTokens: [makeToken(USDC_POLYGON, 4950000n, POLYGON, { walletAddress: RECEIVER })],
+      outputToken: makeToken(USDC_POLYGON, 4950000n, POLYGON, { walletAddress: RECEIVER, provenance: "cx-wait" }),
+    };
+    mockState.plan = [waitStep];
+    mockState.metadata = { crosschain: { deliveries: [makeDeliveryRecord()] } };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.status).toBe("paused");
+    const result = finalState.results["cx-wait"];
+    expect(result.status).toBe("failed");
+    expect(result.error?.code).toBe("CROSSCHAIN_DELIVERY_TIMEOUT");
+    expect(result.error?.recoverable).toBe(true);
+  });
+
+  test("stale crosschain-swap quotes refresh before execution and pause on drift beyond tolerance", async () => {
+    // No quotedAt — the refresh gate fires. The fresh cross-chain quote
+    // under-delivers the planned 4900000 by far more than the 0.5% tolerance.
+    mockState.plan = [makeCrossChainSwapStep({ quotedAt: undefined })];
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockImplementation(async (_inputs, outputToken) => {
+      const ot = outputToken as TokenAmount;
+      return { output: { ...ot, amount: 4000000n }, legs: [], minOutputAmount: 4000000n };
+    });
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    expect(finalState.status).toBe("paused");
+    const result = finalState.results["cx-1"];
+    expect(result.status).toBe("failed");
+    expect(result.error?.code).toBe("SLIPPAGE_EXCEEDED");
+    // The plan shows reality: the step now carries the fresh (degraded) quote.
+    expect(finalState.plan[0].outputToken.amount).toBe(4000000n);
+    expect(executeDeloraCrossChainSwap).not.toHaveBeenCalled();
+  });
+
+  test("reconciles a crosschain-swap from its receipt and reconstructs a missing delivery record", async () => {
+    // Retry of a previously-broadcast crosschain-swap whose metadata write was
+    // lost (executor died between broadcast and persist). The receipt confirms
+    // success; the delivery record must be rebuilt so the wait can complete.
+    mockState.plan = [makeCrossChainSwapStep({ transactionHash: "0xpreviouslybroadcast" })];
+
+    vi.mocked(getPublicClient).mockReturnValueOnce({
+      readContract: vi.fn().mockResolvedValue(2n ** 128n),
+      getTransactionReceipt: vi.fn().mockResolvedValue({ status: "success", logs: [] }),
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub for verify-before-retry
+    } as any);
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+    const result = finalState.results["cx-1"];
+    expect(result.status).toBe("success");
+    expect(result.transactionHash).toBe("0xpreviouslybroadcast");
+    expect(result.actualOutput?.amount).toBe(4900000n); // quoted amount stands
+    expect(executeDeloraCrossChainSwap).not.toHaveBeenCalled();
+
+    const deliveries = finalState.metadata?.crosschain?.deliveries;
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries?.[0]).toMatchObject({
+      txHash: "0xpreviouslybroadcast",
+      toAddress: RECEIVER,
+      tokenAddress: USDC_POLYGON,
+      baselineUnits: "0",
+      // Floor reconstructed as quoted × (1 − slippage tolerance): 4900000 × 0.995.
+      minDeliveredUnits: "4875500",
+      expectedUnits: "4900000",
+    });
+  });
+
+  test("recalculatePlan re-quotes a downstream crosschain-swap through the cross-chain quote", async () => {
+    // A same-chain swap completes with a larger-than-planned output; the
+    // dependent crosschain-swap must re-quote via the cross-chain entry point
+    // (getSwapQuote would throw on the chain mismatch).
+    const originSwap: TransactionStep = {
+      id: "swap-0",
+      type: "swap",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [makeToken(USDC_MAINNET, 1000000n, 1)],
+      outputToken: makeToken(DAI_MAINNET, 5000000n, 1, { symbol: "DAI", decimals: 18, provenance: "swap-0" }),
+      quotedAt: Date.now(),
+    };
+    const crossChain = makeCrossChainSwapStep({
+      inputTokens: [makeToken(DAI_MAINNET, 5000000n, 1, { symbol: "DAI", decimals: 18, provenance: "swap-0" })],
+    });
+    mockState.plan = [originSwap, crossChain];
+    vi.mocked(executeDeloraSwap).mockResolvedValue({ amount: 6000000n, transactionHash: "0xswap" });
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockImplementation(async (inputs, outputToken) => {
+      const total = (Array.isArray(inputs) ? inputs : [inputs]).reduce((sum, t) => sum + t.amount, 0n);
+      const ot = outputToken as TokenAmount;
+      // 5:4.9 ratio approximation — enough to observe the re-quote happening.
+      return { output: { ...ot, amount: (total * 98n) / 100n }, legs: [], minOutputAmount: 0n };
+    });
+
+    const { values } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient), 3);
+
+    // After the origin swap completes with 6000000, the crosschain step's
+    // inputs and output must reflect the recalculated amounts.
+    const afterSwap = values[values.length - 1];
+    const recalculated = afterSwap.plan[1];
+    expect(recalculated.inputTokens[0].amount).toBe(6000000n);
+    expect(recalculated.outputToken.amount).toBe((6000000n * 98n) / 100n);
   });
 });

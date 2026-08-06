@@ -7,6 +7,7 @@ import { getNativeBalance } from "~/lib/gas";
 import {
   attestationStageMessage,
   chainNameOf,
+  crosschainStageMessage,
   omnibridgeStageMessage,
   refuelStageMessage,
   safeStageMessage,
@@ -32,10 +33,11 @@ export interface StepLiveProgress {
 export type LiveProgress = Record<string, StepLiveProgress>;
 
 /** Step types that have an observable wait we surface progress for. */
-const WAIT_STEP_TYPES = new Set(["gas-topup-wait", "attestation", "gnosis-wait"]);
+const WAIT_STEP_TYPES = new Set(["gas-topup-wait", "attestation", "gnosis-wait", "crosschain-wait"]);
 const defaultStageFor = (type: string): string => {
   if (type === "attestation") return "Waiting for Circle attestation…";
   if (type === "gnosis-wait") return "Waiting for the Omnibridge…";
+  if (type === "crosschain-wait") return "Waiting for delivery…";
   return "Delivering gas…";
 };
 
@@ -87,6 +89,8 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
         stage = refuelStageMessage(Object.values(byTx));
       } else if (e.kind === "omnibridge") {
         stage = omnibridgeStageMessage(e.direction, e.ready, e.total);
+      } else if (e.kind === "crosschain") {
+        stage = crosschainStageMessage(e.chainId, e.ready, e.total);
       } else {
         stage = attestationStageMessage(e.received, e.total);
       }

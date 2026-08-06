@@ -11,11 +11,15 @@ import { accountFor, isSmartAccount, toAccountsMap } from "./accounts";
 import { executeCCTPBurn, executeCCTPMint, retrieveAttestations } from "./cctp";
 import {
   buildDeloraCalls,
+  type CrossChainDeliveryRecord,
   deriveSwapOutputAmount,
+  executeDeloraCrossChainSwap,
   executeDeloraSwap,
+  getCrossChainSwapQuoteWithLegs,
   getSwapQuote,
   SLIPPAGE_LIMIT,
   simulateSwapDelivery,
+  waitForCrossChainDelivery,
 } from "./delora";
 import { createTransactionError } from "./errors";
 import { getNativeBalance } from "./gas";
@@ -143,6 +147,8 @@ export type StepProgressEvent =
   // Omnibridge wait: "exit" = AMB signature collection (Gnosis -> mainnet),
   // "enter" = USDC.e delivery watch on Gnosis (mainnet -> Gnosis).
   | { kind: "omnibridge"; stepId: string; direction: "exit" | "enter"; ready: number; total: number }
+  // Cross-chain swap delivery watch on the destination chain.
+  | { kind: "crosschain"; stepId: string; chainId: number; ready: number; total: number }
   // Safe submission lifecycle. `stepIds` lists every member of the batch
   // group so the UI can fan the status out to all rows executing together.
   | {
@@ -183,7 +189,8 @@ export async function validateInputBalances(step: TransactionStep, _state: Conso
     step.type === "claim" ||
     step.type === "attestation" ||
     step.type === "gnosis-wait" ||
-    step.type === "gnosis-claim"
+    step.type === "gnosis-claim" ||
+    step.type === "crosschain-wait"
   )
     return;
 
@@ -303,7 +310,10 @@ export async function* executeConsolidationPlan(
     // minOutputAmount floor would otherwise protect only the degraded quote)
     // but the step fails with QuoteDriftError and the plan pauses for an
     // explicit user retry on the new baseline.
-    if (step.type === "swap" && (step.quotedAt === undefined || Date.now() - step.quotedAt >= SWAP_QUOTE_STALE_MS)) {
+    if (
+      (step.type === "swap" || step.type === "crosschain-swap") &&
+      (step.quotedAt === undefined || Date.now() - step.quotedAt >= SWAP_QUOTE_STALE_MS)
+    ) {
       const refreshedStep = await refreshSwapQuote(step);
       if (refreshedStep.outputToken.amount !== step.outputToken.amount) {
         const plannedAmount = step.outputToken.amount;
@@ -759,6 +769,54 @@ async function tryReconcileFromChain(
         },
       };
     }
+    case "crosschain-swap": {
+      // No `to` discriminator: Delora picks a different adapter (and target
+      // contract) per quote. No log parsing either — the output lands later on
+      // the destination chain, so the quoted amount stands until the
+      // crosschain-wait measures the real delivery.
+      //
+      // Like the Omnibridge ingress reconcile above: if the executor died
+      // between broadcast and the metadata write, reconstruct the delivery
+      // record or the downstream wait fails with "No cross-chain swap
+      // deliveries found" while funds are in flight. The true baseline and
+      // slippage floor are unknowable after the fact; assume baseline 0 and
+      // floor = quoted × (1 − slippage tolerance), mirroring the on-chain
+      // minOutputAmount the quote carried.
+      let metadataPatch: StepResult["metadataPatch"];
+      const deliveries = state.metadata?.crosschain?.deliveries ?? [];
+      if (!deliveries.some((d) => d.txHash === hash)) {
+        const quoted = step.outputToken.amount;
+        const minDelivered = quoted - (quoted * QUOTE_DRIFT_TOLERANCE_BPS) / 10_000n;
+        metadataPatch = {
+          crosschain: {
+            deliveries: [
+              ...deliveries,
+              {
+                txHash: hash,
+                fromChainId: step.chainId,
+                toChainId: step.outputToken.chainId,
+                toAddress: step.outputToken.walletAddress,
+                tokenAddress: step.outputToken.token,
+                baselineUnits: "0",
+                minDeliveredUnits: minDelivered.toString(),
+                expectedUnits: quoted.toString(),
+              },
+            ],
+          },
+        };
+      }
+      return {
+        kind: "success",
+        result: {
+          stepId: step.id,
+          status: "success",
+          chainId: step.chainId,
+          transactionHash: hash,
+          actualOutput: { ...step.outputToken, provenance: step.id },
+          ...(metadataPatch ? { metadataPatch } : {}),
+        },
+      };
+    }
     case "bridge": {
       // Defensive discriminator: a bridge step's `transactionHash` should
       // only ever point to a CCTP burn (the call routed to TokenMessenger),
@@ -971,12 +1029,16 @@ function filterZeroAmounts(
  * @returns Step with fresh quote, or the original step on quote failure
  */
 async function refreshSwapQuote(step: TransactionStep): Promise<TransactionStep> {
-  if (step.type !== "swap") {
+  if (step.type !== "swap" && step.type !== "crosschain-swap") {
     return step;
   }
 
   try {
-    const freshQuote = await getSwapQuote(step.inputTokens, step.outputToken);
+    const freshQuote =
+      step.type === "crosschain-swap"
+        ? (await getCrossChainSwapQuoteWithLegs(step.inputTokens, step.outputToken, step.outputToken.walletAddress))
+            .output
+        : await getSwapQuote(step.inputTokens, step.outputToken);
     return {
       ...step,
       outputToken: {
@@ -1092,7 +1154,12 @@ function remainingChainStepsForWallet(
     if (!foundCurrent) continue;
     if (planStep.chainId !== currentStep.chainId) continue;
     if (planStep.status === "success" || planStep.status === "skipped") continue;
-    if (planStep.type === "attestation" || planStep.type === "gas-topup-wait" || planStep.type === "gnosis-wait")
+    if (
+      planStep.type === "attestation" ||
+      planStep.type === "gas-topup-wait" ||
+      planStep.type === "gnosis-wait" ||
+      planStep.type === "crosschain-wait"
+    )
       continue;
     const stepWallet = planStep.inputTokens[0]?.walletAddress;
     if (!stepWallet || !isAddressEqual(stepWallet, wallet)) continue;
@@ -1119,9 +1186,11 @@ export function estimateRemainingChainOps(currentStep: TransactionStep, state: C
     if (planStep.status === "success" || planStep.status === "skipped") continue;
 
     switch (planStep.type) {
-      case "swap": {
+      case "swap":
+      case "crosschain-swap": {
         // One approval (ERC20 only) + one Delora swap tx per unique token
-        // address (same-address entries share one quote/swap).
+        // address (same-address entries share one quote/swap). Cross-chain
+        // swaps have the same origin-side shape; delivery costs nothing here.
         const uniqueTokens = new Set(planStep.inputTokens.map((input) => input.token.toLowerCase()));
         for (const token of uniqueTokens) {
           if (!isAddressEqual(token as Address, zeroAddress)) ops.push("erc20-approval");
@@ -1461,6 +1530,92 @@ async function executeStep(
         chainId: step.chainId,
         actualOutput,
         transactionHash,
+      };
+    }
+
+    case "crosschain-swap": {
+      // Same origin-side preparation as "swap": drop zero amounts, re-fit the
+      // native amount to current gas, confirm the wallet holds the inputs.
+      let nonZeroTokens = filterZeroAmounts(step.inputTokens, step.id, "crosschain-swap");
+
+      const adjustedTokens = await adjustNativeTokenForGas(nonZeroTokens, step, state);
+      if (adjustedTokens !== nonZeroTokens) {
+        nonZeroTokens = adjustedTokens;
+        step.inputTokens = adjustedTokens;
+      }
+
+      await validateInputBalances(step, state);
+
+      // Record the receiver's destination-token balance BEFORE the origin
+      // send: the crosschain-wait step confirms delivery when the balance
+      // clears baseline + minDelivered, independent of any provider status
+      // API (same principle as gas refuels and Omnibridge deposits).
+      const receiver = step.outputToken.walletAddress;
+      const baseline = await getTokenBalance(step.outputToken.chainId, receiver, step.outputToken.token);
+
+      const { expectedAmount, minDeliveredAmount, transactionHash } = await executeDeloraCrossChainSwap(
+        nonZeroTokens,
+        step.outputToken,
+        receiver,
+        sendCalls,
+        step.retryHints,
+      );
+
+      const delivery: CrossChainDeliveryRecord = {
+        txHash: transactionHash,
+        fromChainId: step.chainId,
+        toChainId: step.outputToken.chainId,
+        toAddress: receiver,
+        tokenAddress: step.outputToken.token,
+        baselineUnits: baseline.toString(),
+        minDeliveredUnits: minDeliveredAmount.toString(),
+        expectedUnits: expectedAmount.toString(),
+      };
+
+      return {
+        stepId: step.id,
+        status: "success",
+        chainId: step.chainId,
+        // The origin receipt can't reveal the destination output; carry the
+        // fresh quote forward — the crosschain-wait corrects it to the
+        // measured delivery.
+        actualOutput: { ...step.outputToken, amount: expectedAmount, provenance: step.id },
+        transactionHash,
+        metadataPatch: {
+          crosschain: {
+            ...state.metadata?.crosschain,
+            deliveries: [...(state.metadata?.crosschain?.deliveries ?? []), delivery],
+          },
+        },
+      };
+    }
+
+    case "crosschain-wait": {
+      // The deliveries bucket is shared by every crosschain-swap; restrict to
+      // the records produced by THIS step's own provenance transactions, with
+      // an empty match falling back to the whole bucket so plans reconciled
+      // without step results still complete (mirrors the gnosis-wait ingress).
+      const allDeliveries = state.metadata?.crosschain?.deliveries ?? [];
+      const ownTxs = new Set(
+        Array.from(getProvenanceSteps(step))
+          .map((stepId) => state.results[stepId]?.transactionHash)
+          .filter((tx): tx is string => !!tx),
+      );
+      const ownDeliveries = allDeliveries.filter((d) => ownTxs.has(d.txHash));
+      const deliveries = ownDeliveries.length > 0 ? ownDeliveries : allDeliveries;
+      if (deliveries.length === 0) {
+        throw new Error("No cross-chain swap deliveries found to wait for");
+      }
+
+      const deliveredAmount = await waitForCrossChainDelivery(deliveries, undefined, undefined, (ready, total) =>
+        opts?.onStepProgress?.({ kind: "crosschain", stepId: step.id, chainId: step.chainId, ready, total }),
+      );
+
+      return {
+        stepId: step.id,
+        status: "success",
+        chainId: step.chainId,
+        actualOutput: { ...step.outputToken, amount: deliveredAmount, provenance: step.id },
       };
     }
 
@@ -2164,6 +2319,25 @@ async function calculateStepOutput(
       } catch (_error) {
         return step.outputToken; // Keep original on failure
       }
+    case "crosschain-swap":
+      try {
+        const { output } = await getCrossChainSwapQuoteWithLegs(
+          updatedInputs,
+          step.outputToken,
+          step.outputToken.walletAddress,
+        );
+        return output;
+      } catch (_error) {
+        return step.outputToken; // Keep original on failure
+      }
+    case "crosschain-wait": {
+      // Passes through what the upstream crosschain-swaps expect to deliver.
+      const totalAmount = updatedInputs.reduce((sum, t) => sum + t.amount, 0n);
+      return {
+        ...step.outputToken,
+        amount: totalAmount,
+      };
+    }
     case "bridge": {
       // Bridge outputs sum of all inputs (minus bridge fees, handled elsewhere)
       const totalAmount = updatedInputs.reduce((sum, t) => sum + t.amount, 0n);
