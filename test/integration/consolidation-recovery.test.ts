@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, vi, afterEach } from "vitest";
 import type { Address, Account, Chain, HttpTransport, WalletClient } from "viem";
-import type { ConsolidationState, TokenAmount } from "../../app/lib/types";
+import type { ConsolidationState, TokenAmount, TransactionStep } from "../../app/lib/types";
 import { WALLET, consumeGenerator, makeToken } from "../test-helpers";
 
 // Mock dependencies
@@ -27,7 +27,13 @@ vi.mock("../../app/lib/gas", () => ({
 
 import { planConsolidation } from "../../app/lib/planning";
 import { executeConsolidationPlan } from "../../app/lib/execution";
-import { executeDeloraSwap, getSwapQuote, getSwapQuoteWithLegs } from "../../app/lib/delora";
+import {
+  executeDeloraCrossChainSwap,
+  executeDeloraSwap,
+  getSwapQuote,
+  getSwapQuoteWithLegs,
+  waitForCrossChainDelivery,
+} from "../../app/lib/delora";
 import { getBridgeFee, executeCCTPBurn, retrieveAttestations, executeCCTPMint } from "../../app/lib/cctp";
 import { parse, stringify } from "superjson";
 
@@ -450,5 +456,124 @@ describe("Scenario 8: Browser Recovery", () => {
     // Verify metadata
     expect(loaded!.sourceTokens).toEqual(state.sourceTokens);
     expect(loaded!.destinationToken).toEqual(state.destinationToken);
+  });
+});
+
+/**
+ * Recovery mid-cross-chain-delivery: the crosschain-swap's origin tx landed
+ * and its delivery record was persisted; the tab closed while the
+ * crosschain-wait was polling the destination balance. On reload the wait
+ * resumes from metadata alone — no re-quote, no re-send.
+ */
+describe("Recovery during cross-chain delivery", () => {
+  const USDC_OPTIMISM_ADDR = "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85" as Address;
+  const WBTC_MAINNET = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599" as Address;
+
+  let mockWalletClient: WalletClient<HttpTransport, Chain, Account>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWalletClient = {
+      account: { address: WALLET } as Account,
+      chain: { id: 1 } as Chain,
+    } as WalletClient<HttpTransport, Chain, Account>;
+  });
+
+  test("resume during delivery - the persisted record completes the wait without re-sending", async () => {
+    const swapOutput: TokenAmount = {
+      token: WBTC_MAINNET,
+      amount: 999_000n,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+      provenance: "cx-1",
+    };
+    const swapStep: TransactionStep = {
+      id: "cx-1",
+      type: "crosschain-swap",
+      status: "success",
+      chainId: 10,
+      inputTokens: [
+        {
+          token: USDC_OPTIMISM_ADDR,
+          amount: 1_000_000_000n,
+          chainId: 10,
+          walletAddress: WALLET,
+          symbol: "USDC",
+          decimals: 6,
+        },
+      ],
+      outputToken: swapOutput,
+      transactionHash: "0xdirectswap",
+    };
+    const waitStep: TransactionStep = {
+      id: "cx-wait",
+      type: "crosschain-wait",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [swapOutput],
+      outputToken: { ...swapOutput, provenance: "cx-wait" },
+    };
+
+    const state: ConsolidationState = {
+      id: "recover-direct",
+      plan: [swapStep, waitStep],
+      currentStepIndex: 1,
+      status: "executing",
+      results: {
+        "cx-1": {
+          stepId: "cx-1",
+          status: "success",
+          chainId: 10,
+          transactionHash: "0xdirectswap",
+          actualOutput: swapOutput,
+        },
+      },
+      metadata: {
+        crosschain: {
+          deliveries: [
+            {
+              txHash: "0xdirectswap",
+              fromChainId: 10,
+              toChainId: 1,
+              toAddress: WALLET,
+              tokenAddress: WBTC_MAINNET,
+              baselineUnits: "0",
+              minDeliveredUnits: "994000",
+              expectedUnits: "999000",
+            },
+          ],
+        },
+      },
+      sourceTokens: swapStep.inputTokens,
+      destinationToken: {
+        token: WBTC_MAINNET,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "WBTC",
+        decimals: 8,
+      },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    vi.mocked(waitForCrossChainDelivery).mockResolvedValue(998_500n);
+
+    // Round-trip through the persistence layer, exactly like a page reload.
+    const recovered: ConsolidationState = parse(stringify(state));
+    const { finalValue } = await consumeGenerator(executeConsolidationPlan(recovered, mockWalletClient));
+
+    expect(finalValue.status).toBe("completed");
+    // The completed swap is untouched; only the wait ran, fed by the record.
+    expect(executeDeloraCrossChainSwap).not.toHaveBeenCalled();
+    expect(waitForCrossChainDelivery).toHaveBeenCalledWith(
+      [expect.objectContaining({ txHash: "0xdirectswap" })],
+      undefined,
+      undefined,
+      expect.any(Function),
+    );
+    expect(finalValue.results["cx-wait"].status).toBe("success");
+    expect(finalValue.results["cx-wait"].actualOutput?.amount).toBe(998_500n);
   });
 });

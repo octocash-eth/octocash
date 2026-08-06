@@ -4082,3 +4082,178 @@ describe("direct cross-chain routes", () => {
     expect(transfer.outputToken.walletAddress).toBe(OTHER_DEST);
   });
 });
+
+describe("gnosis direct-route rescue", () => {
+  const USDC_GNOSIS = "0x2a22f9c3b484c3629090FeED35F17Ff8F88f76F0" as Address; // USDC.e
+  const WBTC_GNOSIS = "0x8e5bBbb09Ed1ebdE8674Cda39A0c169401db4252" as Address;
+  const USDC_ARBITRUM = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831" as Address;
+  const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as Address;
+
+  const gnosisDust = (amount = 5_000_000n): TokenAmount => ({
+    token: USDC_GNOSIS,
+    amount, // $5 — below the $10 hop floor
+    chainId: 100,
+    walletAddress: WALLET,
+    symbol: "USDC.e",
+    decimals: 6,
+  });
+
+  const usdcArbitrumDest = () => ({
+    token: USDC_ARBITRUM,
+    chainId: 42161,
+    walletAddress: WALLET,
+    symbol: "USDC",
+    decimals: 6,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getBridgeFee).mockResolvedValue(0n);
+    vi.mocked(getSwapQuoteWithLegs).mockImplementation(async (input, output) => ({
+      output: await getSwapQuote(input, output),
+      legs: [],
+    }));
+  });
+
+  test("below-floor Gnosis egress is rescued by a direct cross-chain swap instead of rejected", async () => {
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockResolvedValue({
+      output: {
+        token: USDC_ARBITRUM,
+        amount: 4_900_000n,
+        chainId: 42161,
+        walletAddress: WALLET,
+        symbol: "USDC",
+        decimals: 6,
+      },
+      legs: [],
+      minOutputAmount: 4_875_500n,
+    });
+
+    // Pre-rescue this exact setup hard-rejected ("egress below the $10
+    // absolute floor is rejected" above).
+    const steps = await planConsolidation([gnosisDust()], usdcArbitrumDest(), [WALLET]);
+
+    expect(steps.map((s) => s.type)).toEqual(["crosschain-swap", "crosschain-wait"]);
+    expect(steps[0].chainId).toBe(100);
+    expect(steps[0].outputToken.chainId).toBe(42161);
+    // No Omnibridge machinery and no mainnet hop anywhere in the plan.
+    expect(steps.every((s) => s.chainId !== 1)).toBe(true);
+  });
+
+  test("rescue voided when the direct route is unroutable — the hard reject stands", async () => {
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockRejectedValue(new Error("No adapters available for this request"));
+
+    await expect(planConsolidation([gnosisDust()], usdcArbitrumDest(), [WALLET])).rejects.toThrow(
+      /PlanningError.*Gnosis/,
+    );
+  });
+
+  test("mixed sources: rescued Gnosis dust rides direct while the other leg bridges, no warning", async () => {
+    // Direct quotes only route from Gnosis; the Base group has none and bridges.
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockImplementation(async (input, _output, receiver) => {
+      const tokens = Array.isArray(input) ? input : [input];
+      if (tokens[0].chainId !== 100) throw new Error("No adapters available for this request");
+      return {
+        output: {
+          token: USDC_ARBITRUM,
+          amount: 4_900_000n,
+          chainId: 42161,
+          walletAddress: receiver,
+          symbol: "USDC",
+          decimals: 6,
+        },
+        legs: [],
+        minOutputAmount: 4_875_500n,
+      };
+    });
+
+    const baseUsdc: TokenAmount = {
+      token: USDC_BASE,
+      amount: 50_000_000n,
+      chainId: 8453,
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    };
+
+    const warnings: string[] = [];
+    const steps = await planConsolidation(
+      [gnosisDust(), baseUsdc],
+      usdcArbitrumDest(),
+      [WALLET],
+      undefined,
+      undefined,
+      warnings,
+    );
+
+    // Pre-rescue the Gnosis dust was dropped with a warning; now it rides a
+    // direct leg alongside the Base bridge.
+    expect(warnings).toHaveLength(0);
+    expect(steps.map((s) => s.type)).toEqual(["crosschain-swap", "bridge", "attestation", "claim", "crosschain-wait"]);
+    expect(steps[0].chainId).toBe(100);
+    expect(steps.find((s) => s.type === "bridge")?.chainId).toBe(8453);
+    expect(steps.every((s) => s.type !== "gnosis-bridge")).toBe(true);
+  });
+
+  test("Gnosis-destination remainder below the floor flips direct instead of hard-rejecting", async () => {
+    const { fetchDeloraPrices } = await import("./api/delora");
+    // WBTC $100k on Gnosis, ETH $3k, xDAI $1.
+    vi.mocked(fetchDeloraPrices).mockResolvedValue(
+      new Map<`${number}:${string}`, number>([
+        [`100:${WBTC_GNOSIS.toLowerCase()}`, 100_000],
+        [`100:${zeroAddress}`, 1],
+        [`10:${zeroAddress}`, 3_000],
+        [`1:${zeroAddress}`, 3_000],
+      ]),
+    );
+    vi.mocked(getBridgeFee).mockResolvedValue(1_000_000n); // $1 CCTP fee
+    // Conversion probe (USDC.e → WBTC on Gnosis): $4 in → $3.94 out.
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: WBTC_GNOSIS,
+      amount: 3_940n,
+      chainId: 100,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    });
+    // Direct quote nets only ~$3 — WORSE than the ~$3.64 bridged route, so
+    // neither pass 1 nor pass 2 flips it; only the value floor does.
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockResolvedValue({
+      output: {
+        token: WBTC_GNOSIS,
+        amount: 3_000n,
+        chainId: 100,
+        walletAddress: WALLET,
+        symbol: "WBTC",
+        decimals: 8,
+      },
+      legs: [],
+      minOutputAmount: 2_985n,
+    });
+
+    const opDust: TokenAmount = {
+      token: USDC_OPTIMISM,
+      amount: 5_000_000n, // $5 — bridged remainder would be under the $10 floor
+      chainId: 10,
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    };
+    const gnosisDest = {
+      token: WBTC_GNOSIS,
+      chainId: 100,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    // Pre-rescue this would reach createGnosisIngressSteps and hard-reject on
+    // the ingress worth-it check.
+    const steps = await planConsolidation([opDust], gnosisDest, [WALLET]);
+
+    expect(steps.map((s) => s.type)).toEqual(["crosschain-swap", "crosschain-wait"]);
+    expect(steps[0].chainId).toBe(10);
+    expect(steps[0].outputToken.chainId).toBe(100);
+    expect(steps.every((s) => s.chainId !== 1)).toBe(true); // no mainnet hub
+  });
+});

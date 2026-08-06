@@ -1048,11 +1048,16 @@ async function compareCrossChainRoutes(
   isGnosisDest: boolean,
   accounts: AccountsMap | undefined,
   log: (...args: unknown[]) => void,
+  // Groups already decided direct (the Gnosis floor rescue) — carried through
+  // verbatim and excluded from the comparison.
+  seeded?: DirectRouteDecisions,
 ): Promise<DirectRouteDecisions> {
-  const decisions: DirectRouteDecisions = new Map();
+  const decisions: DirectRouteDecisions = new Map(seeded);
   const destChainId = destinationToken.chainId;
 
-  const crossChainGroups = groupTokensByChainAndWallet(sourceTokens).filter((g) => g[0].chainId !== destChainId);
+  const crossChainGroups = groupTokensByChainAndWallet(sourceTokens).filter(
+    (g) => g[0].chainId !== destChainId && !decisions.has(gapKey(g[0].chainId, g[0].walletAddress)),
+  );
   if (crossChainGroups.length === 0) return decisions;
 
   // Direct legs deliver to `receiver` on the destination chain. A Safe/smart
@@ -1303,19 +1308,83 @@ async function compareCrossChainRoutes(
 
       const sumDirect = stillBridged.reduce((sum, c) => sum + c.directNetUsd, 0);
       const sumBridged = stillBridged.reduce((sum, c) => sum + c.bridgedNetUsd, 0);
+      const totalBridgedGrossUsd = stillBridged.reduce((sum, c) => sum + c.bridgedGrossUsd, 0);
       if (sumDirect > sumBridged - sharedUsd) {
         for (const candidate of stillBridged) decisions.set(candidate.key, candidate.quoted);
         log(
           `🔍 [DEBUG] Route compare: flipping ${stillBridged.length} remaining group(s) DIRECT — dropping the shared ` +
             `destination steps (~$${sharedUsd.toFixed(2)}) beats bridging (direct $${sumDirect.toFixed(2)} > bridged $${(sumBridged - sharedUsd).toFixed(2)})`,
         );
+      } else if (isGnosisDest && totalBridgedGrossUsd < GNOSIS_ROUTE_MIN_USD) {
+        // Below the Gnosis value floor, the bridged remainder would be
+        // hard-rejected by the ingress worth-it check — every one of these
+        // groups has a viable direct quote, so force them direct instead of
+        // failing the plan.
+        for (const candidate of stillBridged) decisions.set(candidate.key, candidate.quoted);
+        log(
+          `🔍 [DEBUG] Route compare: forcing ${stillBridged.length} group(s) DIRECT — the bridged remainder ` +
+            `($${totalBridgedGrossUsd.toFixed(2)}) is below the $${GNOSIS_ROUTE_MIN_USD} Gnosis hop floor`,
+        );
       }
     }
   } catch (error) {
     log(`⚠️ [DEBUG] Route compare failed; keeping bridged routes: ${String(error)}`);
-    return new Map();
+    // Seeded (floor-rescued) decisions must survive: their groups have no
+    // viable bridged route left.
+    return new Map(seeded);
   }
 
+  return decisions;
+}
+
+/**
+ * Attempts the Gnosis floor rescue: quotes a direct cross-chain swap for
+ * every Gnosis (wallet) group that fell below the mainnet-hop value floor.
+ * The floor exists to protect against hub gas, which the direct route never
+ * pays — so a routable group is forced direct regardless of the cost
+ * comparison. Any unroutable token voids the whole rescue (`null`), and the
+ * caller falls back to today's drop-with-warning / hard-reject behavior.
+ */
+async function probeDirectGnosisRescue(
+  gnosisSources: TokenAmount[],
+  destinationToken: DestinationToken,
+  receiver: Address,
+  accounts: AccountsMap | undefined,
+  log: (...args: unknown[]) => void,
+): Promise<DirectRouteDecisions | null> {
+  const destChainId = destinationToken.chainId;
+  const receiverAccount = accountFor(accounts, receiver);
+  if (receiverAccount.kind !== "eoa" && !controlledOn(receiverAccount, destChainId)) return null;
+
+  const destSpec: Omit<TokenAmount, "amount"> = {
+    token: destinationToken.token,
+    chainId: destChainId,
+    symbol: destinationToken.symbol,
+    decimals: destinationToken.decimals,
+    walletAddress: receiver,
+  };
+
+  const decisions: DirectRouteDecisions = new Map();
+  for (const group of groupTokensByChainAndWallet(gnosisSources)) {
+    const byAddress = new Map<Address, TokenAmount[]>();
+    for (const token of group) {
+      const addr = getAddress(token.token);
+      const bucket = byAddress.get(addr);
+      if (bucket === undefined) byAddress.set(addr, [token]);
+      else bucket.push(token);
+    }
+    const quoted: QuotedCrossChainGroup[] = [];
+    for (const tokens of byAddress.values()) {
+      try {
+        const { output, legs } = await getCrossChainSwapQuoteWithLegs(tokens, destSpec, receiver);
+        quoted.push({ group: tokens, output, legs });
+      } catch (error) {
+        log(`🔍 [DEBUG] Gnosis floor rescue: no direct route for ${tokens[0].symbol} (${String(error)})`);
+        return null;
+      }
+    }
+    decisions.set(gapKey(group[0].chainId, group[0].walletAddress), quoted);
+  }
   return decisions;
 }
 
@@ -3177,6 +3246,9 @@ export async function planConsolidation(
   // warning and consolidate the rest — unless they're all the plan has, in
   // which case the hard reject stands. (Ingress keeps its hard reject inside
   // `createGnosisIngressSteps`: the hop IS the route to the destination.)
+  // Gnosis groups the floor rescue forced onto the direct cross-chain route —
+  // seeded into the route comparison below, which skips them.
+  const forcedDirect: DirectRouteDecisions = new Map();
   if (sourceHasGnosis && !isGnosisDest) {
     const gnosisSources = sourceTokens.filter((t) => t.chainId === gnosis.id);
     const hopOps: OperationType[] = ["omnibridge-claim"];
@@ -3188,18 +3260,33 @@ export async function planConsolidation(
       log,
     );
     if (shortfall) {
-      const message = gnosisFloorMessage(shortfall, "from");
-      if (gnosisSources.length === sourceTokens.length) {
-        throw new Error(`PlanningError: ${message} Add more value or deselect the Gnosis tokens.`);
+      // Below-floor Gnosis value can still ride a direct cross-chain swap:
+      // the floor protects against the mainnet hop's gas, which the direct
+      // route never pays. Railgun keeps the old behavior — its receiver (the
+      // intermediate) isn't resolved yet.
+      const rescued = isRailgun
+        ? null
+        : await probeDirectGnosisRescue(gnosisSources, destinationToken, destinationToken.walletAddress, accounts, log);
+      if (rescued) {
+        for (const [key, quoted] of rescued) forcedDirect.set(key, quoted);
+        log(
+          `🔍 [DEBUG] Gnosis floor rescue: routing ${gnosisSources.length} below-floor Gnosis token(s) via direct ` +
+            `cross-chain swaps instead of dropping them`,
+        );
+      } else {
+        const message = gnosisFloorMessage(shortfall, "from");
+        if (gnosisSources.length === sourceTokens.length) {
+          throw new Error(`PlanningError: ${message} Add more value or deselect the Gnosis tokens.`);
+        }
+        warnings?.push(`Gnosis tokens not included: ${message.charAt(0).toLowerCase()}${message.slice(1)}`);
+        log(`⚠️ [DEBUG] Dropping ${gnosisSources.length} Gnosis token(s) below the hop value floor: ${message}`);
+        sourceTokens = sourceTokens.filter((t) => t.chainId !== gnosis.id);
+        sourceHasGnosis = false;
+        // Not a Gnosis destination here, so no other leg needs the mainnet hub
+        // or the (egress-flavored) direct Omnibridge route.
+        needsMainnetHub = false;
+        omniDirectRoute = null;
       }
-      warnings?.push(`Gnosis tokens not included: ${message.charAt(0).toLowerCase()}${message.slice(1)}`);
-      log(`⚠️ [DEBUG] Dropping ${gnosisSources.length} Gnosis token(s) below the hop value floor: ${message}`);
-      sourceTokens = sourceTokens.filter((t) => t.chainId !== gnosis.id);
-      sourceHasGnosis = false;
-      // Not a Gnosis destination here, so no other leg needs the mainnet hub
-      // or the (egress-flavored) direct Omnibridge route.
-      needsMainnetHub = false;
-      omniDirectRoute = null;
     }
   }
 
@@ -3226,25 +3313,6 @@ export async function planConsolidation(
   // marker so swap/bridge outputs aren't tagged with it.
   const { railgunAddress, ...publicDestination } = destinationToken;
   const intermediateToken = { ...publicDestination, walletAddress: intermediateWallet };
-
-  // The Omnibridge hop's mainnet steps (claim/deposit/burn) are signed by the
-  // intermediate wallet on mainnet — a chain assertAccountsUsable may not
-  // cover. A Safe intermediate (i.e. a Safe destination acting as its own
-  // intermediate) must therefore be controlled on mainnet too, or the route
-  // is rejected with an actionable error.
-  if (needsMainnetHub) {
-    await assertAccountUsableOnChain(intermediateWallet, mainnet.id, accounts).catch((error) => {
-      const kind = accountFor(accounts, intermediateWallet).kind;
-      if (kind !== "eoa") {
-        const label = kind === "safe" ? "Safe" : "smart wallet";
-        throw new Error(
-          `PlanningError: This route needs an Ethereum mainnet hop, but ${label} ${intermediateWallet} isn't ` +
-            `deployed (or controlled by your connected owner) there. Pick an EOA destination or a non-Gnosis route.`,
-        );
-      }
-      throw error;
-    });
-  }
 
   // Per-chain bridge-target overrides for a direct Omnibridge route: on
   // egress the Gnosis side swaps into the destination token's Gnosis twin,
@@ -3277,7 +3345,36 @@ export async function planConsolidation(
     isGnosisDest,
     accounts,
     log,
+    forcedDirect,
   );
+
+  // Direct groups bypass the mainnet hub; the hub (and its usability
+  // assertion) is only needed if some cross-chain leg still bridges.
+  if (needsMainnetHub) {
+    const remainsBridged = (t: TokenAmount) => !directDecisions.has(gapKey(t.chainId, t.walletAddress));
+    needsMainnetHub = isGnosisDest
+      ? sourceTokens.some((t) => t.chainId !== gnosis.id && remainsBridged(t))
+      : sourceTokens.some((t) => t.chainId === gnosis.id && remainsBridged(t));
+  }
+
+  // The Omnibridge hop's mainnet steps (claim/deposit/burn) are signed by the
+  // intermediate wallet on mainnet — a chain assertAccountsUsable may not
+  // cover. A Safe intermediate (i.e. a Safe destination acting as its own
+  // intermediate) must therefore be controlled on mainnet too, or the route
+  // is rejected with an actionable error.
+  if (needsMainnetHub) {
+    await assertAccountUsableOnChain(intermediateWallet, mainnet.id, accounts).catch((error) => {
+      const kind = accountFor(accounts, intermediateWallet).kind;
+      if (kind !== "eoa") {
+        const label = kind === "safe" ? "Safe" : "smart wallet";
+        throw new Error(
+          `PlanningError: This route needs an Ethereum mainnet hop, but ${label} ${intermediateWallet} isn't ` +
+            `deployed (or controlled by your connected owner) there. Pick an EOA destination or a non-Gnosis route.`,
+        );
+      }
+      throw error;
+    });
+  }
 
   // Build consolidation pipeline (native amounts gas-adjusted per wallet)
   onProgress?.("swap-quotes");
