@@ -1,4 +1,12 @@
-import { ETH_ADDRESS, USDC_ETHEREUM as USDC_ADDRESS, USDC_OPTIMISM, WALLET, WBTC_ADDRESS } from "test/test-helpers";
+import {
+  DAI_ADDRESS,
+  ETH_ADDRESS,
+  USDC_ETHEREUM as USDC_ADDRESS,
+  USDC_OPTIMISM,
+  USDC_POLYGON,
+  WALLET,
+  WBTC_ADDRESS,
+} from "test/test-helpers";
 import { type Address, zeroAddress } from "viem";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { TokenAmount, TransactionStep } from "./types";
@@ -77,8 +85,9 @@ vi.mock("./gas-estimation", () => ({
   formatGasCostNative: vi.fn((wei: bigint) => (Number(wei) / 1e18).toString()),
 }));
 
+import { fetchDeloraPrices } from "./api/delora";
 import { getBridgeFee } from "./cctp";
-import { getSwapQuote, getSwapQuoteWithLegs } from "./delora";
+import { getCrossChainSwapQuoteWithLegs, getSwapQuote, getSwapQuoteWithLegs } from "./delora";
 import { planConsolidation } from "./planning";
 import type { PlanningPhase } from "./planning-progress";
 import { getPublicClient } from "./public-client";
@@ -3758,6 +3767,7 @@ describe("planning progress", () => {
   const CANONICAL_ORDER: PlanningPhase[] = [
     "gas-data",
     "wallets",
+    "route-compare",
     "swap-quotes",
     "bridge-fees",
     "final-swaps",
@@ -3869,5 +3879,206 @@ describe("planning progress", () => {
     expect(phases).not.toContain("swap-quotes");
     expect(phases).not.toContain("final-swaps");
     expectInCanonicalOrder(phases);
+  });
+});
+
+describe("direct cross-chain routes", () => {
+  const OTHER_DEST = "0x9999999999999999999999999999999999999999" as Address;
+
+  /** Prices the comparison needs: WBTC $100k, natives $3k everywhere used. */
+  const priceMap = () =>
+    new Map<`${number}:${string}`, number>([
+      [`1:${WBTC_ADDRESS.toLowerCase()}`, 100_000],
+      [`1:${zeroAddress}`, 3_000],
+      [`10:${zeroAddress}`, 3_000],
+      [`137:${zeroAddress}`, 3_000],
+    ]);
+
+  const usdcOn10 = (amount = 1_000_000_000n): TokenAmount => ({
+    token: USDC_OPTIMISM,
+    amount, // 1000 USDC
+    chainId: 10,
+    walletAddress: WALLET,
+    symbol: "USDC",
+    decimals: 6,
+  });
+
+  const wbtcDest = (walletAddress: Address = WALLET) => ({
+    token: WBTC_ADDRESS,
+    chainId: 1,
+    walletAddress,
+    symbol: "WBTC",
+    decimals: 8,
+  });
+
+  /** A direct quote worth ~$999 (0.00999 WBTC) — beats the bridged ~$985. */
+  const directQuote = (receiver: Address, amount = 999_000n) => ({
+    output: {
+      token: WBTC_ADDRESS,
+      amount,
+      chainId: 1,
+      walletAddress: receiver,
+      symbol: "WBTC",
+      decimals: 8,
+    },
+    legs: [],
+    minOutputAmount: (amount * 995n) / 1000n,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fetchDeloraPrices).mockResolvedValue(priceMap());
+    vi.mocked(getBridgeFee).mockResolvedValue(1_000_000n); // 1 USDC per CCTP leg
+    // Any same-chain USDC→WBTC quote (the compare's conversion probe and the
+    // bridged route's final swap) yields ~$985 — slightly under the direct
+    // quote, so `direct` wins whenever its mock is viable.
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: WBTC_ADDRESS,
+      amount: 985_000n,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    });
+    vi.mocked(getSwapQuoteWithLegs).mockImplementation(async (input, output) => ({
+      output: await getSwapQuote(input, output),
+      legs: [],
+    }));
+  });
+
+  test("emits crosschain-swap + crosschain-wait instead of the bridge machinery when direct is cheaper", async () => {
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockResolvedValue(directQuote(WALLET));
+
+    const steps = await planConsolidation([usdcOn10()], wbtcDest(), [WALLET]);
+
+    expect(steps.map((s) => s.type)).toEqual(["crosschain-swap", "crosschain-wait"]);
+
+    const [swap, wait] = steps;
+    expect(swap.chainId).toBe(10); // executes on the origin chain
+    expect(swap.inputTokens[0].token).toBe(USDC_OPTIMISM);
+    expect(swap.outputToken.chainId).toBe(1);
+    expect(swap.outputToken.token).toBe(WBTC_ADDRESS);
+    expect(swap.outputToken.walletAddress).toBe(WALLET);
+    expect(swap.outputToken.provenance).toBe(swap.id);
+    expect(swap.quotedAt).toBeDefined();
+
+    expect(wait.chainId).toBe(1); // watches the destination chain
+    expect(wait.inputTokens).toEqual([swap.outputToken]);
+    expect(wait.outputToken.amount).toBe(999_000n);
+    expect(wait.outputToken.provenance).toBe(wait.id);
+
+    // The receiver rides on the quote request.
+    expect(getCrossChainSwapQuoteWithLegs).toHaveBeenCalledWith(
+      [expect.objectContaining({ token: USDC_OPTIMISM, chainId: 10 })],
+      expect.objectContaining({ token: WBTC_ADDRESS, chainId: 1, walletAddress: WALLET }),
+      WALLET,
+    );
+  });
+
+  test("keeps the bridged route when the direct quote under-delivers", async () => {
+    // ~$900 direct vs ~$985 bridged — bridged wins both passes.
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockResolvedValue(directQuote(WALLET, 900_000n));
+
+    const steps = await planConsolidation([usdcOn10()], wbtcDest(), [WALLET]);
+
+    expect(steps.map((s) => s.type)).toEqual(["bridge", "attestation", "claim", "swap"]);
+  });
+
+  test("keeps the bridged route when the direct quote is unroutable (fail-safe)", async () => {
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockRejectedValue(
+      new Error("ExternalAPIError: No adapters available for this request"),
+    );
+
+    const steps = await planConsolidation([usdcOn10()], wbtcDest(), [WALLET]);
+
+    expect(steps.map((s) => s.type)).toEqual(["bridge", "attestation", "claim", "swap"]);
+  });
+
+  test("mixed plan: one group direct, one bridged — bridge machinery stays for the bridged group", async () => {
+    // Chain 10 routes direct; chain 137 has no direct route and bridges.
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockImplementation(async (input, _output, receiver) => {
+      const tokens = Array.isArray(input) ? input : [input];
+      if (tokens[0].chainId === 137) throw new Error("No adapters available for this request");
+      return directQuote(receiver);
+    });
+
+    const usdcOn137: TokenAmount = {
+      token: USDC_POLYGON,
+      amount: 500_000_000n, // 500 USDC
+      chainId: 137,
+      walletAddress: WALLET,
+      symbol: "USDC",
+      decimals: 6,
+    };
+
+    const steps = await planConsolidation([usdcOn10(), usdcOn137], wbtcDest(), [WALLET]);
+
+    expect(steps.map((s) => s.type)).toEqual([
+      "crosschain-swap",
+      "bridge",
+      "attestation",
+      "claim",
+      "crosschain-wait",
+      "swap",
+    ]);
+
+    const crossChainSwap = steps.find((s) => s.type === "crosschain-swap") as TransactionStep;
+    const bridge = steps.find((s) => s.type === "bridge") as TransactionStep;
+    const claim = steps.find((s) => s.type === "claim") as TransactionStep;
+    const wait = steps.find((s) => s.type === "crosschain-wait") as TransactionStep;
+    const finalSwap = steps.find((s) => s.type === "swap") as TransactionStep;
+
+    expect(crossChainSwap.chainId).toBe(10);
+    expect(bridge.chainId).toBe(137);
+    // The wait sits after the claim so deliveries overlap the CCTP wait.
+    expect(steps.indexOf(wait)).toBeGreaterThan(steps.indexOf(claim));
+    // The final swap consumes the claimed USDC — never the direct delivery
+    // (already the destination token at the destination wallet).
+    expect(finalSwap.inputTokens.every((t) => t.provenance !== wait.id)).toBe(true);
+    expect(finalSwap.inputTokens.some((t) => t.provenance === claim.id)).toBe(true);
+  });
+
+  test("all-direct plan to a non-connected destination needs no final transfer", async () => {
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockResolvedValue(directQuote(OTHER_DEST));
+
+    const steps = await planConsolidation([usdcOn10()], wbtcDest(OTHER_DEST), [WALLET]);
+
+    // Delivery lands straight at the destination wallet — no hub, no transfer.
+    expect(steps.map((s) => s.type)).toEqual(["crosschain-swap", "crosschain-wait"]);
+    expect(steps[0].outputToken.walletAddress).toBe(OTHER_DEST);
+    expect(steps[1].outputToken.walletAddress).toBe(OTHER_DEST);
+  });
+
+  test("held-out direct delivery never feeds a backwards transfer to the intermediate", async () => {
+    // Direct value lands at the (non-connected) destination while a dest-chain
+    // source still swaps at the intermediate and transfers over. The wait
+    // output must NOT appear among the final swap/transfer inputs.
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockImplementation(async (_input, _output, receiver) =>
+      directQuote(receiver),
+    );
+
+    const daiOnMainnet: TokenAmount = {
+      token: DAI_ADDRESS,
+      amount: 500_000_000_000_000_000_000n, // 500 DAI
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "DAI",
+      decimals: 18,
+    };
+
+    const steps = await planConsolidation([usdcOn10(), daiOnMainnet], wbtcDest(OTHER_DEST), [WALLET]);
+
+    expect(steps.map((s) => s.type)).toEqual(["crosschain-swap", "crosschain-wait", "swap", "transfer"]);
+
+    const wait = steps.find((s) => s.type === "crosschain-wait") as TransactionStep;
+    const finalSwap = steps.find((s) => s.type === "swap") as TransactionStep;
+    const transfer = steps.find((s) => s.type === "transfer") as TransactionStep;
+
+    // The DAI swap runs at the intermediate (WALLET) and its output transfers
+    // to the destination; the direct delivery is already there.
+    expect(finalSwap.inputTokens.every((t) => t.provenance !== wait.id)).toBe(true);
+    expect(transfer.inputTokens.every((t) => t.provenance !== wait.id)).toBe(true);
+    expect(transfer.inputTokens.every((t) => t.walletAddress === WALLET)).toBe(true);
+    expect(transfer.outputToken.walletAddress).toBe(OTHER_DEST);
   });
 });

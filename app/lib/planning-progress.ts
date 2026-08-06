@@ -8,6 +8,7 @@
 export type PlanningPhase =
   | "gas-data"
   | "wallets"
+  | "route-compare"
   | "swap-quotes"
   | "bridge-fees"
   | "final-swaps"
@@ -19,6 +20,7 @@ export type OnPlanningProgress = (phase: PlanningPhase) => void;
 const PHASE_LABELS: Record<PlanningPhase, string> = {
   "gas-data": "Fetching gas prices",
   wallets: "Checking wallet balances",
+  "route-compare": "Comparing routes",
   "swap-quotes": "Fetching swap quotes",
   "bridge-fees": "Calculating bridge fees",
   "final-swaps": "Quoting destination swaps",
