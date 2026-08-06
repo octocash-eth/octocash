@@ -7,7 +7,14 @@ import { consumeGenerator, makeToken, USDC_ETHEREUM, USDC_OPTIMISM, USDC_POLYGON
 // Mock external dependencies BEFORE imports
 vi.mock("../../app/lib/delora");
 vi.mock("../../app/lib/cctp");
-vi.mock("../../app/lib/gas-refuel");
+// Partial mock: keep the real `flooredDeloraTarget` — planning's
+// pre-quote deposit-floor short-circuit sums its bigint result, so an
+// auto-mocked undefined would crash createGasTopUpSteps.
+vi.mock("../../app/lib/gas-refuel", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../app/lib/gas-refuel")>()),
+  getGasRefuelQuote: vi.fn(),
+  waitForRefuelDelivery: vi.fn(),
+}));
 vi.mock("../../app/lib/gas", () => ({
   getNativeBalance: vi.fn(),
 }));
