@@ -27,6 +27,14 @@ export function TransactionPlanExecutor({
   onExecutionStateChange,
   accounts,
 }: ExecutorProps) {
+  // One-way latch: planning stands down the moment execution is underway.
+  // The planning query's key includes the connected-wallet/Safe/smart-account
+  // fingerprint, which can churn mid-execution (wallet reconnects on chain
+  // switch, capability re-probes on window focus) — without this, a churn
+  // re-runs the whole quoting pipeline against a plan that is already live.
+  // Never re-armed: a new planId remounts this component (keyed upstream).
+  const [planningEnabled, setPlanningEnabled] = React.useState(true);
+
   // Step 1: Generate the plan
   const {
     state: plannedState,
@@ -41,6 +49,7 @@ export function TransactionPlanExecutor({
     destinationToken,
     planId,
     accounts,
+    enabled: planningEnabled,
   });
 
   // Step 2: Execute the plan
@@ -50,29 +59,36 @@ export function TransactionPlanExecutor({
       onComplete,
     });
 
+  React.useEffect(() => {
+    if (isExecuting || (state && state.status !== "ready")) setPlanningEnabled(false);
+  }, [isExecuting, state]);
+
   // Notify parent when execution state changes
   React.useEffect(() => {
     onExecutionStateChange?.(isExecuting);
   }, [isExecuting, onExecutionStateChange]);
 
-  // Show loading state while planning
-  if (isPlanning) {
-    return <PlanningLoader phase={planningPhase} />;
-  }
-
-  // Show error if planning failed. Auto-retry only for transient external API
-  // failures (Delora 5xx / network) — other errors render statically so we
-  // never loop on unrecoverable conditions like UnsupportedRouteError or
-  // Delora rate limiting (thrown as `RateLimitError:`, deliberately without
-  // the `ExternalAPIError:` prefix, so retrying waits for the user).
-  if (planError) {
-    const classified = createTransactionError(new Error(planError));
-    const autoRetry = classified.code === ERROR_CODES.EXTERNAL_API_ERROR;
-    return <PlanError error={planError} onRetry={generatePlan} autoRetry={autoRetry} attemptNumber={attemptCount} />;
-  }
-
-  // Wait for state to be ready
+  // Loader and error screens exist only before an execution state does: once
+  // the plan is on screen, a background replan (or its failure) must never
+  // blank it back to "Fetching swap quotes…".
   if (!state) {
+    // Show loading state while planning
+    if (isPlanning) {
+      return <PlanningLoader phase={planningPhase} />;
+    }
+
+    // Show error if planning failed. Auto-retry only for transient external API
+    // failures (Delora 5xx / network) — other errors render statically so we
+    // never loop on unrecoverable conditions like UnsupportedRouteError or
+    // Delora rate limiting (thrown as `RateLimitError:`, deliberately without
+    // the `ExternalAPIError:` prefix, so retrying waits for the user).
+    if (planError) {
+      const classified = createTransactionError(new Error(planError));
+      const autoRetry = classified.code === ERROR_CODES.EXTERNAL_API_ERROR;
+      return <PlanError error={planError} onRetry={generatePlan} autoRetry={autoRetry} attemptNumber={attemptCount} />;
+    }
+
+    // Wait for state to be ready
     return null;
   }
 

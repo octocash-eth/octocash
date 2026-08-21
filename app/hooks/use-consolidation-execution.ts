@@ -136,8 +136,11 @@ export function useConsolidationExecution({ state: initialState, onComplete }: U
   // logically-identical planning memo from resetting progress mid-execution.
   useEffect(() => {
     setState((prev) => {
-      // No initial state: reset
-      if (initialState === null) return null;
+      // No initial state: reset — unless execution has already advanced past
+      // "ready". A mid-execution replan (wallet-key churn) nulls the planner's
+      // state while the new query loads; wiping here would let the fresh
+      // "ready" plan replace the live one via the different-ID branch below.
+      if (initialState === null) return prev && prev.status !== "ready" ? prev : null;
       // Different ID: always accept the new state
       if (prev?.id !== initialState.id) return initialState;
       // Never overwrite a non-ready state (executing, paused, completed, partial)

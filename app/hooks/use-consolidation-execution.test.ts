@@ -160,6 +160,30 @@ describe("useConsolidationExecution", () => {
 
       expect(result.current.state).toBeNull();
     });
+
+    test("retains an executing state when incoming state resets to null", () => {
+      const initialState = createMockState({ status: "executing" });
+      const { result, rerender } = renderHook(
+        ({ state }: { state: ConsolidationState | null }) => useConsolidationExecution({ state }),
+        { initialProps: { state: initialState as ConsolidationState | null } },
+      );
+
+      rerender({ state: null });
+
+      expect(result.current.state?.status).toBe("executing");
+    });
+
+    test("retains a paused state when incoming state resets to null", () => {
+      const initialState = createMockState({ status: "paused" });
+      const { result, rerender } = renderHook(
+        ({ state }: { state: ConsolidationState | null }) => useConsolidationExecution({ state }),
+        { initialProps: { state: initialState as ConsolidationState | null } },
+      );
+
+      rerender({ state: null });
+
+      expect(result.current.state?.status).toBe("paused");
+    });
   });
 
   describe("executeOrResume", () => {
