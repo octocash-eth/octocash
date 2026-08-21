@@ -1,6 +1,7 @@
 import type { Address, Hex } from "viem";
 import type { AccountsRecord } from "./accounts";
 import type { Attestation } from "./cctp";
+import type { CrossChainDeliveryRecord } from "./delora";
 import type { GasRefuelRecord } from "./gas-refuel";
 import type { OmnibridgeClaim, OmnibridgeDelivery } from "./omnibridge";
 
@@ -22,7 +23,9 @@ export type TransactionType =
   | "shield" // Deposit ERC20 into Railgun, credited to a private 0zk address
   | "gnosis-bridge" // Omnibridge relay between Gnosis and mainnet (either direction; USDC or a direct-route token)
   | "gnosis-wait" // Wait for AMB signatures (egress) or token delivery (ingress)
-  | "gnosis-claim"; // executeSignatures on mainnet to release the Omnibridge token
+  | "gnosis-claim" // executeSignatures on mainnet to release the Omnibridge token
+  | "crosschain-swap" // Direct Delora cross-chain swap: origin tx delivering the destination token to a receiver on another chain
+  | "crosschain-wait"; // Wait for the cross-chain swap outputs to land on the destination chain
 
 /**
  * Execution status of a transaction step
@@ -297,6 +300,10 @@ export interface ConsolidationState {
       /** EIP-5792 bundle per batch group, keyed by the group's batchId. */
       bundles?: Record<string, SendCallsBundleRecord>;
     };
+    crosschain?: {
+      /** One record per sent crosschain-swap step, consumed by the crosschain-wait step. */
+      deliveries?: CrossChainDeliveryRecord[];
+    };
   };
 
   createdAt: number; // Timestamp
@@ -333,6 +340,7 @@ export const ERROR_CODES = {
   ATTESTATION_TIMEOUT: "ATTESTATION_TIMEOUT",
   OMNIBRIDGE_TIMEOUT: "OMNIBRIDGE_TIMEOUT",
   GAS_TOPUP_TIMEOUT: "GAS_TOPUP_TIMEOUT",
+  CROSSCHAIN_DELIVERY_TIMEOUT: "CROSSCHAIN_DELIVERY_TIMEOUT",
   SAFE_NOT_DEPLOYED: "SAFE_NOT_DEPLOYED",
   SMART_ACCOUNT_NOT_DEPLOYED: "SMART_ACCOUNT_NOT_DEPLOYED",
   BUNDLE_NOT_CONFIRMED: "BUNDLE_NOT_CONFIRMED",

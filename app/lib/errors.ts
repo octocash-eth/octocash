@@ -33,6 +33,10 @@ export const ERROR_MESSAGES: Record<ErrorCode, [string, string]> = {
     "Gas delivery timed out",
     "The gas refuel may still be processing. Retry to check again.",
   ],
+  [ERROR_CODES.CROSSCHAIN_DELIVERY_TIMEOUT]: [
+    "Cross-chain swap delivery timed out",
+    "The swap output may still be on its way. Retry to keep waiting, or use the history page to resume.",
+  ],
   [ERROR_CODES.SAFE_NOT_DEPLOYED]: [
     "Safe not deployed on this chain",
     "The Safe has no verified deployment there. Pick a chain where the Safe exists, or a different wallet.",
@@ -119,6 +123,8 @@ export function createTransactionError(
     code = ERROR_CODES.OMNIBRIDGE_TIMEOUT;
   } else if (messageIncludes("GAS_TOPUP_TIMEOUT")) {
     code = ERROR_CODES.GAS_TOPUP_TIMEOUT;
+  } else if (messageIncludes("CROSSCHAIN_DELIVERY_TIMEOUT")) {
+    code = ERROR_CODES.CROSSCHAIN_DELIVERY_TIMEOUT;
   } else if (messageIncludes("SafeConfirmationTimeoutError")) {
     code = ERROR_CODES.SAFE_CONFIRMATION_TIMEOUT;
   } else if (messageIncludes("SafeTxSupersededError")) {

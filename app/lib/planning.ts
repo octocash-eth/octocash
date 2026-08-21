@@ -15,7 +15,7 @@ import {
 } from "./accounts";
 import { deloraPriceKey, fetchDeloraPrices } from "./api/delora";
 import { getBridgeFee } from "./cctp";
-import { type DeloraSwapLeg, getSwapQuoteWithLegs } from "./delora";
+import { type DeloraSwapLeg, getCrossChainSwapQuoteWithLegs, getSwapQuoteWithLegs } from "./delora";
 import { getNativeBalance } from "./gas";
 import {
   attachGasEstimates,
@@ -132,7 +132,8 @@ async function reconcileGasGaps(
       step.type === "attestation" ||
       step.type === "gas-topup" ||
       step.type === "gas-topup-wait" ||
-      step.type === "gnosis-wait"
+      step.type === "gnosis-wait" ||
+      step.type === "crosschain-wait"
     )
       continue;
     const wallet = step.inputTokens[0]?.walletAddress;
@@ -920,6 +921,12 @@ async function capNativeQuoteForGas(
   nativeBalance: bigint,
   hasOtherValue: boolean,
   log: (...args: unknown[]) => void,
+  // The single-leg re-quote after a cap. Defaults to the same-chain quote;
+  // direct cross-chain groups pass the cross-chain entry point instead.
+  requote: (
+    tokens: TokenAmount[],
+    target: Omit<TokenAmount, "amount">,
+  ) => Promise<{ output: TokenAmount; legs: DeloraSwapLeg[] }> = getSwapQuoteWithLegs,
 ): Promise<TokenAmount | null> {
   const nativeIdx = quoted.findIndex((q) => q.group.some((t) => isAddressEqual(t.token, zeroAddress)));
   if (nativeIdx < 0) return null;
@@ -959,7 +966,7 @@ async function capNativeQuoteForGas(
   );
   const cappedToken = { ...nativeToken, amount: maxAffordable };
   try {
-    const { output, legs } = await getSwapQuoteWithLegs([cappedToken], targetToken);
+    const { output, legs } = await requote([cappedToken], targetToken);
     quoted[nativeIdx] = { group: [cappedToken], output, legs };
     return cappedToken;
   } catch (error) {
@@ -989,6 +996,493 @@ async function capNativeQuoteForGas(
 function isUnroutableTokenError(error: unknown): boolean {
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
   return msg.includes("no adapters available") || msg.includes("no_available_quotes");
+}
+
+/**
+ * One quoted direct cross-chain swap group awaiting step creation (per origin
+ * token address): the inputs it consumes, the quoted destination-token output
+ * at the receiver, and the retained Delora legs for gas simulation. The
+ * cross-chain sibling of {@link QuotedSwapGroup}.
+ */
+interface QuotedCrossChainGroup {
+  group: TokenAmount[];
+  output: TokenAmount;
+  legs: DeloraSwapLeg[];
+}
+
+/**
+ * Direct-route decisions from {@link compareCrossChainRoutes}: source groups
+ * (keyed by {@link gapKey}) whose value skips the bridge machinery entirely
+ * and swaps cross-chain straight to the receiver.
+ */
+type DirectRouteDecisions = Map<string, QuotedCrossChainGroup[]>;
+
+/**
+ * Quotes a direct Delora cross-chain swap for every non-destination-chain
+ * (chain, wallet) source group and decides, per group, whether it beats the
+ * bridged route (swap → CCTP/Omnibridge → claim → final swap). The cost basis
+ * is net delivered destination-token value PLUS each route's gas, in USD via
+ * the Delora price oracle.
+ *
+ * Two-pass decision:
+ * - Pass 1 compares each group marginally, EXCLUDING the shared destination
+ *   machinery (the single claim / hub relay / final swap) — those steps remain
+ *   as long as any other group still bridges, so an individual flip doesn't
+ *   save them.
+ * - Pass 2 looks at the groups pass 1 left bridged: when every one of them
+ *   has a viable direct quote and their summed direct value beats the summed
+ *   bridged value once the now-avoidable shared machinery is credited, they
+ *   all flip together.
+ *
+ * Fail-safe throughout: any missing price, unroutable token, or quote/gas
+ * failure keeps the affected group (or the whole comparison) on today's
+ * bridged route. Both candidates' quotes go through the planning cache, so
+ * the emission stage re-fetches them for free.
+ */
+async function compareCrossChainRoutes(
+  sourceTokens: TokenAmount[],
+  destinationToken: DestinationToken,
+  receiver: Address,
+  bridgeTargets: Map<number, Omit<TokenAmount, "amount" | "walletAddress">> | undefined,
+  gasCtx: GasContext,
+  isGnosisDest: boolean,
+  accounts: AccountsMap | undefined,
+  log: (...args: unknown[]) => void,
+  // Groups already decided direct (the Gnosis floor rescue) — carried through
+  // verbatim and excluded from the comparison.
+  seeded?: DirectRouteDecisions,
+): Promise<DirectRouteDecisions> {
+  const decisions: DirectRouteDecisions = new Map(seeded);
+  const destChainId = destinationToken.chainId;
+
+  const crossChainGroups = groupTokensByChainAndWallet(sourceTokens).filter(
+    (g) => g[0].chainId !== destChainId && !decisions.has(gapKey(g[0].chainId, g[0].walletAddress)),
+  );
+  if (crossChainGroups.length === 0) return decisions;
+
+  // Direct legs deliver to `receiver` on the destination chain. A Safe/smart
+  // receiver without a controlled deployment there would fail the plan late
+  // in assertAccountChainConsistency — fall back to bridged instead.
+  const receiverAccount = accountFor(accounts, receiver);
+  if (receiverAccount.kind !== "eoa" && !controlledOn(receiverAccount, destChainId)) return decisions;
+
+  try {
+    const destChainUsdc = USDC_ADDRESSES[destChainId as keyof typeof USDC_ADDRESSES] as Address | undefined;
+    const destIsUsdc = destChainUsdc !== undefined && isAddressEqual(destinationToken.token, destChainUsdc);
+
+    const destSpec: Omit<TokenAmount, "amount"> = {
+      token: destinationToken.token,
+      chainId: destChainId,
+      symbol: destinationToken.symbol,
+      decimals: destinationToken.decimals,
+      walletAddress: receiver,
+    };
+
+    // ---- Direct candidates first, prices after: when no group routes
+    // direct there is nothing to compare and the price fetch is skipped
+    // entirely. Every token (bridge target included) quotes straight into
+    // the destination token; a single failing token keeps the whole group
+    // bridged — a half-direct group would still need the bridge machinery,
+    // erasing the saving.
+    interface DirectCandidate {
+      group: TokenAmount[];
+      key: string;
+      quoted: QuotedCrossChainGroup[];
+      directOutUnits: bigint;
+      directOps: OperationType[];
+    }
+    const viable: DirectCandidate[] = [];
+    // A group whose direct quote is unusable pins the shared destination
+    // machinery in place — pass 2 can't credit its removal.
+    let anyBridgedOnly = false;
+
+    for (const group of crossChainGroups) {
+      const { chainId, walletAddress } = group[0];
+      const byAddress = new Map<Address, TokenAmount[]>();
+      for (const token of group) {
+        const addr = getAddress(token.token);
+        const bucket = byAddress.get(addr);
+        if (bucket === undefined) byAddress.set(addr, [token]);
+        else bucket.push(token);
+      }
+      let direct: QuotedCrossChainGroup[] | null = [];
+      let directOutUnits = 0n;
+      const directOps: OperationType[] = [];
+      for (const tokens of byAddress.values()) {
+        try {
+          const { output, legs } = await getCrossChainSwapQuoteWithLegs(tokens, destSpec, receiver);
+          direct.push({ group: tokens, output, legs });
+          directOutUnits += output.amount;
+          if (!isAddressEqual(tokens[0].token, zeroAddress)) directOps.push("erc20-approval");
+          directOps.push("swap");
+        } catch (error) {
+          log(
+            `🔍 [DEBUG] Route compare: no direct route for ${tokens[0].symbol} on chain ${chainId} (${String(error)}); group stays bridged`,
+          );
+          direct = null;
+          break;
+        }
+      }
+      if (direct === null || direct.length === 0) {
+        anyBridgedOnly = true;
+        continue;
+      }
+      viable.push({ group, key: gapKey(chainId, walletAddress), quoted: direct, directOutUnits, directOps });
+    }
+    if (viable.length === 0) return decisions;
+
+    const priceMap = await fetchDeloraPrices([
+      ...(destIsUsdc ? [] : [{ chainId: destChainId, token: destinationToken.token }]),
+      { chainId: destChainId, token: zeroAddress },
+      { chainId: mainnet.id, token: zeroAddress },
+      ...viable.map((c) => ({ chainId: c.group[0].chainId, token: zeroAddress })),
+    ]);
+    const destPrice = destIsUsdc ? 1 : priceMap.get(deloraPriceKey(destChainId, destinationToken.token));
+    if (destPrice === undefined || destPrice <= 0) {
+      log("⚠️ [DEBUG] Route compare: no destination token price; keeping bridged routes");
+      return decisions;
+    }
+
+    // Budget-shaped gas in USD; null when the chain's native has no price.
+    const gasUsd = async (chainId: number, ops: OperationType[]): Promise<number | null> => {
+      if (ops.length === 0) return 0;
+      const nativeUsd = priceMap.get(deloraPriceKey(chainId, zeroAddress));
+      if (nativeUsd === undefined) return null;
+      const { totalGasCost } = await estimateChainGasCosts(chainId, ops, gasCtx.maxFeePerGas[chainId]);
+      return nativeUsd * Number(formatUnits(totalGasCost, 18));
+    };
+
+    interface GroupCandidate {
+      key: string;
+      quoted: QuotedCrossChainGroup[];
+      directNetUsd: number;
+      bridgedGrossUsd: number;
+      bridgedGasUsd: number;
+      /** USDC-flavored arrival units (0 for direct-Omnibridge-twin legs) — the conversion-factor base. */
+      usdcArrivalUnits: bigint;
+      isOmnibridgeLeg: boolean;
+    }
+    const candidates: GroupCandidate[] = [];
+
+    for (const { group, key, quoted: direct, directOutUnits, directOps } of viable) {
+      const { chainId, walletAddress } = group[0];
+
+      // ---- Bridged candidate: swap to the chain's bridge target, cross the
+      // CCTP and/or Omnibridge leg(s), value the arrival.
+      const chainUsdc = USDC_ADDRESSES[chainId as keyof typeof USDC_ADDRESSES] as Address | undefined;
+      const bridgeTarget = bridgeTargets?.get(chainId) ?? {
+        token: chainUsdc as Address,
+        chainId,
+        symbol: "USDC",
+        decimals: 6,
+      };
+      const targetIsUsdc = chainUsdc !== undefined && isAddressEqual(bridgeTarget.token, chainUsdc);
+      const toSwap = group.filter((t) => !isAddressEqual(t.token, bridgeTarget.token));
+      const alreadyTarget = group.filter((t) => isAddressEqual(t.token, bridgeTarget.token));
+      const bridgedQuoted = await fetchSwapQuoteGroups(toSwap, { ...bridgeTarget, walletAddress }, log);
+      let arrivalUnits =
+        bridgedQuoted.reduce((sum, q) => sum + q.output.amount, 0n) +
+        alreadyTarget.reduce((sum, t) => sum + t.amount, 0n);
+
+      const bridgedOps: OperationType[] = [];
+      for (const q of bridgedQuoted) {
+        if (!isAddressEqual(q.group[0].token, zeroAddress)) bridgedOps.push("erc20-approval");
+        bridgedOps.push("swap");
+      }
+      const isOmnibridgeLeg = chainId === gnosis.id || (chainId === mainnet.id && isGnosisDest);
+      if (isOmnibridgeLeg) {
+        // Omnibridge relays are fee-free 1:1 (USDC egress adds a transmuter
+        // hop); Gnosis-egress USDC bound past mainnet still pays the hub's
+        // CCTP fee on the way out.
+        bridgedOps.push("erc20-approval", "omnibridge-relay");
+        if (chainId === gnosis.id && targetIsUsdc) bridgedOps.push("omnibridge-relay");
+        if (chainId === gnosis.id && targetIsUsdc && destChainId !== mainnet.id) {
+          arrivalUnits -= await getBridgeFee(arrivalUnits, mainnet.id, destChainId);
+        }
+      } else {
+        bridgedOps.push("cctp-approval", "cctp-burn");
+        const cctpDest = isGnosisDest ? mainnet.id : destChainId;
+        arrivalUnits -= await getBridgeFee(arrivalUnits, chainId, cctpDest);
+      }
+      if (arrivalUnits < 0n) arrivalUnits = 0n;
+
+      // USDC flavors are $1/unit; a direct-Omnibridge twin is 1:1 with the
+      // destination token, so it carries the destination price.
+      const bridgedGrossUsd = targetIsUsdc
+        ? Number(formatUnits(arrivalUnits, 6))
+        : destPrice * Number(formatUnits(arrivalUnits, bridgeTarget.decimals));
+      const directOutUsd = destPrice * Number(formatUnits(directOutUnits, destinationToken.decimals));
+      const directGasUsd = await gasUsd(chainId, directOps);
+      const bridgedGasUsd = await gasUsd(chainId, bridgedOps);
+      if (directGasUsd === null || bridgedGasUsd === null) {
+        log(`⚠️ [DEBUG] Route compare: no native price for chain ${chainId}; group stays bridged`);
+        anyBridgedOnly = true;
+        continue;
+      }
+
+      candidates.push({
+        key,
+        quoted: direct,
+        directNetUsd: directOutUsd - directGasUsd,
+        bridgedGrossUsd,
+        bridgedGasUsd,
+        usdcArrivalUnits: targetIsUsdc ? arrivalUnits : 0n,
+        isOmnibridgeLeg,
+      });
+    }
+    if (candidates.length === 0) return decisions;
+
+    // ---- Bridged final-swap haircut: one plan-level conversion quote (the
+    // combined USDC arrival → destination token on the destination chain)
+    // yields the factor every USDC-flavored bridged candidate is scaled by.
+    // On failure the factor stays 1 — over-valuing the bridged route is the
+    // fail-safe direction.
+    let conversionFactor = 1;
+    const arrivalNeedsSwap = !destIsUsdc;
+    const totalUsdcArrival = candidates.reduce((sum, c) => sum + c.usdcArrivalUnits, 0n);
+    if (arrivalNeedsSwap && totalUsdcArrival > 0n && destChainUsdc) {
+      try {
+        const { output } = await getSwapQuoteWithLegs(
+          {
+            token: destChainUsdc,
+            amount: totalUsdcArrival,
+            chainId: destChainId,
+            walletAddress: receiver,
+            symbol: "USDC",
+            decimals: 6,
+          },
+          destSpec,
+        );
+        const outUsd = destPrice * Number(formatUnits(output.amount, destinationToken.decimals));
+        const inUsd = Number(formatUnits(totalUsdcArrival, 6));
+        if (inUsd > 0 && outUsd > 0) conversionFactor = outUsd / inUsd;
+      } catch (error) {
+        log(`⚠️ [DEBUG] Route compare: conversion quote failed, factor stays 1: ${String(error)}`);
+      }
+    }
+
+    // ---- Pass 1: marginal, per group.
+    const stillBridged: (GroupCandidate & { bridgedNetUsd: number })[] = [];
+    for (const candidate of candidates) {
+      const haircut = candidate.usdcArrivalUnits > 0n && arrivalNeedsSwap ? conversionFactor : 1;
+      const bridgedNetUsd = candidate.bridgedGrossUsd * haircut - candidate.bridgedGasUsd;
+      if (candidate.directNetUsd > bridgedNetUsd) {
+        decisions.set(candidate.key, candidate.quoted);
+        log(
+          `🔍 [DEBUG] Route compare: ${candidate.key} goes DIRECT (direct $${candidate.directNetUsd.toFixed(2)} > bridged $${bridgedNetUsd.toFixed(2)})`,
+        );
+      } else {
+        stillBridged.push({ ...candidate, bridgedNetUsd });
+      }
+    }
+
+    // ---- Pass 2: aggregate. Only when every remaining bridged group has a
+    // viable direct quote does flipping them all release the shared
+    // destination machinery.
+    if (stillBridged.length > 0 && !anyBridgedOnly) {
+      const gasUsdOrZero = async (chainId: number, ops: OperationType[]) => (await gasUsd(chainId, ops)) ?? 0;
+      let sharedUsd = 0;
+      if (isGnosisDest) {
+        // Hub claim + Omnibridge deposit on mainnet.
+        sharedUsd += await gasUsdOrZero(mainnet.id, ["cctp-claim", "erc20-approval", "omnibridge-relay"]);
+      } else {
+        if (stillBridged.some((c) => !c.isOmnibridgeLeg)) {
+          sharedUsd += await gasUsdOrZero(destChainId, ["cctp-claim"]);
+        }
+        if (stillBridged.some((c) => c.isOmnibridgeLeg)) {
+          // Gnosis egress: hub-side executeSignatures (+ the hub CCTP burn
+          // when the destination lies past mainnet).
+          const hubOps: OperationType[] = ["omnibridge-claim"];
+          if (destChainId !== mainnet.id) hubOps.push("cctp-approval", "cctp-burn");
+          sharedUsd += await gasUsdOrZero(mainnet.id, hubOps);
+        }
+      }
+      // The final swap only disappears with the bridged legs when no
+      // destination-chain source needs it anyway.
+      const destChainSourcesNeedSwap = sourceTokens.some(
+        (t) => t.chainId === destChainId && !isAddressEqual(t.token, destinationToken.token),
+      );
+      if (arrivalNeedsSwap && !destChainSourcesNeedSwap) {
+        sharedUsd += await gasUsdOrZero(destChainId, ["erc20-approval", "swap"]);
+      }
+
+      const sumDirect = stillBridged.reduce((sum, c) => sum + c.directNetUsd, 0);
+      const sumBridged = stillBridged.reduce((sum, c) => sum + c.bridgedNetUsd, 0);
+      const totalBridgedGrossUsd = stillBridged.reduce((sum, c) => sum + c.bridgedGrossUsd, 0);
+      if (sumDirect > sumBridged - sharedUsd) {
+        for (const candidate of stillBridged) decisions.set(candidate.key, candidate.quoted);
+        log(
+          `🔍 [DEBUG] Route compare: flipping ${stillBridged.length} remaining group(s) DIRECT — dropping the shared ` +
+            `destination steps (~$${sharedUsd.toFixed(2)}) beats bridging (direct $${sumDirect.toFixed(2)} > bridged $${(sumBridged - sharedUsd).toFixed(2)})`,
+        );
+      } else if (isGnosisDest && totalBridgedGrossUsd < GNOSIS_ROUTE_MIN_USD) {
+        // Below the Gnosis value floor, the bridged remainder would be
+        // hard-rejected by the ingress worth-it check — every one of these
+        // groups has a viable direct quote, so force them direct instead of
+        // failing the plan.
+        for (const candidate of stillBridged) decisions.set(candidate.key, candidate.quoted);
+        log(
+          `🔍 [DEBUG] Route compare: forcing ${stillBridged.length} group(s) DIRECT — the bridged remainder ` +
+            `($${totalBridgedGrossUsd.toFixed(2)}) is below the $${GNOSIS_ROUTE_MIN_USD} Gnosis hop floor`,
+        );
+      }
+    }
+  } catch (error) {
+    log(`⚠️ [DEBUG] Route compare failed; keeping bridged routes: ${String(error)}`);
+    // Seeded (floor-rescued) decisions must survive: their groups have no
+    // viable bridged route left.
+    return new Map(seeded);
+  }
+
+  return decisions;
+}
+
+/**
+ * Attempts the Gnosis floor rescue: quotes a direct cross-chain swap for
+ * every Gnosis (wallet) group that fell below the mainnet-hop value floor.
+ * The floor exists to protect against hub gas, which the direct route never
+ * pays — so a routable group is forced direct regardless of the cost
+ * comparison. Any unroutable token voids the whole rescue (`null`), and the
+ * caller falls back to today's drop-with-warning / hard-reject behavior.
+ */
+async function probeDirectGnosisRescue(
+  gnosisSources: TokenAmount[],
+  destinationToken: DestinationToken,
+  receiver: Address,
+  accounts: AccountsMap | undefined,
+  log: (...args: unknown[]) => void,
+): Promise<DirectRouteDecisions | null> {
+  const destChainId = destinationToken.chainId;
+  const receiverAccount = accountFor(accounts, receiver);
+  if (receiverAccount.kind !== "eoa" && !controlledOn(receiverAccount, destChainId)) return null;
+
+  const destSpec: Omit<TokenAmount, "amount"> = {
+    token: destinationToken.token,
+    chainId: destChainId,
+    symbol: destinationToken.symbol,
+    decimals: destinationToken.decimals,
+    walletAddress: receiver,
+  };
+
+  const decisions: DirectRouteDecisions = new Map();
+  for (const group of groupTokensByChainAndWallet(gnosisSources)) {
+    const byAddress = new Map<Address, TokenAmount[]>();
+    for (const token of group) {
+      const addr = getAddress(token.token);
+      const bucket = byAddress.get(addr);
+      if (bucket === undefined) byAddress.set(addr, [token]);
+      else bucket.push(token);
+    }
+    const quoted: QuotedCrossChainGroup[] = [];
+    for (const tokens of byAddress.values()) {
+      try {
+        const { output, legs } = await getCrossChainSwapQuoteWithLegs(tokens, destSpec, receiver);
+        quoted.push({ group: tokens, output, legs });
+      } catch (error) {
+        log(`🔍 [DEBUG] Gnosis floor rescue: no direct route for ${tokens[0].symbol} (${String(error)})`);
+        return null;
+      }
+    }
+    decisions.set(gapKey(group[0].chainId, group[0].walletAddress), quoted);
+  }
+  return decisions;
+}
+
+/**
+ * Turns quoted direct cross-chain groups into `crosschain-swap` steps, one per
+ * origin token address, retaining each step's Delora legs for gas simulation.
+ * The step executes on the ORIGIN chain; its output token lives on the
+ * destination chain at the receiver — the delivery the plan's single
+ * `crosschain-wait` step later confirms.
+ *
+ * @returns Output tokens (provenance-tagged) of the created steps
+ */
+function createCrossChainSwapSteps(
+  quoted: QuotedCrossChainGroup[],
+  steps: TransactionStep[],
+  artifacts: PlanArtifacts,
+  log: (...args: unknown[]) => void,
+): TokenAmount[] {
+  const outputTokens: TokenAmount[] = [];
+
+  for (const { group, output, legs } of quoted) {
+    const stepId = `step-${steps.length + 1}`;
+
+    const outputTokenWithProvenance = {
+      ...output,
+      provenance: stepId,
+    };
+
+    steps.push({
+      id: stepId,
+      type: "crosschain-swap",
+      status: "pending",
+      chainId: group[0].chainId,
+      inputTokens: group as [TokenAmount, ...TokenAmount[]],
+      outputToken: outputTokenWithProvenance,
+      quotedAt: Date.now(),
+    });
+    artifacts.swapLegs.set(stepId, legs);
+
+    outputTokens.push(outputTokenWithProvenance);
+
+    log(
+      `🔍 [DEBUG] Added crosschain-swap step ${stepId}: ${group[0].symbol ?? group[0].token} on chain ${group[0].chainId} -> ${output.symbol} on chain ${output.chainId}`,
+    );
+  }
+
+  return outputTokens;
+}
+
+/**
+ * Appends the plan's single `crosschain-wait` step: a destination-chain
+ * balance watch over every `crosschain-swap` output, placed after the
+ * claim/ingress stages so direct deliveries overlap the CCTP/AMB waits (the
+ * executor is strictly sequential — by the time it reaches this step the
+ * deliveries have usually already landed).
+ *
+ * @returns Tokens with the crosschain-swap outputs replaced by the wait output
+ */
+function createCrossChainWaitStep(
+  steps: TransactionStep[],
+  tokens: TokenAmount[],
+  destinationToken: Omit<TokenAmount, "amount">,
+  receiver: Address,
+  log: (...args: unknown[]) => void,
+): { steps: TransactionStep[]; tokens: TokenAmount[] } {
+  const crossChainStepIds = new Set(steps.filter((s) => s.type === "crosschain-swap").map((s) => s.id));
+  if (crossChainStepIds.size === 0) return { steps, tokens };
+
+  const waitInputs = tokens.filter((t) => t.provenance !== undefined && crossChainStepIds.has(t.provenance));
+  const otherTokens = tokens.filter((t) => t.provenance === undefined || !crossChainStepIds.has(t.provenance));
+  if (waitInputs.length === 0) return { steps, tokens };
+
+  const stepId = `step-${steps.length + 1}`;
+  const totalAmount = waitInputs.reduce((sum, t) => sum + t.amount, 0n);
+  const waitOutput: TokenAmount = {
+    token: destinationToken.token,
+    amount: totalAmount,
+    chainId: destinationToken.chainId,
+    walletAddress: receiver,
+    symbol: destinationToken.symbol,
+    decimals: destinationToken.decimals,
+    provenance: stepId,
+  };
+
+  steps.push({
+    id: stepId,
+    type: "crosschain-wait",
+    status: "pending",
+    chainId: destinationToken.chainId,
+    inputTokens: waitInputs as [TokenAmount, ...TokenAmount[]],
+    outputToken: waitOutput,
+  });
+
+  log(
+    `🔍 [DEBUG] Added crosschain-wait ${stepId} over ${waitInputs.length} delivery input(s): total=${totalAmount.toString()}`,
+  );
+
+  return { steps, tokens: [...otherTokens, waitOutput] };
 }
 
 /**
@@ -1094,6 +1588,7 @@ async function processChainWalletSwaps(
   log: (...args: unknown[]) => void,
   bridgeTargets?: Map<number, Omit<TokenAmount, "amount" | "walletAddress">>,
   accounts?: AccountsMap,
+  directDecisions?: DirectRouteDecisions,
 ): Promise<{ steps: TransactionStep[]; tokens: TokenAmount[] }> {
   const steps: TransactionStep[] = [];
   const swappedTokens: TokenAmount[] = [];
@@ -1127,6 +1622,42 @@ async function processChainWalletSwaps(
         token: t.token,
       })),
     );
+
+    // Direct route decided for this group: every token swaps cross-chain
+    // straight to the destination — nothing feeds the bridge machinery.
+    const directQuoted = isDestChain ? undefined : directDecisions?.get(gapKey(chainId, walletAddress));
+    if (directQuoted && directQuoted.length > 0) {
+      const receiverSpec = directQuoted[0].output;
+      const directTarget: Omit<TokenAmount, "amount"> = {
+        token: receiverSpec.token,
+        chainId: receiverSpec.chainId,
+        symbol: receiverSpec.symbol,
+        decimals: receiverSpec.decimals,
+        walletAddress: receiverSpec.walletAddress,
+      };
+      const hasNative = directQuoted.some((q) => q.group.some((t) => isAddressEqual(t.token, zeroAddress)));
+      if (hasNative) {
+        // Origin gas is the direct route's entire footprint — no bridge sim
+        // ops ride along (that IS the route's cost advantage).
+        const simOps: SimOp[] = directQuoted.flatMap((q) => buildSwapLegSimOps(q.legs));
+        const gasReserveWei = isSafeAccount(accounts, walletAddress)
+          ? 0n
+          : await measureOpsGas(chainId, walletAddress, simOps, gasCtx.maxFeePerGas[chainId]);
+        const nativeBalance = await getCachedNativeBalance(balances, chainId, walletAddress);
+        const hasOtherValue = directQuoted.length > 1;
+        await capNativeQuoteForGas(
+          directQuoted,
+          directTarget,
+          gasReserveWei,
+          nativeBalance,
+          hasOtherValue,
+          log,
+          (capTokens, target) => getCrossChainSwapQuoteWithLegs(capTokens, target, target.walletAddress),
+        );
+      }
+      swappedTokens.push(...createCrossChainSwapSteps(directQuoted, steps, artifacts, log));
+      continue;
+    }
 
     const chainUSDC = USDC_ADDRESSES[chainId as keyof typeof USDC_ADDRESSES] as Address;
     const bridgeTarget = bridgeTargets?.get(chainId) ?? {
@@ -2238,6 +2769,7 @@ async function createGasTopUpSteps(
 /** Step types whose calls the step wallet itself signs (Safe path candidates). */
 const SAFE_EXECUTABLE_TYPES = new Set<TransactionStep["type"]>([
   "swap",
+  "crosschain-swap",
   "bridge",
   "transfer",
   "gnosis-bridge",
@@ -2714,6 +3246,9 @@ export async function planConsolidation(
   // warning and consolidate the rest — unless they're all the plan has, in
   // which case the hard reject stands. (Ingress keeps its hard reject inside
   // `createGnosisIngressSteps`: the hop IS the route to the destination.)
+  // Gnosis groups the floor rescue forced onto the direct cross-chain route —
+  // seeded into the route comparison below, which skips them.
+  const forcedDirect: DirectRouteDecisions = new Map();
   if (sourceHasGnosis && !isGnosisDest) {
     const gnosisSources = sourceTokens.filter((t) => t.chainId === gnosis.id);
     const hopOps: OperationType[] = ["omnibridge-claim"];
@@ -2725,18 +3260,33 @@ export async function planConsolidation(
       log,
     );
     if (shortfall) {
-      const message = gnosisFloorMessage(shortfall, "from");
-      if (gnosisSources.length === sourceTokens.length) {
-        throw new Error(`PlanningError: ${message} Add more value or deselect the Gnosis tokens.`);
+      // Below-floor Gnosis value can still ride a direct cross-chain swap:
+      // the floor protects against the mainnet hop's gas, which the direct
+      // route never pays. Railgun keeps the old behavior — its receiver (the
+      // intermediate) isn't resolved yet.
+      const rescued = isRailgun
+        ? null
+        : await probeDirectGnosisRescue(gnosisSources, destinationToken, destinationToken.walletAddress, accounts, log);
+      if (rescued) {
+        for (const [key, quoted] of rescued) forcedDirect.set(key, quoted);
+        log(
+          `🔍 [DEBUG] Gnosis floor rescue: routing ${gnosisSources.length} below-floor Gnosis token(s) via direct ` +
+            `cross-chain swaps instead of dropping them`,
+        );
+      } else {
+        const message = gnosisFloorMessage(shortfall, "from");
+        if (gnosisSources.length === sourceTokens.length) {
+          throw new Error(`PlanningError: ${message} Add more value or deselect the Gnosis tokens.`);
+        }
+        warnings?.push(`Gnosis tokens not included: ${message.charAt(0).toLowerCase()}${message.slice(1)}`);
+        log(`⚠️ [DEBUG] Dropping ${gnosisSources.length} Gnosis token(s) below the hop value floor: ${message}`);
+        sourceTokens = sourceTokens.filter((t) => t.chainId !== gnosis.id);
+        sourceHasGnosis = false;
+        // Not a Gnosis destination here, so no other leg needs the mainnet hub
+        // or the (egress-flavored) direct Omnibridge route.
+        needsMainnetHub = false;
+        omniDirectRoute = null;
       }
-      warnings?.push(`Gnosis tokens not included: ${message.charAt(0).toLowerCase()}${message.slice(1)}`);
-      log(`⚠️ [DEBUG] Dropping ${gnosisSources.length} Gnosis token(s) below the hop value floor: ${message}`);
-      sourceTokens = sourceTokens.filter((t) => t.chainId !== gnosis.id);
-      sourceHasGnosis = false;
-      // Not a Gnosis destination here, so no other leg needs the mainnet hub
-      // or the (egress-flavored) direct Omnibridge route.
-      needsMainnetHub = false;
-      omniDirectRoute = null;
     }
   }
 
@@ -2764,6 +3314,49 @@ export async function planConsolidation(
   const { railgunAddress, ...publicDestination } = destinationToken;
   const intermediateToken = { ...publicDestination, walletAddress: intermediateWallet };
 
+  // Per-chain bridge-target overrides for a direct Omnibridge route: on
+  // egress the Gnosis side swaps into the destination token's Gnosis twin,
+  // on ingress the mainnet side swaps into its mainnet twin. Every other
+  // chain keeps swapping to USDC for CCTP.
+  const bridgeTargets = new Map<number, Omit<TokenAmount, "amount" | "walletAddress">>();
+  if (omniDirectRoute) {
+    const { pair, symbol, decimals } = omniDirectRoute;
+    if (isGnosisDest) {
+      bridgeTargets.set(mainnet.id, { token: pair.mainnetToken, chainId: mainnet.id, symbol, decimals });
+    } else {
+      bridgeTargets.set(gnosis.id, { token: pair.gnosisToken, chainId: gnosis.id, symbol, decimals });
+    }
+  }
+
+  // Direct Delora cross-chain swaps: per (chain, wallet) source group, quote
+  // one origin-side swap delivering the destination token straight to the
+  // receiver and take it when it nets more (output + gas, in USD) than the
+  // bridged route. Direct legs skip the hub — they deliver to the final
+  // destination wallet — except for Railgun, whose shield must run from the
+  // intermediate.
+  onProgress?.("route-compare");
+  const directReceiver = isRailgun ? intermediateWallet : publicDestination.walletAddress;
+  const directDecisions = await compareCrossChainRoutes(
+    sourceTokens,
+    destinationToken,
+    directReceiver,
+    bridgeTargets,
+    gasCtx,
+    isGnosisDest,
+    accounts,
+    log,
+    forcedDirect,
+  );
+
+  // Direct groups bypass the mainnet hub; the hub (and its usability
+  // assertion) is only needed if some cross-chain leg still bridges.
+  if (needsMainnetHub) {
+    const remainsBridged = (t: TokenAmount) => !directDecisions.has(gapKey(t.chainId, t.walletAddress));
+    needsMainnetHub = isGnosisDest
+      ? sourceTokens.some((t) => t.chainId !== gnosis.id && remainsBridged(t))
+      : sourceTokens.some((t) => t.chainId === gnosis.id && remainsBridged(t));
+  }
+
   // The Omnibridge hop's mainnet steps (claim/deposit/burn) are signed by the
   // intermediate wallet on mainnet — a chain assertAccountsUsable may not
   // cover. A Safe intermediate (i.e. a Safe destination acting as its own
@@ -2783,20 +3376,6 @@ export async function planConsolidation(
     });
   }
 
-  // Per-chain bridge-target overrides for a direct Omnibridge route: on
-  // egress the Gnosis side swaps into the destination token's Gnosis twin,
-  // on ingress the mainnet side swaps into its mainnet twin. Every other
-  // chain keeps swapping to USDC for CCTP.
-  const bridgeTargets = new Map<number, Omit<TokenAmount, "amount" | "walletAddress">>();
-  if (omniDirectRoute) {
-    const { pair, symbol, decimals } = omniDirectRoute;
-    if (isGnosisDest) {
-      bridgeTargets.set(mainnet.id, { token: pair.mainnetToken, chainId: mainnet.id, symbol, decimals });
-    } else {
-      bridgeTargets.set(gnosis.id, { token: pair.gnosisToken, chainId: gnosis.id, symbol, decimals });
-    }
-  }
-
   // Build consolidation pipeline (native amounts gas-adjusted per wallet)
   onProgress?.("swap-quotes");
   let { steps, tokens } = await processChainWalletSwaps(
@@ -2808,6 +3387,7 @@ export async function planConsolidation(
     log,
     bridgeTargets,
     accounts,
+    directDecisions,
   );
 
   onProgress?.("bridge-fees");
@@ -2857,6 +3437,10 @@ export async function planConsolidation(
     ({ steps, tokens } = createAttestationAndClaimSteps(steps, tokens, intermediateToken));
   }
 
+  // Direct-route deliveries converge on one crosschain-wait, placed after the
+  // bridge waits so they overlap instead of serializing.
+  ({ steps, tokens } = createCrossChainWaitStep(steps, tokens, publicDestination, directReceiver, log));
+
   // Whether the intermediate wallet performs a CCTP claim on the destination
   // chain (false when the destination is Gnosis — that claim runs on mainnet).
   const hasBridges = !isGnosisDest && steps.some((s) => s.type === "bridge");
@@ -2872,6 +3456,19 @@ export async function planConsolidation(
   // `createFinalTransfer` (with its floor/dust trade-offs) is needed at all.
   const deliversDirectly = safeMode && needsFinalTransfer;
   const finalTarget = deliversDirectly ? { ...publicDestination } : intermediateToken;
+
+  // Direct-route value already sits at the destination wallet. When the final
+  // swaps target the intermediate instead, hold it out — createSwapsAndTransfers
+  // would otherwise emit a BACKWARDS transfer (destination → intermediate) and
+  // createFinalTransfer would trip its single-wallet invariant — and re-append
+  // it after the terminal step.
+  const crossChainWaitStep = steps.find((s) => s.type === "crosschain-wait");
+  let directDelivered: TokenAmount[] = [];
+  if (crossChainWaitStep && needsFinalTransfer && !deliversDirectly) {
+    directDelivered = tokens.filter((t) => t.provenance === crossChainWaitStep.id);
+    tokens = tokens.filter((t) => t.provenance !== crossChainWaitStep.id);
+  }
+
   onProgress?.("final-swaps");
   ({ steps, tokens } = await createFinalSwaps(
     steps,
@@ -2889,9 +3486,12 @@ export async function planConsolidation(
 
   if (isRailgun && railgunAddress) {
     ({ steps, tokens } = createShieldStep(steps, tokens, railgunAddress, log));
-  } else if (needsFinalTransfer && !deliversDirectly) {
+  } else if (needsFinalTransfer && !deliversDirectly && tokens.length > 0) {
+    // tokens can be empty when every source group went direct — the value is
+    // already at the destination wallet and no terminal transfer exists.
     ({ steps, tokens } = await createFinalTransfer(steps, tokens, destinationToken, log));
   }
+  tokens = [...tokens, ...directDelivered];
 
   // Tag Safe-executed steps (and compute their MultiSend batch groups) before
   // estimating so the execTransaction overhead can be layered per group.
@@ -2956,6 +3556,11 @@ export async function planConsolidation(
   // mutually exclusive within one plan, so this holds by construction.
   if (steps.filter((s) => s.type === "gnosis-wait").length > 1) {
     throw new Error("PlanningError: Plans must contain at most one gnosis-wait step");
+  }
+  // Cross-chain swap deliveries share one metadata bucket and one balance
+  // watch — createCrossChainWaitStep emits at most one by construction.
+  if (steps.filter((s) => s.type === "crosschain-wait").length > 1) {
+    throw new Error("PlanningError: Plans must contain at most one crosschain-wait step");
   }
 
   log(

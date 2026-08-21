@@ -815,6 +815,9 @@ export function buildOmnibridgeSimOps(chainId: number, receiver: Address, amount
  */
 function buildStepSimOps(step: TransactionStep, artifacts: PlanArtifacts): SimOp[] {
   switch (step.type) {
+    // Cross-chain swaps have the same origin-side shape as same-chain swaps:
+    // [approval?, verbatim Delora calldata] with a gasLimit hint per leg.
+    case "crosschain-swap":
     case "swap": {
       const legs = artifacts.swapLegs.get(step.id);
       if (!legs || legs.length === 0) {
@@ -1119,7 +1122,13 @@ export async function attachGasEstimates(
     { chainId: number; wallet: Address; entries: { step: TransactionStep; simOps: SimOp[] }[] }
   >();
   for (const step of steps) {
-    if (step.type === "attestation" || step.type === "gas-topup-wait" || step.type === "gnosis-wait") continue;
+    if (
+      step.type === "attestation" ||
+      step.type === "gas-topup-wait" ||
+      step.type === "gnosis-wait" ||
+      step.type === "crosschain-wait"
+    )
+      continue;
     const wallet = step.inputTokens[0]?.walletAddress;
     if (!wallet) continue;
     const key = `${step.chainId}:${getAddress(wallet)}`;
@@ -1145,6 +1154,7 @@ export async function attachGasEstimates(
 
 function getStepOperations(step: TransactionStep): OperationType[] {
   switch (step.type) {
+    case "crosschain-swap":
     case "swap": {
       // One approval (ERC20 only) + one Delora swap tx per unique token
       // address. Same-address entries with different provenance share one
@@ -1178,6 +1188,7 @@ function getStepOperations(step: TransactionStep): OperationType[] {
       // One executeSignatures per AMB message (one message per bridge step).
       return step.inputTokens.map(() => "omnibridge-claim" as OperationType);
     case "gnosis-wait":
+    case "crosschain-wait":
       return [];
     case "transfer": {
       const firstToken = step.inputTokens[0];
