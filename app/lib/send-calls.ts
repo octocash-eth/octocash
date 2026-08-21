@@ -3,7 +3,7 @@ import { BaseError, ExecutionRevertedError, encodeFunctionData, parseAbi } from 
 import { estimateGas, getTransactionCount, waitForTransactionReceipt } from "viem/actions";
 import { chains } from "~/data/supported-chains";
 import { fetchFastFees } from "./gas-estimation";
-import { getPublicClient } from "./public-client";
+import { getPublicClient, retryOnRateLimit } from "./public-client";
 
 /**
  * Context describing how a transaction was submitted, attached to errors so a
@@ -359,10 +359,12 @@ const estimateAndSendTransaction = async (
     console.warn(`🔍 [GAS] chain=${params.chain.id} estimateGas failed (non-revert) — deferring to wallet`, err);
   }
 
+  let minViableFeePerGas: bigint | undefined;
   try {
     const fees = await fetchFastFees(params.chain.id);
     maxFeePerGas = fees.maxFeePerGas;
     maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
+    minViableFeePerGas = fees.minViableFeePerGas;
     console.log(
       `🔍 [GAS] chain=${params.chain.id} maxFeePerGas=${maxFeePerGas} wei, maxPriorityFeePerGas=${maxPriorityFeePerGas ?? "n/a"} wei`,
     );
@@ -390,6 +392,45 @@ const estimateAndSendTransaction = async (
       const hintedPri = (retryHints.maxPriorityFeePerGas ?? 0n) * 2n;
       const currentPri = (maxPriorityFeePerGas ?? 0n) * 2n;
       maxPriorityFeePerGas = hintedPri > currentPri ? hintedPri : currentPri;
+    }
+  }
+
+  // Affordability clamp for value-carrying sends. The node rejects a tx unless
+  // balance ≥ value + gasLimit × maxFeePerGas — the WORST-CASE bid, not the
+  // expected cost. Max-native amounts were carved out of the balance against
+  // an earlier fee snapshot (planning or step start), so by the time the tx is
+  // signed — after quote refreshes and the wallet-confirmation wait — the fast
+  // bid can overshoot what the balance still affords, and Infura rejects with
+  // "insufficient funds for gas * price + value". The fee's 2× base buffer is
+  // discretionary headroom: spend it down to `minViableFeePerGas` (unbuffered
+  // next-block base + priority) before giving up. Runs AFTER the replacement
+  // doubling above so retries never sign an unaffordable bid either.
+  const sentValue = params.value ?? 0n;
+  if (sentValue > 0n && gas !== undefined && maxFeePerGas !== undefined) {
+    let balance: bigint | undefined;
+    try {
+      balance = await retryOnRateLimit(() => getPublicClient(params.chain.id).getBalance({ address: params.account }));
+    } catch (err) {
+      // Balance read failed: proceed unclamped — the node's own check is the
+      // backstop, exactly as before this clamp existed.
+      console.warn(`🔍 [GAS] chain=${params.chain.id} balance read for affordability clamp failed — skipping`, err);
+    }
+    if (balance !== undefined && balance - sentValue < gas * maxFeePerGas) {
+      const affordableFeeWei = balance > sentValue ? balance - sentValue : 0n;
+      const cappedFee = affordableFeeWei / gas;
+      if (minViableFeePerGas === undefined || cappedFee < minViableFeePerGas) {
+        throw new SendCallsError(
+          `Insufficient funds for gas: sending ${sentValue} wei leaves ${affordableFeeWei} wei for fees, ` +
+            `but the transaction needs ${gas} gas at ≥${minViableFeePerGas ?? maxFeePerGas} wei/gas to be included.`,
+        );
+      }
+      console.log(
+        `🔍 [GAS] chain=${params.chain.id} clamping maxFeePerGas ${maxFeePerGas} → ${cappedFee} wei so value+fees fit the balance`,
+      );
+      maxFeePerGas = cappedFee;
+      if (maxPriorityFeePerGas !== undefined && maxPriorityFeePerGas > cappedFee) {
+        maxPriorityFeePerGas = cappedFee;
+      }
     }
   }
 

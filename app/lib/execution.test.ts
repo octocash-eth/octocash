@@ -1275,6 +1275,78 @@ describe("executeConsolidationPlan", () => {
     expect(finalState.results["transfer-eth-1"].actualOutput?.amount).toBe(1000000000000000000n);
   });
 
+  test("transfer step - re-fits a max native amount to the live balance and gas price", async () => {
+    // A max-ETH transfer's amount was capped at PLANNING time against that
+    // moment's fee snapshot. By execution — after earlier steps and waits —
+    // fees may have risen, so the amount must be re-fit like swaps do, or the
+    // node rejects with "insufficient funds for gas * price + value".
+    const WALLET_2 = "0x2234567890123456789012345678901234567890" as Address;
+    const ETH_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
+
+    // fetchMaxFeePerGas at execution → 42 gwei: pending base 20 gwei
+    // (gasUsed == target), buffered ×2 = 40, p75 priority 2 gwei.
+    vi.mocked(getPublicClient).mockImplementation(
+      () =>
+        ({
+          readContract: vi.fn().mockResolvedValue(2n ** 128n),
+          getBlock: vi.fn().mockResolvedValue({
+            baseFeePerGas: 20_000_000_000n,
+            gasUsed: 15_000_000n,
+            gasLimit: 30_000_000n,
+          }),
+          getFeeHistory: vi.fn().mockResolvedValue({ reward: [[2_000_000_000n], [2_000_000_000n]] }),
+        }) as never,
+    );
+    // The wallet holds only 0.0005 ETH beyond the planned 1 ETH — less than
+    // the 27_300 gas × 42 gwei ≈ 0.0011 ETH the transfer now needs.
+    vi.mocked(getNativeBalance).mockResolvedValue(1_000_500_000_000_000_000n);
+
+    const capturedSendCalls = vi.fn().mockResolvedValue(["0xtxhash", []]);
+    vi.mocked(prepareSendCalls).mockReturnValue(capturedSendCalls);
+
+    const nativeInput: TokenAmount = {
+      token: ETH_ADDRESS,
+      amount: 1_000_000_000_000_000_000n, // planned 1 ETH
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "ETH",
+      decimals: 18,
+    };
+    const transferStep: TransactionStep = {
+      id: "transfer-eth-refit",
+      type: "transfer",
+      status: "pending",
+      chainId: 1,
+      inputTokens: [nativeInput],
+      outputToken: { ...nativeInput, walletAddress: WALLET_2 },
+      estimatedGas: {
+        gasUnits: 27_300n,
+        maxFeePerGas: 30_000_000_000n, // stale planning-time fee
+        gasCostWei: 27_300n * 30_000_000_000n,
+        nativeSymbol: "ETH",
+        source: "budget",
+      },
+    };
+    mockState.plan = [transferStep];
+
+    try {
+      const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(mockState, mockWalletClient));
+
+      // balance 1.0005 ETH − 27_300 gas × 42 gwei = 0.9993534 ETH
+      const expected = 999_353_400_000_000_000n;
+      expect(finalState.results["transfer-eth-refit"].status).toBe("success");
+      const lastSend = capturedSendCalls.mock.calls.at(-1);
+      expect(lastSend?.[3]?.[0]?.value).toBe(expected);
+      expect(finalState.results["transfer-eth-refit"].actualOutput?.amount).toBe(expected);
+    } finally {
+      // Restore the suite-wide defaults (overrides persist across tests).
+      vi.mocked(getPublicClient).mockImplementation(
+        () => ({ readContract: vi.fn().mockResolvedValue(2n ** 128n) }) as never,
+      );
+      vi.mocked(getNativeBalance).mockResolvedValue(2n ** 128n);
+    }
+  });
+
   // === Error Handling & Edge Cases for 100% Coverage ===
 
   test("throws error when starting with invalid state status", async () => {

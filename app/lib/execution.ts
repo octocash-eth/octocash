@@ -1615,6 +1615,19 @@ async function executeStep(
         }
       }
 
+      // Re-fit a max native amount to the live balance and current gas price.
+      // The planned amount was capped against planning-time fees, which by now
+      // (after earlier steps and waits) can be stale enough that the node
+      // rejects value + gasLimit × maxFeePerGas. Same policy as swap steps.
+      const adjustedTransferTokens = await adjustNativeTokenForGas(
+        step.inputTokens as [TokenAmount, ...TokenAmount[]],
+        step,
+        state,
+      );
+      if (adjustedTransferTokens !== step.inputTokens) {
+        step.inputTokens = adjustedTransferTokens;
+      }
+
       await validateInputBalances(step, state);
 
       // Calculate total amount to transfer

@@ -185,6 +185,13 @@ export async function estimateChainGasCosts(
 export async function fetchFastFees(chainId: number): Promise<{
   maxFeePerGas: bigint;
   maxPriorityFeePerGas: bigint | undefined;
+  /**
+   * The smallest bid still includable next block: unbuffered pendingBaseFee +
+   * priority (or raw legacy gasPrice). Everything between this and
+   * `maxFeePerGas` is discretionary headroom that affordability clamps may
+   * spend (see `estimateAndSendTransaction`).
+   */
+  minViableFeePerGas: bigint;
 }> {
   const client = getPublicClient(chainId);
 
@@ -214,6 +221,7 @@ export async function fetchFastFees(chainId: number): Promise<{
     return {
       maxFeePerGas: bufferedBase + maxPriorityFeePerGas,
       maxPriorityFeePerGas,
+      minViableFeePerGas: pendingBase + maxPriorityFeePerGas,
     };
   } catch {
     // Pre-EIP-1559 chain or RPC without `eth_feeHistory`. Use legacy gasPrice
@@ -222,6 +230,7 @@ export async function fetchFastFees(chainId: number): Promise<{
     return {
       maxFeePerGas: (gasPrice * BASE_FEE_BUFFER_PCT) / 100n,
       maxPriorityFeePerGas: undefined,
+      minViableFeePerGas: gasPrice,
     };
   }
 }

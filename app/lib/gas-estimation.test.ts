@@ -175,6 +175,23 @@ describe("gas-estimation", () => {
       expect(fees.maxFeePerGas).toBe(10_000_000_000n);
       expect(fees.maxPriorityFeePerGas).toBeUndefined();
     });
+
+    test("reports minViableFeePerGas as unbuffered pendingBase + priority", async () => {
+      const fees = await fetchFastFees(1);
+      // pendingBase 10 gwei + priority 5 gwei: the smallest bid that is still
+      // includable next block, with none of the discretionary 2× buffer.
+      expect(fees.minViableFeePerGas).toBe(15_000_000_000n);
+    });
+
+    test("reports minViableFeePerGas as raw gasPrice on legacy chains", async () => {
+      mockClient.getBlock.mockResolvedValueOnce({
+        baseFeePerGas: null,
+        gasUsed: 0n,
+        gasLimit: 30_000_000n,
+      });
+      const fees = await fetchFastFees(1);
+      expect(fees.minViableFeePerGas).toBe(5_000_000_000n);
+    });
   });
 
   describe("estimateOperationsForChainWallet", () => {

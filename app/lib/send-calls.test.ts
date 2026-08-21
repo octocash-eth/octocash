@@ -34,6 +34,9 @@ const mockPublicClient = {
   }),
   getGasPrice: vi.fn().mockResolvedValue(20_000_000_000n),
   getTransaction: vi.fn().mockResolvedValue({ hash: "0xseen" }),
+  // Feeds the value-carrying affordability clamp. Default is effectively
+  // unlimited so existing tests never trigger clamping.
+  getBalance: vi.fn().mockResolvedValue(2n ** 128n),
 };
 vi.mock("./public-client", () => ({
   getPublicClient: vi.fn(() => mockPublicClient),
@@ -122,6 +125,8 @@ describe("sendCalls", () => {
       // Reset mempool watchdog mock to "tx visible" default.
       mockPublicClient.getTransaction.mockReset();
       mockPublicClient.getTransaction.mockResolvedValue({ hash: "0xseen" });
+      mockPublicClient.getBalance.mockReset();
+      mockPublicClient.getBalance.mockResolvedValue(2n ** 128n);
     });
 
     describe("empty calls", () => {
@@ -841,6 +846,104 @@ describe("sendCalls", () => {
           );
 
           expect(mockClient.sendTransaction).toHaveBeenCalledWith(expect.objectContaining({ nonce: 17 }));
+        });
+      });
+
+      describe("value affordability clamp", () => {
+        // The node rejects a tx unless balance ≥ value + gasLimit × maxFeePerGas
+        // (the worst-case bid, not the expected cost). For max-native sends the
+        // value was carved out of the balance against an earlier fee snapshot,
+        // so the send-time bid must be capped to what the balance still affords.
+        //
+        // Numbers with the suite's mocks: estimateGas 100000 → gas 120000;
+        // fast fee 42 gwei (40 buffered base + 2 priority); minimum viable fee
+        // 22 gwei (20 pending base + 2 priority).
+        const SENDER = "0x4444444444444444444444444444444444444444" as Address;
+        const VALUE = 10n ** 18n; // 1 ETH
+        const CALL = { to: "0x1111111111111111111111111111111111111111" as Address, data: "0x" as Hex, value: VALUE };
+
+        test("caps maxFeePerGas to what the balance affords next to the value", async () => {
+          // 0.003 ETH of fee headroom → cap = 3e15 / 120000 = 25 gwei, still
+          // above the 22 gwei minimum viable bid.
+          mockPublicClient.getBalance.mockResolvedValue(VALUE + 3_000_000_000_000_000n);
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)("test", 1, SENDER, [CALL], "atomic-steps");
+
+          expect(mockPublicClient.getBalance).toHaveBeenCalledWith({ address: SENDER });
+          expect(mockClient.sendTransaction).toHaveBeenCalledWith(
+            expect.objectContaining({
+              value: VALUE,
+              gas: 120_000n,
+              maxFeePerGas: 25_000_000_000n,
+              maxPriorityFeePerGas: 2_000_000_000n,
+            }),
+          );
+        });
+
+        test("throws before signing when even the minimum viable fee is unaffordable", async () => {
+          // 0.001 ETH headroom → cap ≈ 8.3 gwei < 22 gwei minimum viable: the
+          // tx could neither pass the node's balance check at the fast bid nor
+          // realistically mine at an affordable one.
+          mockPublicClient.getBalance.mockResolvedValue(VALUE + 1_000_000_000_000_000n);
+
+          await expect(
+            prepareSendCalls(mockClient, mockWaitForReceipt)("test", 1, SENDER, [CALL], "atomic-steps"),
+          ).rejects.toThrow(/insufficient funds/i);
+
+          expect(mockClient.sendTransaction).not.toHaveBeenCalled();
+        });
+
+        test("leaves the fast fee untouched when the balance is ample", async () => {
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)("test", 1, SENDER, [CALL], "atomic-steps");
+
+          expect(mockClient.sendTransaction).toHaveBeenCalledWith(
+            expect.objectContaining({ maxFeePerGas: 42_000_000_000n }),
+          );
+        });
+
+        test("skips the balance read for value-less transactions", async () => {
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)(
+            "test",
+            1,
+            SENDER,
+            [{ to: CALL.to, data: "0x" }],
+            "atomic-steps",
+          );
+
+          expect(mockPublicClient.getBalance).not.toHaveBeenCalled();
+        });
+
+        test("clamps the doubled replacement bid on retry", async () => {
+          // Retry doubles the bid to 84 gwei; the clamp must run AFTER the
+          // doubling so the replacement is still affordable.
+          mockPublicClient.getBalance.mockResolvedValue(VALUE + 3_000_000_000_000_000n);
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)("test", 1, SENDER, [CALL], "atomic-steps", {
+            nonce: 9,
+            maxFeePerGas: 42_000_000_000n,
+            maxPriorityFeePerGas: 2_000_000_000n,
+          });
+
+          expect(mockClient.sendTransaction).toHaveBeenCalledWith(
+            expect.objectContaining({ nonce: 9, maxFeePerGas: 25_000_000_000n, maxPriorityFeePerGas: 4_000_000_000n }),
+          );
+        });
+
+        test("proceeds with unclamped fees when the balance read fails", async () => {
+          mockPublicClient.getBalance.mockRejectedValue(new Error("rpc down"));
+          mockWaitForReceipt.mockResolvedValueOnce(createMockReceipt("success", []));
+
+          await prepareSendCalls(mockClient, mockWaitForReceipt)("test", 1, SENDER, [CALL], "atomic-steps");
+
+          expect(mockClient.sendTransaction).toHaveBeenCalledWith(
+            expect.objectContaining({ maxFeePerGas: 42_000_000_000n }),
+          );
         });
       });
     });
