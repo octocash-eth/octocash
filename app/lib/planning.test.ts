@@ -73,7 +73,7 @@ vi.mock("./gas-estimation", () => ({
   buildSwapLegSimOps: vi.fn(() => []),
   buildBridgeSimOps: vi.fn(() => []),
   buildOmnibridgeSimOps: vi.fn(() => []),
-  emptyPlanArtifacts: () => ({ swapLegs: new Map() }),
+  emptyPlanArtifacts: () => ({ swapLegs: new Map(), unroutable: [] }),
   formatGasCostNative: vi.fn((wei: bigint) => (Number(wei) / 1e18).toString()),
 }));
 
@@ -393,7 +393,8 @@ describe("planConsolidation", () => {
       return { token: WBTC_ADDRESS, amount: 8000n, chainId: 1, walletAddress: WALLET, symbol: "WBTC", decimals: 8 };
     });
 
-    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+    const warnings: string[] = [];
+    const result = await planConsolidation(sourceTokens, destinationToken, [WALLET], undefined, undefined, warnings);
     const swapSteps = result.filter((s: TransactionStep) => s.type === "swap");
     const swappedTokens = swapSteps.flatMap((s) => s.inputTokens.map((t) => t.token));
 
@@ -401,6 +402,31 @@ describe("planConsolidation", () => {
     // than aborting the whole plan.
     expect(swappedTokens).not.toContain(UNROUTABLE);
     expect(swappedTokens).toContain("0x0000000000000000000000000000000000000b01");
+    // ...and the user is told which token was left out.
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("NOPE");
+  });
+
+  test("plan with only unroutable tokens fails with a clear error instead of coming back empty", async () => {
+    const UNROUTABLE = "0x00000000000000000000000000000000000000aa" as Address;
+    const sourceTokens: TokenAmount[] = [
+      { token: UNROUTABLE, amount: 1_000000n, chainId: 1, walletAddress: WALLET, symbol: "NOPE", decimals: 18 },
+    ];
+
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    // Live shape of the thin-liquidity case: 422 NO_AVAILABLE_QUOTES.
+    vi.mocked(getSwapQuote).mockRejectedValue(
+      new Error("ExternalAPIError: Request failed (422): NO_AVAILABLE_QUOTES: No adapters available for this request"),
+    );
+
+    await expect(planConsolidation(sourceTokens, destinationToken, [WALLET])).rejects.toThrow(/^PlanningError: .*NOPE/);
   });
 
   test("transient quote failure aborts the plan instead of dropping the token", async () => {

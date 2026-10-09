@@ -810,8 +810,8 @@ interface QuotedSwapGroup {
  * contain multiple `TokenAmount`s for the same address (different
  * `provenance`, e.g. the user's pre-existing USDC plus a CCTP claim output) —
  * those legitimately share a quote. A token that Delora can't route to
- * `targetToken` is skipped (and logged) so the rest of the wallet can still
- * be consolidated; any other failure propagates so the plan fails loudly.
+ * `targetToken` is skipped (logged, and recorded in `artifacts.unroutable`)
+ * so the rest of the wallet can still be consolidated; any other failure propagates so the plan fails loudly.
  *
  * Quoting is separated from step creation so planning can MEASURE the gas of
  * the quoted calls (via `eth_simulateV1`) and cap/drop native inputs before
@@ -820,6 +820,7 @@ interface QuotedSwapGroup {
 async function fetchSwapQuoteGroups(
   tokensToSwap: TokenAmount[],
   targetToken: Omit<TokenAmount, "amount">,
+  artifacts: PlanArtifacts,
   log: (...args: unknown[]) => void,
 ): Promise<QuotedSwapGroup[]> {
   const quoted: QuotedSwapGroup[] = [];
@@ -847,6 +848,7 @@ async function fetchSwapQuoteGroups(
         log(
           `⚠️ [DEBUG] Skipping unroutable token ${group[0].symbol ?? group[0].token} -> ${targetToken.symbol}: ${reason}`,
         );
+        artifacts.unroutable.push(...group);
         continue;
       }
       throw error;
@@ -1023,7 +1025,7 @@ async function createSwapsAndTransfers(
 
   // Swap tokens to target token (quotes may have been pre-fetched by the
   // caller for gas measurement/capping — reuse them instead of re-quoting)
-  const quoted = quotedSwaps ?? (await fetchSwapQuoteGroups(tokensToSwap, targetToken, log));
+  const quoted = quotedSwaps ?? (await fetchSwapQuoteGroups(tokensToSwap, targetToken, artifacts, log));
   if (quoted.length > 0) {
     log(
       `🔍 [DEBUG] Creating swap steps for ${quoted.length} token groups to ${targetToken.symbol} at wallet ${targetToken.walletAddress}`,
@@ -1161,7 +1163,7 @@ async function processChainWalletSwaps(
     if (!isDestChain && tokensToSwapToBridgeTarget.length > 0) {
       const bridgeTargetToken: Omit<TokenAmount, "amount"> = { ...bridgeTarget, walletAddress };
 
-      const quoted = await fetchSwapQuoteGroups(tokensToSwapToBridgeTarget, bridgeTargetToken, log);
+      const quoted = await fetchSwapQuoteGroups(tokensToSwapToBridgeTarget, bridgeTargetToken, artifacts, log);
 
       // Native capping runs on MEASURED gas: simulate the quoted swap calls
       // plus the upcoming bridge deposit (its amount is the quoted total) in
@@ -1592,7 +1594,7 @@ async function createGnosisIngressSteps(
         chainId: mainnet.id,
         walletAddress: walletTokens[0].walletAddress,
       };
-      const quoted = await fetchSwapQuoteGroups(walletTokens, target, log);
+      const quoted = await fetchSwapQuoteGroups(walletTokens, target, artifacts, log);
       if (quoted.length === 0) {
         throw new Error(
           `PlanningError: No route to swap the bridged USDC to ${route.symbol} on Ethereum mainnet. Please try again later.`,
@@ -1755,7 +1757,7 @@ async function createFinalSwaps(
     const shieldsHere = needsShield && isIntermediateWallet;
 
     const tokensToSwap = tokensToProcess.filter((t) => !isAddressEqual(t.token, destinationToken.token));
-    const quoted = await fetchSwapQuoteGroups(tokensToSwap, destinationToken, log);
+    const quoted = await fetchSwapQuoteGroups(tokensToSwap, destinationToken, artifacts, log);
 
     const hasNativeToCap =
       !destIsNative && quoted.some((q) => q.group.some((t) => isAddressEqual(t.token, zeroAddress)));
@@ -2891,6 +2893,20 @@ export async function planConsolidation(
     ({ steps, tokens } = createShieldStep(steps, tokens, railgunAddress, log));
   } else if (needsFinalTransfer && !deliversDirectly) {
     ({ steps, tokens } = await createFinalTransfer(steps, tokens, destinationToken, log));
+  }
+
+  // Tokens Delora couldn't route were skipped along the way. Say so: as a
+  // note when the rest of the plan stands, as an error when nothing is left
+  // (an empty plan would otherwise render as a blank screen).
+  if (artifacts.unroutable.length > 0) {
+    const symbols = [...new Set(artifacts.unroutable.map((t) => t.symbol ?? t.token))].join(", ");
+    if (steps.length === 0) {
+      throw new Error(
+        `PlanningError: No swap route is available for ${symbols} at the selected amount; liquidity is likely too low. ` +
+          "Try a smaller amount or select other tokens.",
+      );
+    }
+    warnings?.push(`No swap route for ${symbols} at the selected amount; liquidity is likely too low.`);
   }
 
   // Tag Safe-executed steps (and compute their MultiSend batch groups) before

@@ -19,7 +19,7 @@ import { chains } from "~/data/supported-chains";
 import { USDC as USDC_ADDRESSES } from "~/data/token-contracts";
 import type { DeloraSwapLeg } from "./delora";
 import { getPublicClient, retryOnRateLimit } from "./public-client";
-import type { GasEstimateSource, StepGasEstimate, TransactionStep } from "./types";
+import type { GasEstimateSource, StepGasEstimate, TokenAmount, TransactionStep } from "./types";
 
 // Note: native-token USD pricing is intentionally not handled here. Gas costs are
 // tracked in native wei; fiat conversion belongs at the UI layer (see
@@ -598,10 +598,12 @@ async function simulateOperationGas(
  */
 export interface PlanArtifacts {
   swapLegs: Map<string, DeloraSwapLeg[]>;
+  /** Source tokens Delora couldn't route, left out of the plan. */
+  unroutable: TokenAmount[];
 }
 
 export function emptyPlanArtifacts(): PlanArtifacts {
-  return { swapLegs: new Map() };
+  return { swapLegs: new Map(), unroutable: [] };
 }
 
 /**

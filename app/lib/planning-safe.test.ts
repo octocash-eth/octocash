@@ -62,7 +62,7 @@ vi.mock("./gas-estimation", () => ({
   buildSwapLegSimOps: vi.fn(() => []),
   buildBridgeSimOps: vi.fn(() => []),
   buildOmnibridgeSimOps: vi.fn(() => []),
-  emptyPlanArtifacts: () => ({ swapLegs: new Map() }),
+  emptyPlanArtifacts: () => ({ swapLegs: new Map(), unroutable: [] }),
   formatGasCostNative: vi.fn((wei: bigint) => (Number(wei) / 1e18).toString()),
 }));
 
