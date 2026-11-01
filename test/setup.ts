@@ -1,6 +1,17 @@
 import "@testing-library/jest-dom/vitest";
 import { afterAll, beforeAll, vi } from "vitest";
 
+// Node 25+ ships its own Web Storage globals, which are undefined unless Node
+// runs with --localstorage-file. Vitest won't overwrite globals that already
+// exist, so they shadow jsdom's; point them back at jsdom's working storage.
+// `jsdom` is the global Vitest's jsdom environment exposes.
+const jsdomWindow = (globalThis as { jsdom?: { window: Window } }).jsdom?.window;
+if (jsdomWindow) {
+  for (const key of ["localStorage", "sessionStorage"] as const) {
+    Object.defineProperty(globalThis, key, { value: jsdomWindow[key], configurable: true, writable: true });
+  }
+}
+
 // Mock ResizeObserver for cmdk/Combobox tests
 global.ResizeObserver = class ResizeObserver {
   observe = vi.fn();
