@@ -186,7 +186,6 @@ export function MobileTokenList<TData extends TokenAmount>({
   // Reset the reveal window whenever the underlying filtered set changes
   // (filter toggles, refreshes), so the user starts back at the top.
   const rowSignature = rows.map((row) => row.id).join("|");
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset the reveal window whenever the filtered set identity changes
   React.useEffect(() => {
     setVisibleCount(INITIAL_VISIBLE);
   }, [rowSignature]);

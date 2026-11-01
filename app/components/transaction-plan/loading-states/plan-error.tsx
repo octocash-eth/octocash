@@ -21,7 +21,6 @@ export function PlanError({ error, onRetry, autoRetry = false, attemptNumber }: 
   // monotonic counter from the planning hook; we key on it (not read it) so
   // consecutive failures restart the timer cleanly. Clicking "Retry now" also
   // routes through this path: refetch fails -> attemptNumber++ -> timer resets.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: attemptNumber is intentionally the trigger
   useEffect(() => {
     setSecondsLeft(COUNTDOWN_SECONDS);
   }, [attemptNumber]);

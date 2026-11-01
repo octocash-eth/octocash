@@ -386,7 +386,6 @@ function DataGridTable<TData>() {
         {isLoading && props.loadingMode === "skeleton" && pagination?.pageSize ? (
           // Show skeleton loading immediately
           Array.from({ length: pagination.pageSize }).map((_, rowIndex) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: Skeleton rows are temporary placeholders without real IDs
             <DataGridTableBodyRowSkeleton key={`skeleton-row-${rowIndex}`}>
               {table.getVisibleFlatColumns().map((column) => {
                 return (

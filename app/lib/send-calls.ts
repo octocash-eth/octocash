@@ -387,10 +387,12 @@ const estimateAndSendTransaction = async (
   if (retryHints) {
     const hintedMax = retryHints.maxFeePerGas * 2n;
     const currentMax = maxFeePerGas !== undefined ? maxFeePerGas * 2n : 0n;
+    // biome-ignore lint/complexity/useMathMinMax: bigint operands; Math.max throws on bigints
     maxFeePerGas = hintedMax > currentMax ? hintedMax : currentMax;
     if (retryHints.maxPriorityFeePerGas !== undefined || maxPriorityFeePerGas !== undefined) {
       const hintedPri = (retryHints.maxPriorityFeePerGas ?? 0n) * 2n;
       const currentPri = (maxPriorityFeePerGas ?? 0n) * 2n;
+      // biome-ignore lint/complexity/useMathMinMax: bigint operands; Math.max throws on bigints
       maxPriorityFeePerGas = hintedPri > currentPri ? hintedPri : currentPri;
     }
   }
