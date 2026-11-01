@@ -1,18 +1,5 @@
-import type {
-  ColumnDef,
-  ColumnFiltersState,
-  OnChangeFn,
-  RowSelectionState,
-  SortingState,
-  VisibilityState,
-} from "@tanstack/react-table";
-import {
-  getCoreRowModel,
-  getFilteredRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
-  useReactTable,
-} from "@tanstack/react-table";
+import type { ColumnDef, ColumnFiltersState, OnChangeFn, RowSelectionState, SortingState } from "@tanstack/react-table";
+import { useTable } from "@tanstack/react-table";
 import { Coins, Link, RotateCw, Wallet } from "lucide-react";
 import * as React from "react";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
@@ -24,26 +11,27 @@ import type { TokenAmount } from "~/lib/types";
 import { ChainIcon } from "../chain/chain-icon";
 import { Button } from "../ui/button";
 import { Card } from "../ui/card";
-import { DataGrid, DataGridContainer } from "../ui/data-grid";
-import { DataGridPaginationNav, DataGridPaginationSize } from "../ui/data-grid-pagination";
-import { DataGridTable } from "../ui/data-grid-table";
 import { ScrollArea, ScrollBar } from "../ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { getUsdValue } from "./columns";
+import { DataGrid, DataGridContainer } from "./data-grid";
+import { DataGridPaginationNav, DataGridPaginationSize } from "./data-grid-pagination";
+import { DataGridTable } from "./data-grid-table";
+import { type WalletTableFeatures, walletTableFeatures } from "./features";
 import { MobileTokenList } from "./mobile-token-list";
 import type { WalletTableFilterConfig } from "./wallet-table-filters";
 import { WalletTableFilters } from "./wallet-table-filters";
 
-interface DataTableProps<TData extends object, TValue> {
-  columns: ColumnDef<TData, TValue>[];
-  data: TData[];
+interface DataTableProps {
+  columns: ColumnDef<WalletTableFeatures, TokenAmount>[];
+  data: TokenAmount[];
   connectedAddresses?: readonly string[];
   rowSelection: RowSelectionState;
   onRowSelectionChange: OnChangeFn<RowSelectionState>;
   onRefresh?: () => void;
   isRefreshing?: boolean;
-  priceFor?: (row: TData) => number | undefined;
-  isPending?: (row: TData) => boolean;
+  priceFor?: (row: TokenAmount) => number | undefined;
+  isPending?: (row: TokenAmount) => boolean;
   canSelectMore?: boolean;
   /** Rendered inline at the start of the filter toolbar row. */
   toolbarStart?: React.ReactNode;
@@ -76,7 +64,7 @@ function RenderedChainCell({ chain }: { chain: string }) {
   );
 }
 
-export function DataTable<TData extends TokenAmount, TValue>({
+export function DataTable({
   columns,
   data,
   rowSelection,
@@ -87,10 +75,9 @@ export function DataTable<TData extends TokenAmount, TValue>({
   isPending,
   canSelectMore = true,
   toolbarStart,
-}: DataTableProps<TData, TValue>) {
+}: DataTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
 
   // Unique wallets
   const wallets = React.useMemo(() => {
@@ -114,7 +101,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
   }, [data]);
 
   // Filter configs
-  const filterConfigs = React.useMemo<ReadonlyArray<WalletTableFilterConfig<TData, unknown>>>(
+  const filterConfigs = React.useMemo<ReadonlyArray<WalletTableFilterConfig<TokenAmount, unknown>>>(
     () => [
       {
         id: "walletAddress",
@@ -147,16 +134,12 @@ export function DataTable<TData extends TokenAmount, TValue>({
 
   const meta = React.useMemo(() => ({ priceFor, isPending, canSelectMore }), [priceFor, isPending, canSelectMore]);
 
-  const table = useReactTable({
+  const table = useTable({
+    features: walletTableFeatures,
     data,
     columns,
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
     onSortingChange: setSorting,
-    getSortedRowModel: getSortedRowModel(),
     onColumnFiltersChange: setColumnFilters,
-    getFilteredRowModel: getFilteredRowModel(),
-    onColumnVisibilityChange: setColumnVisibility,
     onRowSelectionChange,
     enableRowSelection: true,
     // Keep the user on the current page. The `tokens` pipeline re-derives a
@@ -169,7 +152,6 @@ export function DataTable<TData extends TokenAmount, TValue>({
     state: {
       sorting,
       columnFilters,
-      columnVisibility,
       rowSelection,
     },
   });
@@ -192,7 +174,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
   // Backstop for non-filter cases (a refresh returning fewer tokens, a page
   // size change): with `autoResetPageIndex` off the user could be stranded on
   // a now-empty page past the end, so fall back to page 1 there too.
-  const pageIndex = table.getState().pagination.pageIndex;
+  const pageIndex = table.state.pagination.pageIndex;
   const pageCount = table.getPageCount();
   React.useEffect(() => {
     if (pageIndex > 0 && pageIndex > pageCount - 1) {
@@ -205,14 +187,13 @@ export function DataTable<TData extends TokenAmount, TValue>({
   // Total reflects the currently filtered/visible rows; the selection sum
   // reflects every selected row. Both reuse the value column's `getUsdValue`
   // so the indicator stays in lockstep with the displayed cell values.
-  const priceForToken = priceFor as ((row: TokenAmount) => number | undefined) | undefined;
   // Grand total across every loaded token (ignores filters/selection).
-  const totalUsd = data.reduce((sum, row) => sum + getUsdValue(row, priceForToken), 0);
+  const totalUsd = data.reduce((sum, row) => sum + getUsdValue(row, priceFor), 0);
   const filteredUsd = table
     .getFilteredRowModel()
-    .rows.reduce((sum, row) => sum + getUsdValue(row.original, priceForToken), 0);
+    .rows.reduce((sum, row) => sum + getUsdValue(row.original, priceFor), 0);
   const selectedRows = table.getSelectedRowModel().rows;
-  const selectedUsd = selectedRows.reduce((sum, row) => sum + getUsdValue(row.original, priceForToken), 0);
+  const selectedUsd = selectedRows.reduce((sum, row) => sum + getUsdValue(row.original, priceFor), 0);
   const hasSelection = selectedRows.length > 0;
   const hasActiveFilter = columnFilters.length > 0;
 
@@ -286,15 +267,13 @@ export function DataTable<TData extends TokenAmount, TValue>({
         </div>
       </div>
 
-      <DataGrid<TData>
+      <DataGrid
         table={table}
         recordCount={data.length}
         isLoading={isRefreshing && data.length === 0}
-        loadingMode="skeleton"
         emptyMessage="No tokens found"
-        onRowClick={(rowData) => {
-          const row = table.getRowModel().rows.find((r) => r.original === rowData);
-          if (row && (row.getIsSelected() || canSelectMore)) {
+        onRowClick={(row) => {
+          if (row.getIsSelected() || canSelectMore) {
             row.toggleSelected();
           }
         }}
@@ -314,7 +293,7 @@ export function DataTable<TData extends TokenAmount, TValue>({
         <DataGridContainer className="hidden md:grid">
           <ScrollArea className="max-h-[calc(100vh-300px)]">
             <div className="min-w-5xl">
-              <DataGridTable<TData> />
+              <DataGridTable />
             </div>
             <ScrollBar orientation="vertical" />
             <ScrollBar orientation="horizontal" />
@@ -322,10 +301,10 @@ export function DataTable<TData extends TokenAmount, TValue>({
         </DataGridContainer>
 
         {/* Mobile: card list driven by the same table, with infinite scroll. */}
-        <MobileTokenList<TData>
+        <MobileTokenList
           table={table}
-          priceFor={priceForToken}
-          isPending={isPending as ((row: TokenAmount) => boolean) | undefined}
+          priceFor={priceFor}
+          isPending={isPending}
           canSelectMore={canSelectMore}
           className="md:hidden"
         />

@@ -1,4 +1,4 @@
-import type { Column, ColumnDef } from "@tanstack/react-table";
+import type { ColumnDef } from "@tanstack/react-table";
 import { formatUnits } from "viem";
 import {
   AddressDisplayAvatar,
@@ -17,13 +17,14 @@ import {
   TokenDisplaySymbol,
 } from "~/components/token";
 import { Checkbox } from "~/components/ui/checkbox";
-import { DataGridColumnHeader } from "~/components/ui/data-grid-column-header";
 import { Skeleton } from "~/components/ui/skeleton";
 import { useFormatFiat, useSelectedCurrency } from "~/context/currency-provider";
 import { getChainName } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
 import { ChainIcon } from "../chain/chain-icon";
 import { ButtonGroup } from "../ui/button-group";
+import { DataGridColumnHeader } from "./data-grid-column-header";
+import type { WalletColumn, WalletTableFeatures } from "./features";
 import { TokenActionsMenu } from "./token-actions-menu";
 
 /**
@@ -31,7 +32,7 @@ import { TokenActionsMenu } from "./token-actions-menu";
  * (e.g. "In USD", "In EUR") so the column label stays in sync with the rest
  * of the table.
  */
-function ValueColumnHeader({ column }: { column: Column<TokenAmount> }) {
+function ValueColumnHeader({ column }: { column: WalletColumn }) {
   const { currency } = useSelectedCurrency();
   return (
     <div className="flex justify-end -me-7">
@@ -86,12 +87,14 @@ function ValueCell({
  * Builds the wallet table's column defs.
  *
  * The value column ("In USD/EUR/...") is computed from a live `priceFor`
- * lookup, so its `sortingFn` needs the same lookup in closure scope —
- * TanStack's `SortingFn` signature `(rowA, rowB, columnId) => number` does
+ * lookup, so its `sortFn` needs the same lookup in closure scope —
+ * TanStack's `SortFn` signature `(rowA, rowB, columnId) => number` does
  * not pass `meta` through. Callers (re)build columns whenever `priceFor`
  * changes so the table re-sorts as prices stream in.
  */
-export function buildColumns(priceFor?: (row: TokenAmount) => number | undefined): ColumnDef<TokenAmount>[] {
+export function buildColumns(
+  priceFor?: (row: TokenAmount) => number | undefined,
+): ColumnDef<WalletTableFeatures, TokenAmount>[] {
   return [
     {
       id: "select",
@@ -122,7 +125,6 @@ export function buildColumns(priceFor?: (row: TokenAmount) => number | undefined
         );
       },
       enableSorting: false,
-      enableHiding: false,
       meta: {
         skeleton: <Skeleton className="h-4 w-4 rounded" />,
       },
@@ -282,7 +284,7 @@ export function buildColumns(priceFor?: (row: TokenAmount) => number | undefined
         const meta = table.options.meta;
         return <ValueCell row={row} priceFor={meta?.priceFor} isPending={meta?.isPending} />;
       },
-      sortingFn: "basic",
+      sortFn: "basic",
       meta: {
         skeleton: <Skeleton className="h-4 w-16 ml-auto" />,
       },

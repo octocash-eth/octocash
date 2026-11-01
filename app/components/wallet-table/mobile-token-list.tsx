@@ -1,4 +1,3 @@
-import type { Row, Table } from "@tanstack/react-table";
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 import { AddressDisplayAvatar, AddressDisplayRoot, AddressDisplayText } from "~/components/address";
@@ -12,13 +11,14 @@ import type { TokenAmount } from "~/lib/types";
 import { cn } from "~/lib/utils";
 import { ChainIcon } from "../chain/chain-icon";
 import { getUsdValue } from "./columns";
+import type { WalletRow, WalletTable } from "./features";
 import { TokenActionsMenu } from "./token-actions-menu";
 
 const INITIAL_VISIBLE = 10;
 const PAGE_INCREMENT = 10;
 
-interface MobileTokenListProps<TData extends TokenAmount> {
-  table: Table<TData>;
+interface MobileTokenListProps {
+  table: WalletTable;
   priceFor?: (row: TokenAmount) => number | undefined;
   isPending?: (row: TokenAmount) => boolean;
   canSelectMore?: boolean;
@@ -49,13 +49,13 @@ function MobileFiatValue({
   return <span className="text-sm text-muted-foreground">{formatFiat(usd)}</span>;
 }
 
-function MobileTokenCard<TData extends TokenAmount>({
+function MobileTokenCard({
   row,
   priceFor,
   isPending,
   canSelectMore,
 }: {
-  row: Row<TData>;
+  row: WalletRow;
   priceFor?: (row: TokenAmount) => number | undefined;
   isPending?: (row: TokenAmount) => boolean;
   canSelectMore: boolean;
@@ -170,13 +170,7 @@ function MobileTokenCard<TData extends TokenAmount>({
   );
 }
 
-export function MobileTokenList<TData extends TokenAmount>({
-  table,
-  priceFor,
-  isPending,
-  canSelectMore = true,
-  className,
-}: MobileTokenListProps<TData>) {
+export function MobileTokenList({ table, priceFor, isPending, canSelectMore = true, className }: MobileTokenListProps) {
   // Mobile uses infinite scroll over the full filtered set, ignoring the
   // table's pagination (which only drives the desktop view).
   const rows = table.getFilteredRowModel().rows;
