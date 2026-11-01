@@ -260,16 +260,16 @@ class MockImage {
   naturalWidth = 0;
   referrerPolicy = "";
   crossOrigin: string | null = null;
-  #listeners: Record<string, Set<() => void>> = {};
+  #listeners: Record<string, Set<(event: Event) => void>> = {};
   #src = "";
 
-  addEventListener(type: string, cb: () => void) {
+  addEventListener(type: string, cb: (event: Event) => void) {
     const set = this.#listeners[type] ?? new Set();
     set.add(cb);
     this.#listeners[type] = set;
   }
 
-  removeEventListener(type: string, cb: () => void) {
+  removeEventListener(type: string, cb: (event: Event) => void) {
     this.#listeners[type]?.delete(cb);
   }
 
@@ -278,7 +278,9 @@ class MockImage {
     this.complete = true;
     this.naturalWidth = 1;
     queueMicrotask(() => {
-      for (const cb of this.#listeners.load ?? []) cb();
+      // Radix Avatar reads the loaded image off `event.currentTarget`.
+      const event = { type: "load", currentTarget: this } as unknown as Event;
+      for (const cb of this.#listeners.load ?? []) cb(event);
     });
   }
 
