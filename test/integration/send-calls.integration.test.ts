@@ -3,10 +3,23 @@ import { createWalletClient, encodeFunctionData, erc20Abi, keccak256, parseEther
 import { privateKeyToAccount } from "viem/accounts";
 import { waitForTransactionReceipt } from "viem/actions";
 import { base, mainnet, optimism } from "viem/chains";
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 import { USDC } from "../../app/data/token-contracts";
 import { prepareSendCalls } from "../../app/lib/send-calls";
 import { getTestClients } from "../integration-global-setup";
+
+// send-calls reads fees and runs its broadcast watchdog through
+// `getPublicClient`, which by default hits the real public RPC. That RPC never
+// sees Anvil-only txs, so the watchdog would fail any send whose receipt took
+// over 60s. Point it at the matching Anvil fork instead.
+vi.mock("../../app/lib/public-client", async (importOriginal) => {
+	const original = await importOriginal<typeof import("../../app/lib/public-client")>();
+	const { getTestClients } = await import("../integration-global-setup");
+	return {
+		...original,
+		getPublicClient: (chainId: number) => getTestClients(chainId).publicClient,
+	};
+});
 
 // Test clients for each chain
 const { testClient: mainnetTestClient, publicClient: mainnetPublicClient, transport: mainnetTransport } = getTestClients(mainnet.id);
