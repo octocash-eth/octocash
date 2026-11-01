@@ -146,6 +146,32 @@ describe("errors", () => {
         expect(result.code).toBe(ERROR_CODES.SLIPPAGE_EXCEEDED);
       });
 
+      it("should detect SLIPPAGE_EXCEEDED from a simulated delivery shortfall", () => {
+        const error = new Error(
+          "Swap aborted: simulation shows the wallet would receive 9.8 USDT, " +
+            "below the quoted minimum of 9.9 USDT. No transaction was sent.",
+        );
+        const result = createTransactionError(error);
+        expect(result.code).toBe(ERROR_CODES.SLIPPAGE_EXCEEDED);
+      });
+
+      it("should detect SWAP_ROUTE_FAILED from a simulated swap revert", () => {
+        // A venue on the route failing (here Metric's PriceProviderFailed), as
+        // viem reports an undecodable custom error.
+        const error = new Error(
+          'Swap simulation reverted: The contract function "<unknown>" reverted with the following signature:\n' +
+            '0x46a14930\n\nUnable to decode signature "0x46a14930" as it was not found on the provided ABI.',
+        );
+        const result = createTransactionError(error);
+        expect(result.code).toBe(ERROR_CODES.SWAP_ROUTE_FAILED);
+        expect(result.recoverable).toBe(true);
+      });
+
+      it("should keep a simulated slippage revert as SLIPPAGE_EXCEEDED", () => {
+        const result = createTransactionError(new Error("Swap simulation reverted: SlippageExceeded"));
+        expect(result.code).toBe(ERROR_CODES.SLIPPAGE_EXCEEDED);
+      });
+
       it("should detect RPC_ERROR from message", () => {
         const error = new Error("network connection failed");
         const result = createTransactionError(error);

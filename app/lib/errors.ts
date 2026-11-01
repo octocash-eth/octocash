@@ -12,6 +12,10 @@ export const ERROR_MESSAGES: Record<ErrorCode, [string, string]> = {
     "The wallet's balance is below the planned input amount. Top up and retry, or skip this step.",
   ],
   [ERROR_CODES.SLIPPAGE_EXCEEDED]: ["Price changed too much", "Retry for new quote."],
+  [ERROR_CODES.SWAP_ROUTE_FAILED]: [
+    "Swap route unavailable",
+    "A liquidity source on the quoted route is failing right now. Nothing was sent. Retry for a new quote.",
+  ],
   [ERROR_CODES.RPC_ERROR]: ["Network error", "Check connection and retry."],
   [ERROR_CODES.TIMEOUT]: [
     "Transaction took too long",
@@ -104,8 +108,17 @@ export function createTransactionError(
     code = ERROR_CODES.USER_REJECTED;
   } else if (messageIncludes("INSUFFICIENT_GAS") || messageIncludes("insufficient funds")) {
     code = ERROR_CODES.INSUFFICIENT_GAS;
-  } else if (messageIncludes("SLIPPAGE_EXCEEDED") || messageIncludes("slippage")) {
+  } else if (
+    messageIncludes("SLIPPAGE_EXCEEDED") ||
+    messageIncludes("slippage") ||
+    messageIncludes("below the quoted minimum") // Delora pre-flight delivery shortfall
+  ) {
     code = ERROR_CODES.SLIPPAGE_EXCEEDED;
+  } else if (messageIncludes("Swap simulation reverted")) {
+    // Delora pre-flight revert from a venue on the route (e.g. a pool's oracle
+    // failing); a fresh quote may route around it. Checked before RPC_ERROR so
+    // revert text mentioning "network" is not misread as a connection issue.
+    code = ERROR_CODES.SWAP_ROUTE_FAILED;
   } else if (
     messageIncludes("RPC_ERROR") ||
     messageIncludes("JSON-RPC") ||
