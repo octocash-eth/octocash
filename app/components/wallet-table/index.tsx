@@ -303,7 +303,7 @@ export function WalletTable({ connectedAddresses = [], accounts, showSafesTab = 
     return merged.sort((a, b) => liveUsd(b) - liveUsd(a));
   }, [zerionQuery.data, extraQuery.data, extraQuery.isSuccess, isDeloraAllowed, isReachable, matchesTab, liveUsd]);
 
-  // Rebuild columns when `priceFor` changes so the value column's `sortingFn`
+  // Rebuild columns when `priceFor` changes so the value column's `sortFn`
   // (which closes over `priceFor`) sees fresh prices and the table re-sorts.
   const columns = React.useMemo(() => buildColumns(priceFor), [priceFor]);
 
