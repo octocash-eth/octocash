@@ -216,6 +216,7 @@ export async function fetchFastFees(chainId: number): Promise<{
     const samples = (history.reward ?? []).map((row) => row[0]).filter((v): v is bigint => v !== undefined && v > 0n);
     const histPriority = medianBigint(samples);
     const floor = PRIORITY_FEE_FLOOR[chainId] ?? PRIORITY_FEE_FLOOR_DEFAULT;
+    // biome-ignore lint/complexity/useMathMinMax: bigint operands; Math.max throws on bigints
     const maxPriorityFeePerGas = histPriority > floor ? histPriority : floor;
 
     return {

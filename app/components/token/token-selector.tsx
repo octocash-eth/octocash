@@ -231,7 +231,6 @@ export function TokenSelector({
   }, [options, customOptions]);
 
   // Clear custom options when chain changes
-  // biome-ignore lint/correctness/useExhaustiveDependencies: chainId is a prop and we need to react to its changes
   React.useEffect(() => {
     setCustomOptions([]);
   }, [chainId]);

@@ -211,7 +211,6 @@ export function useRegisterPrices(tokens: ReadonlyArray<TokenIdentity>): void {
     [tokens],
   );
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `tokens` is captured via the signature dep; we deliberately re-run only when the set of keys changes, not on every array identity change.
   React.useEffect(() => {
     if (signature.length === 0) return;
     return registry.registerTokens(tokens);
