@@ -1,11 +1,12 @@
+import type { CellData } from "@tanstack/react-table";
 import { ArrowDown, ArrowUp, ChevronsUpDown } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
 import { useDataGrid } from "./data-grid";
 import type { WalletColumn } from "./features";
 
-interface DataGridColumnHeaderProps {
-  column: WalletColumn;
+interface DataGridColumnHeaderProps<TValue extends CellData> {
+  column: WalletColumn<TValue>;
   title?: string;
   className?: string;
 }
@@ -14,7 +15,11 @@ interface DataGridColumnHeaderProps {
  * Column header label that cycles the column's sort (asc → desc → unsorted)
  * on click. Columns that can't sort render a plain label.
  */
-function DataGridColumnHeader({ column, title = "", className }: DataGridColumnHeaderProps) {
+function DataGridColumnHeader<TValue extends CellData>({
+  column,
+  title = "",
+  className,
+}: DataGridColumnHeaderProps<TValue>) {
   const { isLoading, recordCount } = useDataGrid();
 
   if (!column.getCanSort()) {

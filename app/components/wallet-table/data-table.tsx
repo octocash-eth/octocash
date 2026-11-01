@@ -94,10 +94,9 @@ export function DataTable({
     });
   }, [data]);
 
-  // Unique chains (as chain names)
+  // Unique chains (as chain ids, which is what the chain column filters on)
   const chains = React.useMemo(() => {
-    const chainNames = data.map((token) => getChainName(token.chainId));
-    return [...new Set(chainNames)];
+    return [...new Set(data.map((token) => token.chainId))];
   }, [data]);
 
   // Filter configs
@@ -126,7 +125,7 @@ export function DataTable({
         icon: Link,
         emptyMessage: "No chains available",
         items: chains,
-        renderOption: (chain) => <RenderedChainCell chain={chain as string} />,
+        renderOption: (chainId) => <RenderedChainCell chain={getChainName(chainId as number)} />,
       },
     ],
     [chains, tokens, wallets],
