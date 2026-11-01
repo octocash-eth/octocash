@@ -1,4 +1,4 @@
-import type { ColumnDef } from "@tanstack/react-table";
+import { createColumnHelper } from "@tanstack/react-table";
 import { formatUnits } from "viem";
 import {
   AddressDisplayAvatar,
@@ -32,7 +32,7 @@ import { TokenActionsMenu } from "./token-actions-menu";
  * (e.g. "In USD", "In EUR") so the column label stays in sync with the rest
  * of the table.
  */
-function ValueColumnHeader({ column }: { column: WalletColumn }) {
+function ValueColumnHeader({ column }: { column: WalletColumn<number> }) {
   const { currency } = useSelectedCurrency();
   return (
     <div className="flex justify-end -me-7">
@@ -83,6 +83,8 @@ function ValueCell({
   return <div className="text-right font-medium">{formatFiat(usd)}</div>;
 }
 
+const columnHelper = createColumnHelper<WalletTableFeatures, TokenAmount>();
+
 /**
  * Builds the wallet table's column defs.
  *
@@ -92,11 +94,9 @@ function ValueCell({
  * not pass `meta` through. Callers (re)build columns whenever `priceFor`
  * changes so the table re-sorts as prices stream in.
  */
-export function buildColumns(
-  priceFor?: (row: TokenAmount) => number | undefined,
-): ColumnDef<WalletTableFeatures, TokenAmount>[] {
-  return [
-    {
+export function buildColumns(priceFor?: (row: TokenAmount) => number | undefined) {
+  return columnHelper.columns([
+    columnHelper.display({
       id: "select",
       size: 20,
       header: ({ table }) => {
@@ -128,9 +128,8 @@ export function buildColumns(
       meta: {
         skeleton: <Skeleton className="h-4 w-4 rounded" />,
       },
-    },
-    {
-      accessorKey: "symbol",
+    }),
+    columnHelper.accessor("symbol", {
       size: 200,
       header: ({ column }) => <DataGridColumnHeader column={column} title="Token" />,
       cell: ({ row }) => {
@@ -164,11 +163,7 @@ export function buildColumns(
           </div>
         );
       },
-      filterFn: (row, _id, value) => {
-        const values = value as string[];
-        if (values.length === 0) return true;
-        return values.includes(row.original.symbol);
-      },
+      filterFn: "isAnyOf",
       meta: {
         skeleton: (
           <div className="flex items-center gap-1">
@@ -178,9 +173,8 @@ export function buildColumns(
           </div>
         ),
       },
-    },
-    {
-      accessorKey: "chainId",
+    }),
+    columnHelper.accessor("chainId", {
       size: 100,
       header: ({ column }) => <DataGridColumnHeader column={column} title="Chain" />,
       cell: ({ row }) => {
@@ -194,12 +188,7 @@ export function buildColumns(
           </div>
         );
       },
-      filterFn: (row, _id, value) => {
-        const values = value as string[];
-        if (values.length === 0) return true;
-        const chainName = getChainName(row.original.chainId);
-        return values.includes(chainName);
-      },
+      filterFn: "isAnyOf",
       meta: {
         skeleton: (
           <div className="flex items-center gap-2">
@@ -208,9 +197,8 @@ export function buildColumns(
           </div>
         ),
       },
-    },
-    {
-      accessorKey: "walletAddress",
+    }),
+    columnHelper.accessor("walletAddress", {
       size: 150,
       header: ({ column }) => <DataGridColumnHeader column={column} title="Wallet" />,
       cell: ({ row }) => {
@@ -229,11 +217,7 @@ export function buildColumns(
           </div>
         );
       },
-      filterFn: (row, _id, value) => {
-        const values = value as string[];
-        if (values.length === 0) return true;
-        return values.includes(row.original.walletAddress);
-      },
+      filterFn: "isAnyOf",
       meta: {
         skeleton: (
           <div className="flex items-center gap-2">
@@ -242,9 +226,8 @@ export function buildColumns(
           </div>
         ),
       },
-    },
-    {
-      accessorKey: "amount",
+    }),
+    columnHelper.accessor("amount", {
       size: 70,
       header: ({ column }) => (
         <div className="flex justify-end -me-7">
@@ -269,14 +252,13 @@ export function buildColumns(
       meta: {
         skeleton: <Skeleton className="h-4 w-20 ml-auto" />,
       },
-    },
-    {
+    }),
+    columnHelper.accessor((row) => getUsdValue(row, priceFor), {
       id: "amountInUsd",
-      // `accessorFn` is required for `column.getCanSort()` to return true —
+      // An accessor is required for `column.getCanSort()` to return true —
       // TanStack treats columns without an accessor as display-only and
       // refuses to sort them, regardless of `enableSorting`. The numeric
       // value we return is also what the default `basic` sorting compares.
-      accessorFn: (row) => getUsdValue(row, priceFor),
       size: 100,
       enableSorting: true,
       header: ({ column }) => <ValueColumnHeader column={column} />,
@@ -288,8 +270,8 @@ export function buildColumns(
       meta: {
         skeleton: <Skeleton className="h-4 w-16 ml-auto" />,
       },
-    },
-    {
+    }),
+    columnHelper.display({
       id: "actions",
       size: 70,
       cell: ({ row }) => (
@@ -300,6 +282,6 @@ export function buildColumns(
       meta: {
         skeleton: <Skeleton className="h-8 w-8 rounded ml-auto" />,
       },
-    },
-  ];
+    }),
+  ]);
 }

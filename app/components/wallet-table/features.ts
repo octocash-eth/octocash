@@ -1,7 +1,9 @@
 import {
+  type CellData,
   type Column,
   columnFilteringFeature,
   columnSizingFeature,
+  constructFilterFn,
   createFilteredRowModel,
   createPaginatedRowModel,
   createSortedRowModel,
@@ -33,10 +35,21 @@ export interface WalletColumnMeta {
 }
 
 /**
+ * Keeps rows whose column value (stringified, so numeric chain ids work too)
+ * is one of the selected filter values. Filters with no selected values are
+ * removed rather than hiding every row.
+ */
+const filterFn_isAnyOf = constructFilterFn({
+  filter: (dataValue: unknown, filterValue: readonly string[]) => filterValue.includes(String(dataValue)),
+  autoRemove: (filterValue: readonly string[] | undefined) => !filterValue?.length,
+});
+
+/**
  * Everything the wallet table registers with TanStack Table v9: the features
  * its grid calls into (column sizing gives the fixed column widths), the
- * client-side row models, the sort functions `"auto"` can resolve to for its
- * columns, and its table/column meta types.
+ * client-side row models, the filter and sort functions its columns refer
+ * to (including what `"auto"` sorting can resolve to), and its table/column
+ * meta types.
  */
 export const walletTableFeatures = tableFeatures({
   columnFilteringFeature,
@@ -47,6 +60,7 @@ export const walletTableFeatures = tableFeatures({
   filteredRowModel: createFilteredRowModel(),
   sortedRowModel: createSortedRowModel(),
   paginatedRowModel: createPaginatedRowModel(),
+  filterFns: { isAnyOf: filterFn_isAnyOf },
   sortFns: { alphanumeric: sortFn_alphanumeric, basic: sortFn_basic, text: sortFn_text },
   tableMeta: metaHelper<WalletTableMeta>(),
   columnMeta: metaHelper<WalletColumnMeta>(),
@@ -55,6 +69,6 @@ export const walletTableFeatures = tableFeatures({
 export type WalletTableFeatures = typeof walletTableFeatures;
 export type WalletTable = ReactTable<WalletTableFeatures, TokenAmount>;
 export type WalletRow = Row<WalletTableFeatures, TokenAmount>;
-export type WalletColumn = Column<WalletTableFeatures, TokenAmount>;
+export type WalletColumn<TValue extends CellData = CellData> = Column<WalletTableFeatures, TokenAmount, TValue>;
 export type WalletHeader = Header<WalletTableFeatures, TokenAmount, unknown>;
 export type WalletHeaderGroup = HeaderGroup<WalletTableFeatures, TokenAmount>;
