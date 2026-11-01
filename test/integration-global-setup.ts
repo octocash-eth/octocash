@@ -1,7 +1,7 @@
-import { createServer } from 'prool'
-import { anvil } from 'prool/instances'
+import { Instance, Server } from 'prool'
 import { createPublicClient, createTestClient, http, type Address, type Chain } from 'viem';
 import { mnemonicToAccount } from 'viem/accounts';
+import { loadEnv } from 'vite';
 import { base, mainnet, optimism } from 'viem/chains';
 
 const basePort = 8545;
@@ -46,14 +46,16 @@ async function getLatestBlockNumber(rpcUrl: string): Promise<number> {
 }
 
 export default async function setup() {
-  if (!process.env.VITE_DRPC_API_KEY) {
+  // Vitest 5 no longer copies .env into process.env before global setup.
+  const drpcApiKey = process.env.VITE_DRPC_API_KEY ?? loadEnv('test', process.cwd(), 'VITE_').VITE_DRPC_API_KEY;
+  if (!drpcApiKey) {
     throw new Error("VITE_DRPC_API_KEY is not set")
   }
   
   console.log('📊 Fetching latest block numbers...');
-  const mainnetRpc = `https://lb.drpc.live/ethereum/${process.env.VITE_DRPC_API_KEY}`;
-  const optimismRpc = `https://lb.drpc.live/optimism/${process.env.VITE_DRPC_API_KEY}`;
-  const baseRpc = `https://lb.drpc.live/base/${process.env.VITE_DRPC_API_KEY}`;
+  const mainnetRpc = `https://lb.drpc.live/ethereum/${drpcApiKey}`;
+  const optimismRpc = `https://lb.drpc.live/optimism/${drpcApiKey}`;
+  const baseRpc = `https://lb.drpc.live/base/${drpcApiKey}`;
   
   const [mainnetBlock, optimismBlock, baseBlock] = await Promise.all([
     getLatestBlockNumber(mainnetRpc),
@@ -79,10 +81,10 @@ export default async function setup() {
       forkBlockNumber: baseBlock,
     },
   ].map(({ chain, forkUrl, forkBlockNumber }) =>
-    createServer({
+    Server.create({
       host: "localhost",
       port: basePort + chain.id,
-      instance: anvil({
+      instance: Instance.anvil({
         forkUrl,
         forkChainId: chain.id,
         forkBlockNumber,
@@ -102,7 +104,7 @@ export default async function setup() {
       console.log('🛑 Stopping Prool servers...');
       // Stop all servers concurrently, don't fail if one fails
       const stopPromises = startedServers.map(s => 
-        s.stop().catch(err => console.error('Error stopping server:', err))
+        s.stop().catch((err: unknown) => console.error('Error stopping server:', err))
       );
       await Promise.allSettled(stopPromises);
       startedServers.length = 0; // Clear the array

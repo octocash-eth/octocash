@@ -9,6 +9,7 @@ Provides a visual playground to view and understand how the `TransactionPlanView
 ## Scenarios
 
 ### 1. Happy Path - Multi-Chain Consolidation
+
 **Source:** `test/e2e/consolidation-happy-path.test.ts`
 
 Complete successful consolidation flow:
@@ -18,6 +19,7 @@ Complete successful consolidation flow:
 - Status: **completed**
 
 ### 2. Partial Dependency Adaptation
+
 **Source:** `test/e2e/consolidation-skip.test.ts`
 
 Demonstrates partial dependency handling:
@@ -28,6 +30,7 @@ Demonstrates partial dependency handling:
 - Status: **partial**
 
 ### 3. Paused State - Attestation Timeout
+
 **Source:** `test/e2e/consolidation-recovery.test.ts`
 
 Shows recovery UI for failed steps:
@@ -38,6 +41,7 @@ Shows recovery UI for failed steps:
 - Status: **paused**
 
 ### 4. Simple Same-Chain Swap
+
 **Source:** `app/lib/planning.test.ts`
 
 Minimal scenario:
@@ -46,6 +50,7 @@ Minimal scenario:
 - Status: **completed**
 
 ### 5. Executing State
+
 **Source:** `app/lib/execution.test.ts`
 
 Active execution in progress:

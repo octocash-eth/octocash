@@ -142,7 +142,7 @@ describe("omnibridge", () => {
       expect(bridge.functionName).toBe("transferAndCall");
       expect(bridge.args?.[0]).toBe(HOME_OMNIBRIDGE);
       expect(bridge.args?.[1]).toBe(AMOUNT);
-      expect((bridge.args?.[2] as Hex).toLowerCase()).toBe(RECEIVER.toLowerCase());
+      expect((bridge.args?.[2] as Hex | undefined)?.toLowerCase()).toBe(RECEIVER.toLowerCase());
     });
 
     test("relays a non-USDC token directly into the home Omnibridge (no transmuter)", async () => {
