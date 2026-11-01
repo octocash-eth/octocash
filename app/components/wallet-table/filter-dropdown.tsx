@@ -5,31 +5,33 @@ import type { ReactNode } from "react";
 import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 
-interface FilterDropdownProps<T> {
+export interface FilterOption {
+  /** Filter value written to the column filter when this option is checked. */
+  value: string;
+  label: ReactNode;
+}
+
+interface FilterDropdownProps {
   icon: LucideIcon;
   label: string;
-  selectedItems: readonly string[];
-  items: T[];
-  getValue?: (item: T) => string;
-  renderItem: (item: T) => ReactNode;
+  selectedValues: readonly string[];
+  options: readonly FilterOption[];
   onToggle: (value: string, isSelected: boolean) => void;
   onClear: () => void;
   emptyMessage: string;
 }
 
-export function FilterDropdown<T>({
+export function FilterDropdown({
   icon,
   label,
-  selectedItems,
-  items,
-  getValue,
-  renderItem,
+  selectedValues,
+  options,
   onToggle,
   onClear,
   emptyMessage,
-}: FilterDropdownProps<T>) {
+}: FilterDropdownProps) {
   const Icon = icon;
-  const selectedCount = selectedItems.length;
+  const selectedCount = selectedValues.length;
 
   return (
     <DropdownMenu>
@@ -47,21 +49,17 @@ export function FilterDropdown<T>({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
-        {items.length > 0 ? (
-          items.map((item) => {
-            const value = getValue?.(item) ?? String(item);
-
-            return (
-              <DropdownMenuCheckboxItem
-                key={value}
-                checked={selectedItems.includes(value)}
-                onCheckedChange={(checked) => onToggle(value, checked === true)}
-                onSelect={(event) => event.preventDefault()}
-              >
-                {renderItem(item)}
-              </DropdownMenuCheckboxItem>
-            );
-          })
+        {options.length > 0 ? (
+          options.map((option) => (
+            <DropdownMenuCheckboxItem
+              key={option.value}
+              checked={selectedValues.includes(option.value)}
+              onCheckedChange={(checked) => onToggle(option.value, checked === true)}
+              onSelect={(event) => event.preventDefault()}
+            >
+              {option.label}
+            </DropdownMenuCheckboxItem>
+          ))
         ) : (
           <div className="px-2 py-1.5 text-sm text-muted-foreground">{emptyMessage}</div>
         )}
