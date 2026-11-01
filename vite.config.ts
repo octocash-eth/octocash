@@ -2,14 +2,15 @@
 import { reactRouter } from "@react-router/dev/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vitest/config";
-import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
   plugins: [
     tailwindcss(),
     !process.env.VITEST && reactRouter(),
-    tsconfigPaths()
   ],
+  resolve: {
+    tsconfigPaths: true,
+  },
   server: {
     port: 3000,
     // Allow access when Playwright runs in Docker hitting host via host.docker.internal
@@ -18,7 +19,6 @@ export default defineConfig({
   test: {
     projects: [
       {
-        plugins: [tsconfigPaths()],
         test: {
           name: "unit",
           environment: "jsdom",
@@ -33,7 +33,6 @@ export default defineConfig({
         },
       },
       {
-        plugins: [tsconfigPaths()],
         test: {
           name: "integration",
           environment: "jsdom",
