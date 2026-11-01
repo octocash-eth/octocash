@@ -1,4 +1,4 @@
-import type { ColumnDef, ColumnFiltersState, OnChangeFn, RowSelectionState, SortingState } from "@tanstack/react-table";
+import type { ColumnDef, OnChangeFn, RowSelectionState, SortingState } from "@tanstack/react-table";
 import { useTable } from "@tanstack/react-table";
 import { Coins, Link, RotateCw, Wallet } from "lucide-react";
 import * as React from "react";
@@ -77,59 +77,48 @@ export function DataTable({
   toolbarStart,
 }: DataTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
-  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
 
-  // Unique wallets
-  const wallets = React.useMemo(() => {
-    return [...new Set(data.map((token) => token.walletAddress))];
-  }, [data]);
-
-  // Unique tokens (by symbol) - we pass the full token for rendering
-  const tokens = React.useMemo(() => {
-    const seen = new Set<string>();
-    return data.filter((token) => {
-      if (seen.has(token.symbol)) return false;
-      seen.add(token.symbol);
+  // One dropdown per filterable column, offering each distinct value in `data`.
+  // Option values must match what the column's `isAnyOf` filter compares:
+  // the stringified column value.
+  const filterConfigs = React.useMemo<readonly WalletTableFilterConfig[]>(() => {
+    const wallets = [...new Set(data.map((token) => token.walletAddress))];
+    // Unique tokens (by symbol); the first token of each symbol renders its option.
+    const seenSymbols = new Set<string>();
+    const tokens = data.filter((token) => {
+      if (seenSymbols.has(token.symbol)) return false;
+      seenSymbols.add(token.symbol);
       return true;
     });
-  }, [data]);
+    const chainIds = [...new Set(data.map((token) => token.chainId))];
 
-  // Unique chains (as chain ids, which is what the chain column filters on)
-  const chains = React.useMemo(() => {
-    return [...new Set(data.map((token) => token.chainId))];
-  }, [data]);
-
-  // Filter configs
-  const filterConfigs = React.useMemo<ReadonlyArray<WalletTableFilterConfig<TokenAmount, unknown>>>(
-    () => [
+    return [
       {
-        id: "walletAddress",
+        columnId: "walletAddress",
         label: "Wallets",
         icon: Wallet,
         emptyMessage: "No wallets available",
-        items: wallets,
-        renderOption: (address) => <RenderedAddressCell address={address as string} />,
+        options: wallets.map((address) => ({ value: address, label: <RenderedAddressCell address={address} /> })),
       },
       {
-        id: "symbol",
+        columnId: "symbol",
         label: "Tokens",
         icon: Coins,
         emptyMessage: "No tokens available",
-        items: tokens,
-        getValue: (option) => (option as TokenAmount).symbol,
-        renderOption: (option) => <RenderedTokenCell token={option as TokenAmount} />,
+        options: tokens.map((token) => ({ value: token.symbol, label: <RenderedTokenCell token={token} /> })),
       },
       {
-        id: "chainId",
+        columnId: "chainId",
         label: "Chains",
         icon: Link,
         emptyMessage: "No chains available",
-        items: chains,
-        renderOption: (chainId) => <RenderedChainCell chain={getChainName(chainId as number)} />,
+        options: chainIds.map((chainId) => ({
+          value: String(chainId),
+          label: <RenderedChainCell chain={getChainName(chainId)} />,
+        })),
       },
-    ],
-    [chains, tokens, wallets],
-  );
+    ];
+  }, [data]);
 
   const meta = React.useMemo(() => ({ priceFor, isPending, canSelectMore }), [priceFor, isPending, canSelectMore]);
 
@@ -138,7 +127,6 @@ export function DataTable({
     data,
     columns,
     onSortingChange: setSorting,
-    onColumnFiltersChange: setColumnFilters,
     onRowSelectionChange,
     enableRowSelection: true,
     // Keep the user on the current page. The `tokens` pipeline re-derives a
@@ -150,28 +138,13 @@ export function DataTable({
     meta,
     state: {
       sorting,
-      columnFilters,
       rowSelection,
     },
   });
 
-  // Navigate back to page 1 whenever the wallet/token/chain filters change.
-  // We compare the *content* of `columnFilters`, not its array identity: the
-  // filters pipeline re-creates that array on unrelated re-renders, so an
-  // identity check would reset the page on every render (the bug
-  // `autoResetPageIndex: false` exists to avoid). Only a real filter change
-  // should move the user off their current page.
-  const filterSignature = JSON.stringify(columnFilters);
-  const lastFilterSignature = React.useRef(filterSignature);
-  React.useEffect(() => {
-    if (lastFilterSignature.current !== filterSignature) {
-      lastFilterSignature.current = filterSignature;
-      table.setPageIndex(0);
-    }
-  }, [filterSignature, table]);
-
-  // Backstop for non-filter cases (a refresh returning fewer tokens, a page
-  // size change): with `autoResetPageIndex` off the user could be stranded on
+  // Filter changes send the user back to page 1 themselves (see
+  // `WalletTableFilters`). This is the backstop for everything else (a refresh
+  // returning fewer tokens, a page size change): with `autoResetPageIndex` off the user could be stranded on
   // a now-empty page past the end, so fall back to page 1 there too.
   const pageIndex = table.state.pagination.pageIndex;
   const pageCount = table.getPageCount();
@@ -194,7 +167,7 @@ export function DataTable({
   const selectedRows = table.getSelectedRowModel().rows;
   const selectedUsd = selectedRows.reduce((sum, row) => sum + getUsdValue(row.original, priceFor), 0);
   const hasSelection = selectedRows.length > 0;
-  const hasActiveFilter = columnFilters.length > 0;
+  const hasActiveFilter = table.state.columnFilters.length > 0;
 
   const indicatorLabel = hasSelection ? "Selected: " : hasActiveFilter ? "Filtered: " : "Total: ";
   const indicatorUsd = hasSelection ? selectedUsd : hasActiveFilter ? filteredUsd : totalUsd;
@@ -257,7 +230,7 @@ export function DataTable({
 
         <div className="flex flex-wrap items-center justify-between gap-2">
           {toolbarStart}
-          <WalletTableFilters setColumnFilters={setColumnFilters} filterConfigs={filterConfigs} />
+          <WalletTableFilters table={table} filterConfigs={filterConfigs} />
           {/* Desktop: total + refresh inline in the header row. */}
           <div className="hidden md:flex items-center gap-3 ml-auto">
             {totalIndicator}
