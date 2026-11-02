@@ -1,7 +1,7 @@
 import type { Address } from "viem";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ETH_ADDRESS, USDC_ETHEREUM, USDC_OPTIMISM, WALLET } from "../../../test/test-helpers";
-import { fetchZerionTokenBalances } from "./zerion";
+import { fetchZerionTokenBalances, resetZerionRateLimiter } from "./zerion";
 
 const mockApiKey = "test-api-key";
 const mockFetch = vi.fn();
@@ -59,10 +59,12 @@ const mockFail = (status: number, statusText: string) =>
 describe("zerion", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    resetZerionRateLimiter();
     vi.stubEnv("VITE_ZERION_API_KEY", mockApiKey);
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
   });
 
@@ -393,26 +395,99 @@ describe("zerion", () => {
     });
   });
 
-  describe("concurrent fetching", () => {
-    test("fetches all addresses concurrently", async () => {
-      const addresses = [
-        "0x1111111111111111111111111111111111111111" as Address,
-        "0x2222222222222222222222222222222222222222" as Address,
-        "0x3333333333333333333333333333333333333333" as Address,
-      ];
+  describe("rate limiting", () => {
+    const addresses = [
+      "0x1111111111111111111111111111111111111111" as Address,
+      "0x2222222222222222222222222222222222222222" as Address,
+      "0x3333333333333333333333333333333333333333" as Address,
+      "0x4444444444444444444444444444444444444444" as Address,
+      "0x5555555555555555555555555555555555555555" as Address,
+    ];
 
+    test("never sends more than 2 requests in any rolling second", async () => {
+      vi.useFakeTimers();
       const callTimes: number[] = [];
       mockFetch.mockImplementation(() => {
         callTimes.push(Date.now());
         return Promise.resolve({ ok: true, json: () => Promise.resolve(res([pos()])) });
       });
 
-      await fetchZerionTokenBalances(addresses);
+      const promise = fetchZerionTokenBalances(addresses);
+      await vi.runAllTimersAsync();
+      const result = await promise;
 
-      expect(mockFetch).toHaveBeenCalled();
-      if (callTimes.length >= 3) {
-        expect(callTimes[2] - callTimes[0]).toBeLessThan(50);
+      expect(result).toHaveLength(5);
+      expect(callTimes).toHaveLength(5);
+      // First two go out immediately, then pairs once per second.
+      expect(callTimes[1] - callTimes[0]).toBe(0);
+      for (let i = 2; i < callTimes.length; i++) {
+        expect(callTimes[i] - callTimes[i - 2]).toBeGreaterThanOrEqual(1_000);
       }
+    });
+
+    test("retries on 429 honoring Retry-After", async () => {
+      vi.useFakeTimers();
+      const callTimes: number[] = [];
+      mockFetch.mockImplementationOnce(() => {
+        callTimes.push(Date.now());
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          statusText: "Too Many Requests",
+          headers: new Headers({ "Retry-After": "3" }),
+        });
+      });
+      mockFetch.mockImplementationOnce(() => {
+        callTimes.push(Date.now());
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(res([pos()])) });
+      });
+
+      const promise = fetchZerionTokenBalances([WALLET]);
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result).toHaveLength(1);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(callTimes[1] - callTimes[0]).toBeGreaterThanOrEqual(3_000);
+    });
+
+    test("retries on 429 with exponential backoff when Retry-After is absent", async () => {
+      vi.useFakeTimers();
+      const callTimes: number[] = [];
+      const tooMany = () => {
+        callTimes.push(Date.now());
+        return Promise.resolve({ ok: false, status: 429, statusText: "Too Many Requests", headers: new Headers() });
+      };
+      mockFetch.mockImplementationOnce(tooMany).mockImplementationOnce(tooMany);
+      mockFetch.mockImplementationOnce(() => {
+        callTimes.push(Date.now());
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(res([pos()])) });
+      });
+
+      const promise = fetchZerionTokenBalances([WALLET]);
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result).toHaveLength(1);
+      expect(callTimes[1] - callTimes[0]).toBeGreaterThanOrEqual(1_000);
+      expect(callTimes[2] - callTimes[1]).toBeGreaterThanOrEqual(2_000);
+    });
+
+    test("gives up after max retries and returns no tokens", async () => {
+      vi.useFakeTimers();
+      mockFetch.mockResolvedValue({ ok: false, status: 429, statusText: "Too Many Requests", headers: new Headers() });
+
+      const promise = fetchZerionTokenBalances([WALLET]);
+      await vi.runAllTimersAsync();
+
+      expect(await promise).toEqual([]);
+      expect(mockFetch).toHaveBeenCalledTimes(5); // 1 attempt + 4 retries
+    });
+
+    test("does not retry other errors", async () => {
+      mockFail(500, "Internal Server Error");
+      expect(await fetchZerionTokenBalances([WALLET])).toEqual([]);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 });

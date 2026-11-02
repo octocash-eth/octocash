@@ -60,6 +60,60 @@ interface ZerionPositionsResponse {
   };
 }
 
+// Zerion's API terms cap us at 3 requests/second. Stay strictly under that:
+// at most 2 requests in any rolling 1s window, shared by every caller in the
+// tab (retries included), and back off on 429.
+const ZERION_MAX_REQUESTS_PER_WINDOW = 2;
+const ZERION_WINDOW_MS = 1_000;
+const ZERION_MAX_RETRIES = 4;
+const ZERION_BASE_BACKOFF_MS = 1_000;
+const ZERION_MAX_BACKOFF_MS = 30_000;
+
+// Start times of the most recently reserved request slots, in order.
+let reservedSlots: number[] = [];
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Reserve the next free request slot and wait for it. Slots are assigned
+ * synchronously, so concurrent callers are served FIFO without overshooting.
+ */
+async function acquireZerionSlot(): Promise<void> {
+  const now = Date.now();
+  const blocker = reservedSlots[reservedSlots.length - ZERION_MAX_REQUESTS_PER_WINDOW];
+  const slot = blocker === undefined ? now : Math.max(now, blocker + ZERION_WINDOW_MS);
+  reservedSlots.push(slot);
+  reservedSlots = reservedSlots.slice(-ZERION_MAX_REQUESTS_PER_WINDOW);
+  if (slot > now) await sleep(slot - now);
+}
+
+/** Test-only: forget previously reserved slots. */
+export function resetZerionRateLimiter(): void {
+  reservedSlots = [];
+}
+
+/** Retry-After may be delta-seconds or an HTTP date; returns ms or null. */
+function parseRetryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
+  const date = Date.parse(header);
+  return Number.isNaN(date) ? null : Math.max(0, date - Date.now());
+}
+
+/** Rate-limited fetch against Zerion that retries 429s with backoff. */
+async function zerionFetch(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    await acquireZerionSlot();
+    const response = await fetch(url, init);
+    if (response.status !== 429 || attempt >= ZERION_MAX_RETRIES) return response;
+
+    const backoff = Math.min(ZERION_BASE_BACKOFF_MS * 2 ** attempt, ZERION_MAX_BACKOFF_MS);
+    const retryAfter = parseRetryAfter(response.headers?.get("Retry-After") ?? null);
+    await sleep(Math.min(retryAfter ?? backoff, ZERION_MAX_BACKOFF_MS));
+  }
+}
+
 /** Fallback: fetch native coin balances via RPC for local testing without a Zerion API key. */
 async function fetchNativeBalances(addresses: string[]): Promise<TokenAmount[]> {
   const supportedChainIds = Object.keys(chainIdToZerionId).map(Number);
@@ -119,7 +173,7 @@ export async function fetchZerionTokenBalances(addresses: string[]): Promise<Tok
         // Encode API key for Basic authentication (API_KEY: format, then base64)
         const encodedAuth = btoa(`${apiKey}:`);
 
-        const response = await fetch(url.toString(), {
+        const response = await zerionFetch(url.toString(), {
           headers: {
             Authorization: `Basic ${encodedAuth}`,
             accept: "application/json",
