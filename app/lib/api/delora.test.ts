@@ -1,19 +1,13 @@
 import { type Address, parseUnits, zeroAddress } from "viem";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { WALLET } from "../../../test/test-helpers";
 import { USDC } from "../../data/token-contracts";
-import { isSameToken } from "../tokens";
 import {
   checkDeloraRoutableToUsdc,
   deloraPriceKey,
   EXTRA_TOKENS,
   fetchDeloraPrices,
   fetchDeloraTokensForChain,
-  fetchExtraTokenBalances,
 } from "./delora";
-
-// biome-ignore lint/suspicious/noExplicitAny: Test mocks require any types for flexibility
-type MockContract = any;
 
 /** Delora `/v1/prices` response for the given (chainId, token, price) rows. */
 function pricesResponse(rows: Array<[number, string, string]>) {
@@ -21,101 +15,6 @@ function pricesResponse(rows: Array<[number, string, string]>) {
     prices: rows.map(([chainId, token, priceUSD]) => ({ chainId, token, priceUSD })),
   };
 }
-
-/**
- * Helper to create a multicall mock that returns balances and metadata
- */
-function createMulticallMock(
-  config: {
-    balances?: Record<string, bigint>;
-    metadata?: Record<string, { name: string; symbol: string; decimals: number }>;
-  } = {},
-) {
-  return vi.fn().mockImplementation(async ({ contracts }: { contracts: MockContract[] }) => {
-    const results = [];
-    const isBalanceCall = contracts.every((c: MockContract) => c.functionName === "balanceOf");
-
-    if (isBalanceCall) {
-      // Balance call
-      for (const contract of contracts) {
-        const addr = contract.address?.toLowerCase();
-        const balance = config.balances?.[addr] ?? 0n;
-        results.push({ status: "success", result: balance });
-      }
-    } else {
-      // Metadata call
-      for (const contract of contracts) {
-        const fn = contract.functionName;
-        const addr = contract.address?.toLowerCase();
-        const metadata = config.metadata?.[addr] ?? {
-          name: "Mock Token",
-          symbol: "MOCK",
-          decimals: 18,
-        };
-
-        if (fn === "name") {
-          results.push({ status: "success", result: metadata.name });
-        } else if (fn === "symbol") {
-          results.push({ status: "success", result: metadata.symbol });
-        } else if (fn === "decimals") {
-          results.push({ status: "success", result: metadata.decimals });
-        }
-      }
-    }
-    return results;
-  });
-}
-
-/**
- * Helper to create a multicall mock that fails for certain operations
- */
-function createFailingMulticallMock(config: {
-  balanceFailure?: boolean;
-  metadataFailure?: boolean;
-  partialMetadataFailure?: "name" | "symbol" | "decimals";
-}) {
-  return vi.fn().mockImplementation(async ({ contracts }: { contracts: MockContract[] }) => {
-    const results = [];
-    const isBalanceCall = contracts.every((c: MockContract) => c.functionName === "balanceOf");
-
-    if (isBalanceCall) {
-      if (config.balanceFailure) {
-        for (let i = 0; i < contracts.length; i++) {
-          results.push({ status: "failure", error: new Error("Balance fetch failed") });
-        }
-      } else {
-        for (let i = 0; i < contracts.length; i++) {
-          results.push({ status: "success", result: 0n });
-        }
-      }
-    } else {
-      if (config.metadataFailure) {
-        throw new Error("Metadata fetch failed");
-      }
-
-      for (const contract of contracts) {
-        const fn = contract.functionName;
-        if (fn === config.partialMetadataFailure) {
-          results.push({ status: "failure", error: new Error(`${fn} fetch failed`) });
-        } else if (fn === "name") {
-          results.push({ status: "success", result: "Mock Token" });
-        } else if (fn === "symbol") {
-          results.push({ status: "success", result: "MOCK" });
-        } else if (fn === "decimals") {
-          results.push({ status: "success", result: 18 });
-        }
-      }
-    }
-    return results;
-  });
-}
-
-// Mock getPublicClient for RPC calls
-vi.mock("../public-client", () => ({
-  getPublicClient: vi.fn((_chainId: number) => ({
-    multicall: createMulticallMock(),
-  })),
-}));
 
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -151,468 +50,6 @@ describe("delora", () => {
       );
       expect(susds).toBeDefined();
       expect(susds?.chainId).toBe(1);
-    });
-  });
-
-  describe("fetchExtraTokenBalances", () => {
-    test("returns empty array when no addresses provided", async () => {
-      const result = await fetchExtraTokenBalances([]);
-      expect(result).toEqual([]);
-    });
-
-    test("returns empty array when all balances are zero", async () => {
-      const { getPublicClient } = await import("../public-client");
-
-      vi.mocked(getPublicClient).mockImplementation(
-        (_chainId: number) =>
-          ({
-            multicall: createMulticallMock(), // All balances default to 0
-          }) as never,
-      );
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-      expect(result).toHaveLength(0);
-    });
-
-    test("fetches token with non-zero balance and price from Delora", async () => {
-      const { getPublicClient } = await import("../public-client");
-      const sUSDS_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
-
-      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
-        if (chainId === 1) {
-          return {
-            multicall: createMulticallMock({
-              balances: { [sUSDS_ADDRESS]: 1000000000000000000n },
-              metadata: {
-                [sUSDS_ADDRESS]: { name: "Sky Savings USDS", symbol: "sUSDS", decimals: 18 },
-              },
-            }),
-          } as never;
-        }
-        return { multicall: createMulticallMock() } as never;
-      });
-
-      // Mock Delora pricing API response
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve(pricesResponse([[1, sUSDS_ADDRESS, "1.05"]])),
-      });
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-
-      expect(result).toHaveLength(1);
-      expect(result[0]).toMatchObject({
-        symbol: "sUSDS",
-        chainId: 1,
-        walletAddress: WALLET,
-        decimals: 18,
-        amount: 1000000000000000000n,
-      });
-    });
-
-    test("handles multiple tokens with balances on different chains", async () => {
-      const { getPublicClient } = await import("../public-client");
-      const TOKEN1_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
-      const TOKEN2_ADDRESS = "0x1111111111111111111111111111111111111111".toLowerCase();
-
-      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
-        const balances: Record<string, bigint> = {};
-        const metadata: Record<string, { name: string; symbol: string; decimals: number }> = {};
-
-        if (chainId === 1) {
-          balances[TOKEN1_ADDRESS] = 1000000000000000000n;
-          metadata[TOKEN1_ADDRESS] = { name: "Token 1", symbol: "TKN1", decimals: 18 };
-        } else if (chainId === 10) {
-          balances[TOKEN2_ADDRESS] = 1000000000000000000n;
-          metadata[TOKEN2_ADDRESS] = { name: "Token 2", symbol: "TKN2", decimals: 18 };
-        }
-
-        return { multicall: createMulticallMock({ balances, metadata }) } as never;
-      });
-
-      // One batched Delora pricing call covers both chains.
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve(
-            pricesResponse([
-              [1, TOKEN1_ADDRESS, "1.0"],
-              [10, TOKEN2_ADDRESS, "2.0"],
-            ]),
-          ),
-      });
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-
-      expect(result.length).toBeGreaterThan(0);
-    });
-
-    test("filters out tokens with value less than $0.01", async () => {
-      const { getPublicClient } = await import("../public-client");
-      const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
-
-      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
-        if (chainId === 1) {
-          return {
-            multicall: createMulticallMock({
-              balances: { [TOKEN_ADDRESS]: 1000000000000000n }, // 0.001 tokens
-              metadata: {
-                [TOKEN_ADDRESS]: { name: "Dust Token", symbol: "DUST", decimals: 18 },
-              },
-            }),
-          } as never;
-        }
-        return { multicall: createMulticallMock() } as never;
-      });
-
-      // Very low price (0.001 tokens * $0.001 = $0.000001 < $0.01)
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve(pricesResponse([[1, TOKEN_ADDRESS, "0.001"]])),
-      });
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-
-      // Should be filtered out due to low value
-      expect(result).toHaveLength(0);
-    });
-
-    test("handles Delora API errors gracefully", async () => {
-      const { getPublicClient } = await import("../public-client");
-      const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
-
-      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
-        if (chainId === 1) {
-          return {
-            multicall: createMulticallMock({
-              balances: { [TOKEN_ADDRESS]: 1000000000000000000n },
-              metadata: {
-                [TOKEN_ADDRESS]: { name: "Token", symbol: "TKN", decimals: 18 },
-              },
-            }),
-          } as never;
-        }
-        return { multicall: vi.fn().mockResolvedValue([]) } as never;
-      });
-
-      // Mock Delora API failure
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-      });
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-
-      // Should still return tokens, just without prices
-      expect(result).toBeDefined();
-    });
-
-    test("handles multicall balance fetch errors gracefully", async () => {
-      const { getPublicClient } = await import("../public-client");
-
-      vi.mocked(getPublicClient).mockReturnValue({
-        multicall: vi.fn().mockRejectedValue(new Error("RPC error")),
-      } as never);
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-
-      // Should return empty array on error
-      expect(result).toHaveLength(0);
-    });
-
-    test("handles multicall metadata fetch errors gracefully", async () => {
-      const { getPublicClient } = await import("../public-client");
-      const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
-
-      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
-        if (chainId === 1) {
-          return {
-            multicall: vi.fn().mockImplementation(async ({ contracts }: { contracts: MockContract[] }) => {
-              const isBalanceCall = contracts.every((c: MockContract) => c.functionName === "balanceOf");
-
-              if (isBalanceCall) {
-                // Balance call succeeds
-                return contracts.map((contract) => ({
-                  status: "success",
-                  result: contract.address?.toLowerCase() === TOKEN_ADDRESS ? 1000000000000000000n : 0n,
-                }));
-              }
-
-              // Metadata call fails
-              throw new Error("Metadata fetch failed");
-            }),
-          } as never;
-        }
-        return { multicall: vi.fn().mockResolvedValue([]) } as never;
-      });
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-
-      // Should return empty array if metadata fetch fails
-      expect(result).toHaveLength(0);
-    });
-
-    test("handles failed balance results in multicall", async () => {
-      const { getPublicClient } = await import("../public-client");
-
-      vi.mocked(getPublicClient).mockImplementation(
-        (_chainId: number) =>
-          ({
-            multicall: createFailingMulticallMock({ balanceFailure: true }),
-          }) as never,
-      );
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-      expect(result).toHaveLength(0);
-    });
-
-    test("handles partial success in metadata multicall", async () => {
-      const { getPublicClient } = await import("../public-client");
-      const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
-
-      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
-        if (chainId === 1) {
-          return {
-            multicall: vi.fn().mockImplementation(async ({ contracts }: { contracts: MockContract[] }) => {
-              const results = [];
-              const isBalanceCall = contracts.every((c: MockContract) => c.functionName === "balanceOf");
-
-              if (isBalanceCall) {
-                for (const contract of contracts) {
-                  const isTarget = contract.address?.toLowerCase() === TOKEN_ADDRESS;
-                  results.push({
-                    status: "success",
-                    result: isTarget ? 1000000000000000000n : 0n,
-                  });
-                }
-              } else {
-                // Metadata: name fails, symbol and decimals succeed
-                for (const contract of contracts) {
-                  const fn = contract.functionName;
-                  if (fn === "name") {
-                    results.push({ status: "failure", error: new Error("Name fetch failed") });
-                  } else if (fn === "symbol") {
-                    results.push({ status: "success", result: "TKN" });
-                  } else if (fn === "decimals") {
-                    results.push({ status: "success", result: 18 });
-                  }
-                }
-              }
-
-              return results;
-            }),
-          } as never;
-        }
-        return { multicall: vi.fn().mockResolvedValue([]) } as never;
-      });
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-
-      // Should skip tokens with failed metadata
-      expect(result).toHaveLength(0);
-    });
-
-    test("handles Delora omitting a token's price from the response", async () => {
-      const { getPublicClient } = await import("../public-client");
-      const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
-
-      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
-        if (chainId === 1) {
-          return {
-            multicall: createMulticallMock({
-              balances: { [TOKEN_ADDRESS]: 1000000000000000000n },
-              metadata: {
-                [TOKEN_ADDRESS]: { name: "Token", symbol: "TKN", decimals: 18 },
-              },
-            }),
-          } as never;
-        }
-        return { multicall: vi.fn().mockResolvedValue([]) } as never;
-      });
-
-      // Delora has no price for the token: empty prices array.
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve(pricesResponse([])),
-      });
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-
-      // Token without price should be filtered out (no USD value)
-      expect(result).toHaveLength(0);
-    });
-
-    test("handles case-insensitive token address matching in Delora response", async () => {
-      const { getPublicClient } = await import("../public-client");
-      const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
-
-      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
-        if (chainId === 1) {
-          return {
-            multicall: createMulticallMock({
-              balances: { [TOKEN_ADDRESS]: 1000000000000000000n },
-              metadata: {
-                [TOKEN_ADDRESS]: { name: "Token", symbol: "TKN", decimals: 18 },
-              },
-            }),
-          } as never;
-        }
-        return { multicall: vi.fn().mockResolvedValue([]) } as never;
-      });
-
-      // Delora echoes the checksum-cased address
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve(pricesResponse([[1, "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD", "1.0"]])),
-      });
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-
-      // Surviving the dust filter implies the price lookup matched
-      // case-insensitively — without the match, USD would be 0 and the
-      // token would be filtered out.
-      expect(result).toHaveLength(1);
-      expect(result[0].token.toLowerCase()).toBe(TOKEN_ADDRESS);
-    });
-
-    test("handles multiple wallets correctly", async () => {
-      const { getPublicClient } = await import("../public-client");
-      const WALLET2 = "0x2222222222222222222222222222222222222222" as Address;
-      const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
-
-      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
-        if (chainId === 1) {
-          return {
-            multicall: createMulticallMock({
-              balances: { [TOKEN_ADDRESS]: 1000000000000000000n },
-              metadata: {
-                [TOKEN_ADDRESS]: { name: "Token", symbol: "TKN", decimals: 18 },
-              },
-            }),
-          } as never;
-        }
-        return { multicall: vi.fn().mockResolvedValue([]) } as never;
-      });
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve(pricesResponse([[1, TOKEN_ADDRESS, "1.0"]])),
-      });
-
-      const result = await fetchExtraTokenBalances([WALLET, WALLET2]);
-
-      // Should return tokens for both wallets
-      expect(result.length).toBeGreaterThan(0);
-      const wallets = new Set(result.map((t) => t.walletAddress));
-      expect(wallets.size).toBeGreaterThan(0);
-    });
-
-    test("issues a single batched pricing request regardless of wallet count", async () => {
-      const { getPublicClient } = await import("../public-client");
-      const WALLET2 = "0x2222222222222222222222222222222222222222" as Address;
-      const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
-
-      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
-        if (chainId === 1) {
-          return {
-            multicall: createMulticallMock({
-              balances: { [TOKEN_ADDRESS]: 1000000000000000000n },
-              metadata: {
-                [TOKEN_ADDRESS]: { name: "Token", symbol: "TKN", decimals: 18 },
-              },
-            }),
-          } as never;
-        }
-        return { multicall: vi.fn().mockResolvedValue([]) } as never;
-      });
-
-      mockFetch.mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve(pricesResponse([[1, TOKEN_ADDRESS, "1.0"]])),
-      });
-
-      await fetchExtraTokenBalances([WALLET, WALLET2]);
-
-      const priceCalls = mockFetch.mock.calls.filter(
-        (call: unknown[]) => typeof call[0] === "string" && call[0].includes("/v1/prices"),
-      );
-      expect(priceCalls).toHaveLength(1);
-      // The same (chainId, token) pair appears once despite two wallets.
-      const tokensParam = new URL(priceCalls[0][0] as string).searchParams.get("tokens") ?? "";
-      const occurrences = tokensParam.split(",").filter((p) => p === `1:${TOKEN_ADDRESS}`);
-      expect(occurrences).toHaveLength(1);
-    });
-
-    test("can be used with isSameToken for deduplication", async () => {
-      const { getPublicClient } = await import("../public-client");
-      const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
-
-      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
-        if (chainId === 1) {
-          return {
-            multicall: createMulticallMock({
-              balances: { [TOKEN_ADDRESS]: 1000000000000000000n },
-              metadata: {
-                [TOKEN_ADDRESS]: { name: "Token", symbol: "TKN", decimals: 18 },
-              },
-            }),
-          } as never;
-        }
-        return { multicall: vi.fn().mockResolvedValue([]) } as never;
-      });
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve(pricesResponse([[1, TOKEN_ADDRESS, "1.0"]])),
-      });
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-
-      if (result.length > 0) {
-        // Same token should match itself
-        expect(isSameToken(result[0], result[0])).toBe(true);
-      }
-    });
-
-    test("handles fetch rejection in Delora API call", async () => {
-      const { getPublicClient } = await import("../public-client");
-      const TOKEN_ADDRESS = "0xa3931d71877C0E7a3148CB7Eb4463524FEc27fbD".toLowerCase();
-
-      vi.mocked(getPublicClient).mockImplementation((chainId: number) => {
-        if (chainId === 1) {
-          return {
-            multicall: createMulticallMock({
-              balances: { [TOKEN_ADDRESS]: 1000000000000000000n },
-              metadata: {
-                [TOKEN_ADDRESS]: { name: "Token", symbol: "TKN", decimals: 18 },
-              },
-            }),
-          } as never;
-        }
-        return { multicall: vi.fn().mockResolvedValue([]) } as never;
-      });
-
-      // Network error
-      mockFetch.mockRejectedValueOnce(new Error("Network error"));
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-
-      // Should still return tokens, just without prices
-      expect(result).toBeDefined();
-    });
-
-    test("handles overall function error gracefully", async () => {
-      const { getPublicClient } = await import("../public-client");
-
-      // Simulate an unexpected error
-      vi.mocked(getPublicClient).mockImplementation(() => {
-        throw new Error("Unexpected error");
-      });
-
-      const result = await fetchExtraTokenBalances([WALLET]);
-
-      // Should return empty array
-      expect(result).toEqual([]);
     });
   });
 
@@ -777,7 +214,10 @@ describe("delora", () => {
   });
 
   describe("fetchDeloraTokensForChain", () => {
-    test("returns a Set of lowercased addresses on success", async () => {
+    const LOWER_A = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const LOWER_B = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    test("returns a Map keyed by lowercased address on success", async () => {
       // Mix a checksum-cased address, an already-lowercase one, and native ETH
       // (which Delora returns as `0x00…00`) so we lock in both the lowercase
       // normalisation and the native-token handling the UI relies on.
@@ -795,15 +235,65 @@ describe("delora", () => {
           }),
       });
 
-      const set = await fetchDeloraTokensForChain(1);
+      const catalog = await fetchDeloraTokensForChain(1);
 
-      expect(set).toBeInstanceOf(Set);
-      expect(set.size).toBe(3);
-      expect(set.has(CHECKSUM.toLowerCase())).toBe(true);
-      expect(set.has(LOWER)).toBe(true);
-      expect(set.has(zeroAddress)).toBe(true);
+      expect(catalog).toBeInstanceOf(Map);
+      expect(catalog.size).toBe(3);
+      expect(catalog.has(CHECKSUM.toLowerCase())).toBe(true);
+      expect(catalog.has(LOWER)).toBe(true);
+      expect(catalog.has(zeroAddress)).toBe(true);
       // The checksum form must NOT remain — UI looks up by `.toLowerCase()`.
-      expect(set.has(CHECKSUM)).toBe(false);
+      expect(catalog.has(CHECKSUM)).toBe(false);
+      // Values carry checksummed addresses and metadata for the balance scan.
+      expect(catalog.get(LOWER)).toEqual({
+        address: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+        symbol: "USDT",
+        name: "Tether",
+        decimals: 6,
+      });
+    });
+
+    test("keeps positive catalog prices and drops null or zero ones", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            "1": [
+              { address: zeroAddress, chainId: 1, symbol: "ETH", name: "Ether", decimals: 18, priceUSD: "2271.6" },
+              { address: LOWER_A, chainId: 1, symbol: "A", name: "A", decimals: 18, priceUSD: null },
+              { address: LOWER_B, chainId: 1, symbol: "B", name: "B", decimals: 18, priceUSD: "0" },
+            ],
+          }),
+      });
+
+      const catalog = await fetchDeloraTokensForChain(1);
+
+      expect(catalog.get(zeroAddress)?.priceUSD).toBe(2271.6);
+      expect(catalog.get(LOWER_A)).not.toHaveProperty("priceUSD");
+      expect(catalog.get(LOWER_B)).not.toHaveProperty("priceUSD");
+    });
+
+    test("drops entries that are not EVM addresses", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            "1": [
+              {
+                address: "facet_0x26231ad975456d53682e1b6364e9e005886281e7",
+                chainId: 1,
+                symbol: "F",
+                name: "F",
+                decimals: 18,
+              },
+              { address: LOWER_A, chainId: 1, symbol: "A", name: "A", decimals: 18 },
+            ],
+          }),
+      });
+
+      const catalog = await fetchDeloraTokensForChain(1);
+
+      expect([...catalog.keys()]).toEqual([LOWER_A]);
     });
 
     test("builds the documented URL: /v1/tokens?chains=N", async () => {
@@ -823,9 +313,9 @@ describe("delora", () => {
     test("returns an empty set when the chain key is missing from the response", async () => {
       mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
 
-      const set = await fetchDeloraTokensForChain(1);
+      const catalog = await fetchDeloraTokensForChain(1);
 
-      expect(set.size).toBe(0);
+      expect(catalog.size).toBe(0);
     });
 
     test("throws on non-2xx so callers can observe the failure", async () => {

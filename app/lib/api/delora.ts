@@ -1,14 +1,8 @@
-import { type Address, erc20Abi, formatUnits, isAddressEqual, parseUnits, zeroAddress } from "viem";
+import { type Address, getAddress, isAddress, isAddressEqual, parseUnits, zeroAddress } from "viem";
 import { STAKED_TOKENS } from "~/data/staked-tokens";
 import { USDC } from "~/data/token-contracts";
-import { getPublicClient } from "../public-client";
-import { groupTokensByChain } from "../tokens";
 import type { TokenAmount } from "../types";
 import { deloraBaseUrl, deloraHeaders } from "./delora-client";
-
-function isEffectivelyZero(balance: number): boolean {
-  return balance < 0.01; // Consider anything less than $0.01 as effectively zero
-}
 
 export const EXTRA_TOKENS = STAKED_TOKENS.map((token) => {
   const [chainId, address] = token.split(":") as [string, Address];
@@ -28,25 +22,40 @@ interface DeloraPricesResponse {
 }
 
 // Delora `/v1/tokens?chains=N` returns a record keyed by chainId with arrays
-// of token catalog entries. We only care about the address; the rest is
-// metadata we already have.
+// of token catalog entries.
 interface DeloraTokenInfo {
   address: string;
   chainId: number;
   symbol: string;
   name: string;
   decimals: number;
+  priceUSD?: string | null;
 }
+
+/** A Delora catalog entry, normalised for balance scanning and display. */
+export interface DeloraCatalogToken {
+  address: Address;
+  symbol: string;
+  name: string;
+  decimals: number;
+  /** Catalog price snapshot; absent for unpriced entries. */
+  priceUSD?: number;
+}
+
+/** Lowercased address → catalog entry. */
+export type DeloraCatalog = ReadonlyMap<string, DeloraCatalogToken>;
 
 /**
  * Fetch Delora's swappable-token catalog for a single chain.
  *
- * Returns a Set of lowercased addresses. Throws on non-2xx so callers (e.g.
- * TanStack Query) can observe the failure and decide whether to fail open.
- * Native ETH is represented in the response as `0x0000…0000`, which matches
- * the `zeroAddress` we use internally — no special-casing required.
+ * Returns a Map keyed by lowercased address. Entries that aren't plain EVM
+ * addresses (mainnet lists a few `facet_0x…` ids) are dropped. Throws on
+ * non-2xx so callers (e.g. TanStack Query) can observe the failure and decide
+ * whether to fail open. Native ETH is represented in the response as
+ * `0x0000…0000`, which matches the `zeroAddress` we use internally — no
+ * special-casing required.
  */
-export async function fetchDeloraTokensForChain(chainId: number, signal?: AbortSignal): Promise<ReadonlySet<string>> {
+export async function fetchDeloraTokensForChain(chainId: number, signal?: AbortSignal): Promise<DeloraCatalog> {
   const url = new URL(`${deloraBaseUrl()}/v1/tokens`);
   url.searchParams.set("chains", String(chainId));
 
@@ -60,8 +69,19 @@ export async function fetchDeloraTokensForChain(chainId: number, signal?: AbortS
   }
 
   const data: Record<string, DeloraTokenInfo[]> = await response.json();
-  const tokens = data[String(chainId)] ?? [];
-  return new Set(tokens.map((t) => t.address.toLowerCase()));
+  const catalog = new Map<string, DeloraCatalogToken>();
+  for (const t of data[String(chainId)] ?? []) {
+    if (!isAddress(t.address, { strict: false })) continue;
+    const price = t.priceUSD == null ? Number.NaN : Number(t.priceUSD);
+    catalog.set(t.address.toLowerCase(), {
+      address: getAddress(t.address.toLowerCase()),
+      symbol: t.symbol,
+      name: t.name,
+      decimals: t.decimals,
+      ...(Number.isFinite(price) && price > 0 ? { priceUSD: price } : {}),
+    });
+  }
+  return catalog;
 }
 
 /**
@@ -227,173 +247,4 @@ export async function fetchDeloraPrices(
   );
 
   return prices;
-}
-
-/** Fetch extra token balances via RPC (slower, for tokens not indexed by Zerion) */
-export async function fetchExtraTokenBalances(walletAddresses: string[]): Promise<TokenAmount[]> {
-  try {
-    if (walletAddresses.length === 0) return [];
-
-    // Step 1: Group tokens by chainId for efficient multicall
-    const tokensByChain = groupTokensByChain(EXTRA_TOKENS);
-    const nonEmptyBalances: {
-      chainId: number;
-      tokenAddress: Address;
-      walletAddress: Address;
-      amount: bigint;
-    }[] = [];
-
-    // Step 2: Check balances for ALL wallets and ALL tokens using multicall
-    await Promise.all(
-      Array.from(tokensByChain.entries()).map(async ([chainId, tokens]) => {
-        try {
-          const publicClient = getPublicClient(chainId);
-
-          // For each token, check balance for each wallet
-          // We flatten this into a single list of calls
-          const contracts = tokens.flatMap((token) =>
-            walletAddresses.map((walletAddress) => ({
-              address: token.address,
-              abi: erc20Abi,
-              functionName: "balanceOf" as const,
-              args: [walletAddress as Address],
-            })),
-          );
-
-          // Execute multicall
-          const results = await publicClient.multicall({
-            contracts,
-            allowFailure: true,
-          });
-
-          // Process results
-          // The order matches: tokens[0] -> (wallets[0], wallets[1]...), tokens[1] -> ...
-          let resultIndex = 0;
-          for (const token of tokens) {
-            for (const walletAddress of walletAddresses) {
-              const result = results[resultIndex++];
-
-              if (result.status === "success" && (result.result as bigint) > 0n) {
-                nonEmptyBalances.push({
-                  chainId,
-                  tokenAddress: token.address,
-                  walletAddress: walletAddress as Address,
-                  amount: result.result as bigint,
-                });
-              }
-            }
-          }
-        } catch (error) {
-          console.error(`[ExtraTokens] Balance multicall failed for chain ${chainId}:`, error);
-        }
-      }),
-    );
-
-    // If no non-zero balances, return early
-    if (nonEmptyBalances.length === 0) {
-      return [];
-    }
-
-    // Step 3: Fetch metadata ONLY for tokens with non-zero balances
-    // We need unique tokens per chain to avoid fetching metadata twice for the same token
-    const uniqueTokensWithBalance = nonEmptyBalances.reduce((acc, item) => {
-      const key = `${item.chainId}:${item.tokenAddress}`;
-      if (!acc.has(key)) {
-        acc.set(key, { chainId: item.chainId, address: item.tokenAddress });
-      }
-      return acc;
-    }, new Map<string, { chainId: number; address: Address }>());
-
-    const tokensToFetchMetadata = groupTokensByChain(Array.from(uniqueTokensWithBalance.values()));
-    const tokenMetadata = new Map<string, { name: string; symbol: string; decimals: number }>();
-
-    await Promise.all(
-      Array.from(tokensToFetchMetadata.entries()).map(async ([chainId, tokens]) => {
-        try {
-          const publicClient = getPublicClient(chainId);
-          const contracts = tokens.flatMap((token) => [
-            {
-              address: token.address,
-              abi: erc20Abi,
-              functionName: "name" as const,
-            },
-            {
-              address: token.address,
-              abi: erc20Abi,
-              functionName: "symbol" as const,
-            },
-            {
-              address: token.address,
-              abi: erc20Abi,
-              functionName: "decimals" as const,
-            },
-          ]);
-
-          const results = await publicClient.multicall({
-            contracts,
-            allowFailure: true,
-          });
-
-          for (let i = 0; i < tokens.length; i++) {
-            const token = tokens[i];
-            const baseIndex = i * 3;
-            const nameResult = results[baseIndex];
-            const symbolResult = results[baseIndex + 1];
-            const decimalsResult = results[baseIndex + 2];
-
-            if (
-              nameResult.status === "success" &&
-              symbolResult.status === "success" &&
-              decimalsResult.status === "success"
-            ) {
-              const key = `${chainId}:${token.address}`;
-              tokenMetadata.set(key, {
-                name: nameResult.result as string,
-                symbol: symbolResult.result as string,
-                decimals: decimalsResult.result as number,
-              });
-            }
-          }
-        } catch (error) {
-          console.error(`[ExtraTokens] Metadata multicall failed for chain ${chainId}:`, error);
-        }
-      }),
-    );
-
-    // Step 4: Construct initial TokenAmount objects
-    const tokenAmounts: TokenAmount[] = [];
-    for (const item of nonEmptyBalances) {
-      const metadata = tokenMetadata.get(`${item.chainId}:${item.tokenAddress}`);
-      if (metadata) {
-        tokenAmounts.push({
-          token: item.tokenAddress,
-          amount: item.amount,
-          chainId: item.chainId,
-          walletAddress: item.walletAddress,
-          name: metadata.name,
-          symbol: metadata.symbol,
-          decimals: metadata.decimals,
-        });
-      }
-    }
-
-    if (tokenAmounts.length === 0) return [];
-
-    // Step 5: Fetch Delora prices once, then use them in-place to drop dust
-    // and order by USD value descending. We deliberately do NOT stamp the
-    // price onto the returned `TokenAmount` — downstream consumers read
-    // live prices from the central price context to avoid two-sources-of-
-    // truth bugs (see app/context/token-price-provider.tsx).
-    const prices = await fetchDeloraPrices(tokenAmounts);
-    const usdValue = (t: TokenAmount): number => {
-      const price = prices.get(deloraPriceKey(t.chainId, t.token));
-      if (price === undefined) return 0;
-      return Number(formatUnits(t.amount, t.decimals)) * price;
-    };
-
-    return tokenAmounts.filter((t) => !isEffectivelyZero(usdValue(t))).sort((a, b) => usdValue(b) - usdValue(a));
-  } catch (error) {
-    console.error("[ExtraTokens] Error fetching extra token balances:", error);
-    return [];
-  }
 }

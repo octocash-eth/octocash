@@ -1,19 +1,24 @@
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQueries } from "@tanstack/react-query";
 import type { RowSelectionState } from "@tanstack/react-table";
 import * as React from "react";
-import { formatUnits } from "viem";
+import { type Address, formatUnits } from "viem";
 import { ConsolidateTokensModal } from "~/components/consolidate-tokens-modal";
 import { usePriceMap, useRegisterPrices } from "~/context/token-price-provider";
 import { chains } from "~/data/supported-chains";
+import { useConsolidationRecords } from "~/hooks/use-consolidation-records";
 import { type AccountsMap, accountFor, controlledOn } from "~/lib/accounts";
 import {
+  catalogTokenRefs,
   checkDeloraRoutableToUsdc,
+  discoverZerionTokens,
+  extraTokenRefs,
   fetchDeloraTokensForChain,
-  fetchExtraTokenBalances,
-  fetchZerionTokenBalances,
+  fetchTokenBalances,
+  STAKED_TOKEN_REFS,
+  type TokenRef,
+  watchedTokensFromConsolidations,
 } from "~/lib/api";
 import { MAX_SOURCE_TOKENS } from "~/lib/planning";
-import { isSameToken } from "~/lib/tokens";
 import type { TokenAmount } from "~/lib/types";
 import { buildColumns } from "./columns";
 import { DataTable } from "./data-table";
@@ -58,31 +63,12 @@ export function WalletTable({ connectedAddresses = [], accounts, showSafesTab = 
 
   // Stable addresses key for query
   const addressesKey = React.useMemo(() => Array.from(connectedAddresses).sort().join(","), [connectedAddresses]);
-  const addresses = React.useMemo(() => Array.from(connectedAddresses), [connectedAddresses]);
+  const addresses = React.useMemo(() => Array.from(connectedAddresses) as Address[], [connectedAddresses]);
 
-  // Query for Zerion tokens (fast, indexed)
-  const zerionQuery = useQuery({
-    queryKey: ["zerion-tokens", addressesKey],
-    queryFn: () => fetchZerionTokenBalances(addresses),
-    enabled: addresses.length > 0,
-    staleTime: 30_000, // 30 seconds
-  });
-
-  // Query for extra tokens (slower, RPC calls) - runs after Zerion data is loaded
-  const extraQuery = useQuery({
-    queryKey: ["extra-tokens", addressesKey],
-    queryFn: async () => {
-      return fetchExtraTokenBalances(addresses);
-    },
-    // Only fetch extra tokens after Zerion query succeeds to reduce concurrent RPC load
-    enabled: addresses.length > 0 && zerionQuery.isSuccess,
-    staleTime: 30_000, // 30 seconds
-  });
-
-  // Per-chain Delora `/v1/tokens` catalog fetches. These run alongside `zerionQuery`
-  // (no gating) so the catalog is usually ready by the time the filter runs.
-  // The catalog is global (independent of `addresses`), so the cache key omits
-  // them and is shared across users.
+  // Per-chain Delora `/v1/tokens` catalog fetches. The catalog is both the
+  // token list the RPC balance scan checks and the routability filter. It is
+  // global (independent of `addresses`), so the cache key omits them and is
+  // shared across users.
   const deloraTokenListQueries = useQueries({
     queries: SUPPORTED_CHAIN_IDS.map((chainId) => ({
       queryKey: ["delora-token-list", chainId],
@@ -100,15 +86,98 @@ export function WalletTable({ connectedAddresses = [], accounts, showSafesTab = 
     return m;
   }, [deloraTokenListQueries]);
 
+  // Token discovery: one Zerion request per wallet, reused for a day across
+  // reloads (see `discoverZerionTokens`). It only decides *which* tokens to
+  // check — mainly ones outside the catalog; balances always come from the
+  // RPC scans below, so refreshes never touch Zerion.
+  const discoveryQueries = useQueries({
+    queries: addresses.map((address) => ({
+      queryKey: ["zerion-discovery", address.toLowerCase()],
+      queryFn: () => discoverZerionTokens(address),
+      staleTime: Number.POSITIVE_INFINITY,
+      retry: 1,
+    })),
+  });
+
+  // Must-check list: tokens that consolidations on this device produced or
+  // spent, so a swap's output shows up on the next refresh without Zerion.
+  const { consolidations } = useConsolidationRecords();
+
+  const extraSources: TokenRef[] = [
+    ...STAKED_TOKEN_REFS,
+    ...discoveryQueries.flatMap((q) => q.data ?? []),
+    ...watchedTokensFromConsolidations(consolidations),
+  ];
+
+  // Balances are RPC-only: per chain, one balance-scanner pass over the whole
+  // catalog for every wallet, plus a small pass over out-of-catalog tokens
+  // (staked list, Zerion discoveries, consolidation tokens).
+  const catalogBalanceQueries = useQueries({
+    queries: SUPPORTED_CHAIN_IDS.map((chainId, i) => {
+      const catalog = deloraTokenListQueries[i];
+      return {
+        queryKey: ["catalog-balances", chainId, addressesKey, catalog.dataUpdatedAt],
+        queryFn: () =>
+          fetchTokenBalances(chainId, addresses, catalog.data ? catalogTokenRefs(chainId, catalog.data) : []),
+        enabled: addresses.length > 0 && catalog.isSuccess,
+        staleTime: 30_000,
+      };
+    }),
+  });
+
+  const extraBalanceQueries = useQueries({
+    queries: SUPPORTED_CHAIN_IDS.map((chainId, i) => {
+      const catalog = deloraTokenListQueries[i];
+      const refs = extraTokenRefs(chainId, catalog.isSuccess ? catalog.data : undefined, extraSources);
+      return {
+        queryKey: [
+          "extra-balances",
+          chainId,
+          addressesKey,
+          refs
+            .map((r) => r.token.toLowerCase())
+            .sort()
+            .join(","),
+        ],
+        queryFn: () => fetchTokenBalances(chainId, addresses, refs),
+        // Wait for the catalog to settle so catalog tokens aren't scanned twice.
+        enabled: addresses.length > 0 && !catalog.isPending && refs.length > 0,
+        staleTime: 30_000,
+      };
+    }),
+  });
+  const balanceQueries = [...catalogBalanceQueries, ...extraBalanceQueries];
+
   // Register every fetched token (visible *and* not-yet-admitted) with the
   // shared price context. Hidden candidates need a live price to drive the
   // routability probe, so we can't wait until after `isDeloraAllowed` filters
   // the list. Delora's pricing endpoint accepts many addresses per request,
   // so the cost of priceing the long tail is small.
-  const allFetchedTokens = React.useMemo<TokenAmount[]>(
-    () => [...(zerionQuery.data ?? []), ...(extraQuery.data ?? [])],
-    [zerionQuery.data, extraQuery.data],
-  );
+  //
+  // When a scan's key changes (a wallet was added, discovery found tokens)
+  // `useQueries` starts a fresh observer with no data, and `keepPreviousData`
+  // can't help: observers are matched by query hash. So each chain slot keeps
+  // its last result and shows it while the replacement scan is in flight;
+  // rows of wallets that are no longer connected are dropped.
+  const lastBalances = React.useRef(new Map<number, TokenAmount[]>());
+  const balancesSignature = balanceQueries.map((q) => `${q.dataUpdatedAt}:${q.isFetching}`).join(",");
+  const allFetchedTokens = React.useMemo<TokenAmount[]>(() => {
+    const connected = new Set(addresses.map((a) => a.toLowerCase()));
+    const seen = new Set<string>();
+    const out: TokenAmount[] = [];
+    for (const [slot, q] of balanceQueries.entries()) {
+      if (q.data) lastBalances.current.set(slot, q.data);
+      const data = q.data ?? (q.isFetching ? lastBalances.current.get(slot) : undefined);
+      for (const t of data ?? []) {
+        if (!connected.has(t.walletAddress.toLowerCase())) continue; // disconnected since the last scan
+        const key = `${t.chainId}:${t.token.toLowerCase()}:${t.walletAddress.toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(t);
+      }
+    }
+    return out;
+  }, [balancesSignature, addresses]);
   useRegisterPrices(allFetchedTokens);
   const { priceFor, isPending: isPriceLoading } = usePriceMap();
 
@@ -146,11 +215,12 @@ export function WalletTable({ connectedAddresses = [], accounts, showSafesTab = 
     return Array.from(seen.values());
   }, [allFetchedTokens, deloraByChain, priceFor, liveUsd]);
 
-  // Probe each hidden candidate. We gate on `zerionQuery.isSuccess` so the
-  // initial table render — driven by catalog-known tokens — paints before
-  // any of these network requests fire. As probes resolve, `routableSet`
+  // Probe each hidden candidate. We gate on the first successful balance scan
+  // so the initial table render — driven by catalog-known tokens — paints
+  // before any of these network requests fire. As probes resolve, `routableSet`
   // grows and `isDeloraAllowed` flips for the affected tokens, which causes
   // the `tokens` memo to fold them back into the visible table reactively.
+  const hasBalances = catalogBalanceQueries.some((q) => q.isSuccess);
   const routabilityQueries = useQueries({
     queries: hiddenCandidates.map((t) => {
       // Filtered above; `hiddenCandidates` only contains tokens with a
@@ -168,7 +238,7 @@ export function WalletTable({ connectedAddresses = [], accounts, showSafesTab = 
             },
             signal,
           ),
-        enabled: zerionQuery.isSuccess,
+        enabled: hasBalances,
         staleTime: 5 * 60_000,
       };
     }),
@@ -280,46 +350,44 @@ export function WalletTable({ connectedAddresses = [], accounts, showSafesTab = 
     [showTabs, activeTab, accounts],
   );
 
-  // Combine tokens: Zerion first, then extra tokens (deduplicated). Both
-  // streams are passed through `isDeloraAllowed` so non-routable tokens never
-  // reach the table, then we sort by the same live `priceFor` the value
-  // column uses so the default order matches the displayed USD values.
-  const tokens = React.useMemo(() => {
-    const zerionTokens = (zerionQuery.data ?? []).filter(isDeloraAllowed).filter(isReachable).filter(matchesTab);
-
-    // Hold extras back until their query has succeeded, so Zerion data
-    // renders first before extra tokens are folded in.
-    const merged = extraQuery.isSuccess
-      ? [
-          ...zerionTokens,
-          ...(extraQuery.data ?? [])
-            .filter(isDeloraAllowed)
-            .filter(isReachable)
-            .filter(matchesTab)
-            .filter((extra) => !zerionTokens.some((zerion) => isSameToken(zerion, extra))),
-        ]
-      : zerionTokens;
-
-    return merged.sort((a, b) => liveUsd(b) - liveUsd(a));
-  }, [zerionQuery.data, extraQuery.data, extraQuery.isSuccess, isDeloraAllowed, isReachable, matchesTab, liveUsd]);
+  // Every scanned balance passes through `isDeloraAllowed` so non-routable
+  // tokens never reach the table, then we sort by the same live `priceFor`
+  // the value column uses so the default order matches the displayed values.
+  const tokens = React.useMemo(
+    () =>
+      allFetchedTokens
+        .filter(isDeloraAllowed)
+        .filter(isReachable)
+        .filter(matchesTab)
+        .sort((a, b) => liveUsd(b) - liveUsd(a)),
+    [allFetchedTokens, isDeloraAllowed, isReachable, matchesTab, liveUsd],
+  );
 
   // Rebuild columns when `priceFor` changes so the value column's `sortFn`
   // (which closes over `priceFor`) sees fresh prices and the table re-sorts.
   const columns = React.useMemo(() => buildColumns(priceFor), [priceFor]);
 
-  const isLoading = zerionQuery.isLoading;
-  const isDeloraFetching = deloraTokenListQueries.some((q) => q.isFetching);
-  const isRefreshing = zerionQuery.isFetching || extraQuery.isFetching || isDeloraFetching;
-  const error = zerionQuery.error?.message ?? extraQuery.error?.message ?? null;
+  // Loading until every chain has finished its first catalog scan (a chain
+  // whose catalog failed has nothing to scan and counts as done).
+  const isLoading =
+    addresses.length > 0 &&
+    SUPPORTED_CHAIN_IDS.some(
+      (_, i) =>
+        !deloraTokenListQueries[i].isError &&
+        catalogBalanceQueries[i].data === undefined &&
+        !catalogBalanceQueries[i].isError,
+    );
+  // Discovery is left out on purpose: balances are already on screen without
+  // it, so a slow or unreachable Zerion must not keep the spinner going.
+  const isRefreshing = [...balanceQueries, ...deloraTokenListQueries].some((q) => q.isFetching);
+  const error = balanceQueries.find((q) => q.error)?.error?.message ?? null;
 
+  // Refresh is RPC-only (plus the Delora catalog): Zerion discovery is not
+  // re-asked; it expires on its own after a day.
   const handleRefresh = React.useCallback(() => {
     setRowSelection({});
-    zerionQuery.refetch();
-    extraQuery.refetch();
-    deloraTokenListQueries.forEach((q) => {
-      q.refetch();
-    });
-  }, [zerionQuery.refetch, extraQuery.refetch, deloraTokenListQueries]);
+    for (const q of [...balanceQueries, ...deloraTokenListQueries]) q.refetch();
+  }, [balanceQueries, deloraTokenListQueries]);
 
   const zerionApiKeyMissing = !import.meta.env.VITE_ZERION_API_KEY;
 
@@ -357,7 +425,7 @@ export function WalletTable({ connectedAddresses = [], accounts, showSafesTab = 
     <div className="space-y-4">
       {zerionApiKeyMissing && (
         <div className="p-4 text-muted-foreground rounded-md bg-muted border border-border">
-          VITE_ZERION_API_KEY is not set — showing native coin balances only. Set the API key to see all tokens.
+          VITE_ZERION_API_KEY is not set — tokens outside Delora&apos;s catalog won&apos;t be discovered.
         </div>
       )}
       {error && <div className="p-4 text-red-700 rounded-md bg-red-50">{error}</div>}

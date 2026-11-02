@@ -1,7 +1,7 @@
-import type { Address } from "viem";
+import { type Address, zeroAddress } from "viem";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { ETH_ADDRESS, USDC_ETHEREUM, USDC_OPTIMISM, WALLET } from "../../../test/test-helpers";
-import { fetchZerionTokenBalances, resetZerionRateLimiter } from "./zerion";
+import { USDC_ETHEREUM, USDC_OPTIMISM, WALLET } from "../../../test/test-helpers";
+import { DISCOVERY_TTL_MS, discoverZerionTokens, resetZerionRateLimiter, ZERION_TIMEOUT_MS } from "./zerion";
 
 const mockApiKey = "test-api-key";
 const mockFetch = vi.fn();
@@ -56,10 +56,11 @@ const mockOk = (positions: ReturnType<typeof pos>[]) =>
 const mockFail = (status: number, statusText: string) =>
   mockFetch.mockResolvedValueOnce({ ok: false, status, statusText });
 
-describe("zerion", () => {
+describe("zerion discovery", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     resetZerionRateLimiter();
+    localStorage.clear();
     vi.stubEnv("VITE_ZERION_API_KEY", mockApiKey);
   });
 
@@ -68,330 +69,189 @@ describe("zerion", () => {
     vi.unstubAllEnvs();
   });
 
-  describe("fetchZerionTokenBalances", () => {
-    test("returns empty array when no addresses provided", async () => {
-      expect(await fetchZerionTokenBalances([])).toEqual([]);
-      expect(mockFetch).not.toHaveBeenCalled();
-    });
+  describe("discoverZerionTokens", () => {
+    test("returns held tokens with metadata and no amounts", async () => {
+      mockOk([pos(), pos({ chainId: "optimism", address: USDC_OPTIMISM })]);
 
-    test("fetches token balances for single address", async () => {
-      mockOk([pos()]);
+      const result = await discoverZerionTokens(WALLET);
 
-      const result = await fetchZerionTokenBalances([WALLET]);
-
-      expect(result).toHaveLength(1);
-      expect(result[0]).toMatchObject({
-        symbol: "USDC",
-        chainId: 1,
-        walletAddress: WALLET,
-        decimals: 6,
-      });
-    });
-
-    test("fetches token balances for multiple addresses", async () => {
-      const wallet2 = "0x2222222222222222222222222222222222222222" as Address;
-      mockOk([pos()]);
-      mockOk([pos({ chainId: "base", symbol: "WETH", decimals: 18, price: 2000 })]);
-
-      const result = await fetchZerionTokenBalances([WALLET, wallet2]);
-
-      expect(result).toHaveLength(2);
-      expect(mockFetch).toHaveBeenCalled();
-    });
-
-    test("filters out tokens with USD value less than $0.01", async () => {
-      mockOk([pos({ quantity: "100.0" }), pos({ symbol: "DUST", quantity: "0.000001", price: 0.001 })]);
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].symbol).toBe("USDC");
-    });
-
-    test("filters out non-displayable positions", async () => {
-      mockOk([pos({ displayable: true }), pos({ symbol: "HIDDEN", quantity: "1000.0", displayable: false })]);
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].symbol).toBe("USDC");
-    });
-
-    test("handles positions from multiple chains", async () => {
-      mockOk([
-        pos({ chainId: "ethereum" }),
-        pos({ chainId: "optimism", address: USDC_OPTIMISM, quantity: "50.0" }),
-        pos({ chainId: "arbitrum", symbol: "ARB", quantity: "500.0", price: 0.5 }),
+      expect(result).toEqual([
+        { chainId: 1, token: USDC_ETHEREUM, symbol: "USDC", name: "USD Coin", decimals: 6 },
+        { chainId: 10, token: USDC_OPTIMISM, symbol: "USDC", name: "USD Coin", decimals: 6 },
       ]);
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-
-      expect(result).toHaveLength(3);
-      expect(result.find((t) => t.chainId === 1)).toBeDefined();
-      expect(result.find((t) => t.chainId === 10)).toBeDefined();
-      expect(result.find((t) => t.chainId === 42161)).toBeDefined();
     });
 
-    test("normalizes Polygon native token address to zeroAddress", async () => {
+    test("queries one wallet, all supported chains, simple positions only", async () => {
+      mockOk([]);
+
+      await discoverZerionTokens(WALLET);
+
+      const url = new URL(mockFetch.mock.calls[0][0]);
+      expect(url.pathname).toContain(`/v1/wallets/${WALLET}/positions/`);
+      expect(url.searchParams.get("filter[chain_ids]")?.split(",")).toEqual(
+        expect.arrayContaining(["ethereum", "optimism", "arbitrum", "base", "polygon", "unichain", "linea", "xdai"]),
+      );
+      expect(url.searchParams.get("filter[positions]")).toBe("only_simple");
+      expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe(`Basic ${btoa(`${mockApiKey}:`)}`);
+    });
+
+    test("maps native coins to zeroAddress, including Polygon's 0x…1010", async () => {
       mockOk([
+        pos({ symbol: "ETH", address: null, decimals: 18, quantity: "1", price: 2000 }),
         pos({
           chainId: "polygon",
           symbol: "POL",
-          name: "POL",
           address: "0x0000000000000000000000000000000000001010",
           decimals: 18,
+          quantity: "10",
           price: 0.5,
         }),
       ]);
 
-      const result = await fetchZerionTokenBalances([WALLET]);
+      const result = await discoverZerionTokens(WALLET);
 
-      expect(result[0].token).toBe(ETH_ADDRESS);
-      expect(result[0].chainId).toBe(137);
+      expect(result.map((t) => [t.chainId, t.token])).toEqual([
+        [1, zeroAddress],
+        [137, zeroAddress],
+      ]);
     });
 
-    test("handles native tokens with null address", async () => {
-      mockOk([pos({ symbol: "ETH", name: "Ethereum", address: null, decimals: 18, price: 2000 })]);
+    test("skips dust, non-displayable and unsupported-chain positions", async () => {
+      mockOk([
+        pos({ quantity: "0.001", price: 1 }),
+        pos({ displayable: false }),
+        pos({ chainId: "solana" }),
+        pos({ chainId: "optimism", address: USDC_OPTIMISM }),
+      ]);
 
-      const result = await fetchZerionTokenBalances([WALLET]);
+      const result = await discoverZerionTokens(WALLET);
 
-      expect(result[0].token).toBe(ETH_ADDRESS);
-      expect(result[0].symbol).toBe("ETH");
+      expect(result.map((t) => t.chainId)).toEqual([10]);
     });
 
-    test("skips positions from unsupported chains", async () => {
-      mockOk([pos(), pos({ chainId: "solana", symbol: "SOL", price: 100 })]);
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].symbol).toBe("USDC");
+    test("dedupes the same token reported twice", async () => {
+      mockOk([pos(), pos()]);
+      expect(await discoverZerionTokens(WALLET)).toHaveLength(1);
     });
 
-    test("handles API errors gracefully and returns empty array", async () => {
+    test("returns [] without a request when no API key is set", async () => {
+      vi.stubEnv("VITE_ZERION_API_KEY", "");
+      expect(await discoverZerionTokens(WALLET)).toEqual([]);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    test("throws on HTTP errors so the caller can retry", async () => {
       mockFail(500, "Internal Server Error");
-      expect(await fetchZerionTokenBalances([WALLET])).toEqual([]);
-    });
-
-    test("handles network errors gracefully", async () => {
-      mockFetch.mockRejectedValueOnce(new Error("Network error"));
-      expect(await fetchZerionTokenBalances([WALLET])).toEqual([]);
-    });
-
-    test("handles partial failures across multiple addresses", async () => {
-      const wallet2 = "0x2222222222222222222222222222222222222222" as Address;
-      mockOk([pos()]);
-      mockFail(429, "Too Many Requests");
-
-      const result = await fetchZerionTokenBalances([WALLET, wallet2]);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].walletAddress).toBe(WALLET);
-    });
-
-    test("converts token amounts correctly using decimals", async () => {
-      mockOk([pos({ quantity: "1234.567890" })]);
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-
-      expect(result[0].amount).toBe(1234567890n);
-      expect(result[0].decimals).toBe(6);
-    });
-
-    test("handles tokens with 18 decimals", async () => {
-      mockOk([pos({ symbol: "WETH", quantity: "1.5", decimals: 18, price: 2000 })]);
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-
-      expect(result[0].amount).toBe(1500000000000000000n);
-    });
-
-    test("handles empty response from Zerion", async () => {
-      mockOk([]);
-      expect(await fetchZerionTokenBalances([WALLET])).toEqual([]);
-    });
-
-    test("sends correct authorization header", async () => {
-      mockOk([]);
-
-      await fetchZerionTokenBalances([WALLET]);
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          headers: { Authorization: `Basic ${btoa(`${mockApiKey}:`)}`, accept: "application/json" },
-        }),
-      );
-    });
-
-    test("includes correct query parameters in API call", async () => {
-      mockOk([]);
-
-      await fetchZerionTokenBalances([WALLET]);
-
-      const [url] = mockFetch.mock.calls[0] as [string, unknown];
-      expect(url).toContain("currency=usd");
-      expect(url).toContain("filter%5Bchain_ids%5D=");
-    });
-
-    test("handles icon URL and missing icon gracefully", async () => {
-      mockOk([pos({ iconUrl: "https://example.com/icon.png" }), pos({ symbol: "NO_ICON", iconUrl: null })]);
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-      expect(result).toHaveLength(2);
-    });
-
-    test("handles position with zero price", async () => {
-      mockOk([pos({ symbol: "UNKNOWN", quantity: "1000.0", price: 0 })]);
-      expect(await fetchZerionTokenBalances([WALLET])).toHaveLength(0);
-    });
-
-    test("handles all supported chains", async () => {
-      mockOk([
-        pos({ chainId: "ethereum", symbol: "ETH", price: 2000 }),
-        pos({ chainId: "optimism", symbol: "OP" }),
-        pos({ chainId: "arbitrum", symbol: "ARB", price: 0.5 }),
-        pos({ chainId: "base", symbol: "BASE" }),
-        pos({ chainId: "polygon", symbol: "POL", price: 0.3 }),
-        pos({ chainId: "linea", symbol: "LNX", price: 5 }),
-      ]);
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-
-      expect(result).toHaveLength(6);
-      expect(result.map((t) => t.chainId).sort()).toEqual([1, 10, 137, 42161, 59144, 8453].sort());
-    });
-
-    test("correctly checksums token addresses", async () => {
-      mockOk([pos({ address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" })]);
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-
-      expect(result[0].token).toBe(USDC_ETHEREUM);
-    });
-
-    test("uses chain from relationships when available", async () => {
-      const position = pos();
-      // Override attributes.chain to test that relationships takes precedence
-      position.attributes.chain = "different-chain";
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve(res([position])),
-      });
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-      expect(result[0].chainId).toBe(1);
-    });
-
-    test("falls back to attributes.chain when relationships missing", async () => {
-      const position = pos({ chainId: "optimism", address: USDC_OPTIMISM });
-      // Remove relationships to test fallback to attributes.chain
-      delete position.relationships;
-      position.attributes.chain = "optimism";
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve(res([position])),
-      });
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-      expect(result[0].chainId).toBe(10);
-    });
-
-    test("skips positions missing chain identifier or implementation", async () => {
-      const validPosition = pos();
-      validPosition.attributes.chain = "ethereum";
-
-      const noChainPosition = pos({ symbol: "UNK", name: "Unknown", decimals: 18, quantity: "1000.0" });
-      delete noChainPosition.relationships;
-      noChainPosition.attributes.fungible_info.implementations = [];
-
-      const wrongImplPosition = pos({
-        symbol: "WEIRD",
-        name: "Weird",
-        decimals: 18,
-        quantity: "1000.0",
-        chainId: "ethereum",
-        address: WALLET,
-      });
-      wrongImplPosition.attributes.fungible_info.implementations = [
-        { chain_id: "other", address: WALLET, decimals: 18 },
-      ];
-      wrongImplPosition.attributes.chain = "ethereum";
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve(res([validPosition, noChainPosition, wrongImplPosition])),
-      });
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].symbol).toBe("USDC");
-    });
-
-    test("preserves token name in result", async () => {
-      mockOk([pos({ name: "USD Coin" })]);
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-      expect(result[0].name).toBe("USD Coin");
-    });
-
-    test("handles very large and very small token amounts", async () => {
-      mockOk([
-        pos({ symbol: "SHIB", quantity: "999999999999999.123456789", decimals: 18, price: 0.00001 }),
-        pos({ symbol: "BTC", quantity: "0.000001", decimals: 18, price: 50000 }),
-      ]);
-
-      const result = await fetchZerionTokenBalances([WALLET]);
-
-      expect(result).toHaveLength(2);
-      expect(result.find((t) => t.symbol === "SHIB")?.amount).toBeGreaterThan(0n);
+      await expect(discoverZerionTokens(WALLET)).rejects.toThrow(/Zerion API error: 500/);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe("error handling", () => {
-    test("falls back to native balances when API key is missing", async () => {
-      vi.stubEnv("VITE_ZERION_API_KEY", "");
-      // Without a real RPC transport configured in tests, the fallback errors out
-      // per-chain and resolves to an empty array — the important behavior is that
-      // it does NOT throw, so the table can still render in local dev.
-      await expect(fetchZerionTokenBalances([WALLET])).resolves.toEqual([]);
-    });
-
-    test("handles malformed JSON response", async () => {
-      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.reject(new Error("Invalid JSON")) });
-      expect(await fetchZerionTokenBalances([WALLET])).toEqual([]);
-    });
-
-    test("handles timeout errors", async () => {
-      mockFetch.mockRejectedValueOnce(new Error("ETIMEDOUT"));
-      expect(await fetchZerionTokenBalances([WALLET])).toEqual([]);
-    });
-
-    test("handles invalid token quantity gracefully", async () => {
-      const validPosition = pos({ symbol: "VALID", name: "Valid Token" });
-      validPosition.attributes.chain = "ethereum";
-
-      const invalidPosition = pos({ symbol: "INVALID", name: "Invalid Token", address: WALLET });
-      invalidPosition.attributes.quantity.numeric = "not_a_number";
-      invalidPosition.attributes.chain = "ethereum";
-
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve(res([validPosition, invalidPosition])),
+  describe("unresponsive Zerion", () => {
+    /** A fetch that never answers, but honours its abort signal like the real one. */
+    const hang = (_url: string, init: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
       });
 
-      const result = await fetchZerionTokenBalances([WALLET]);
+    test("a hung request fails after the timeout instead of pending forever", async () => {
+      vi.useFakeTimers();
+      mockFetch.mockImplementation(hang);
 
-      expect(result).toHaveLength(1);
-      expect(result[0].symbol).toBe("VALID");
+      const promise = discoverZerionTokens(WALLET);
+      const assertion = expect(promise).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(ZERION_TIMEOUT_MS);
+      await assertion;
     });
 
-    test("handles invalid input (null addresses)", async () => {
-      // @ts-expect-error - intentionally passing null to test error handling
-      await expect(fetchZerionTokenBalances(null)).rejects.toThrow();
+    test("a timed-out attempt isn't cached, so the next one asks again", async () => {
+      vi.useFakeTimers();
+      mockFetch.mockImplementationOnce(hang);
+      const first = discoverZerionTokens(WALLET);
+      const assertion = expect(first).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(ZERION_TIMEOUT_MS);
+      await assertion;
+
+      mockOk([pos()]);
+      const second = discoverZerionTokens(WALLET);
+      await vi.runAllTimersAsync();
+      expect(await second).toHaveLength(1);
+    });
+
+    test("time spent waiting for a rate-limit slot doesn't count against the timeout", async () => {
+      vi.useFakeTimers();
+      // Two fast wallets take this second's slots; the third waits ~1s for its slot.
+      mockOk([]);
+      mockOk([]);
+      let sentAt = 0;
+      mockFetch.mockImplementationOnce((_url: string, init: RequestInit) => {
+        sentAt = Date.now();
+        return new Promise((resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+          // Answers 9.5s after being sent: within the budget only if the wait isn't counted.
+          setTimeout(() => resolve({ ok: true, json: () => Promise.resolve(res([pos()])) }), ZERION_TIMEOUT_MS - 500);
+        });
+      });
+
+      const start = Date.now();
+      const done = Promise.all(
+        ["0x1111111111111111111111111111111111111111", "0x2222222222222222222222222222222222222222", WALLET].map((a) =>
+          discoverZerionTokens(a),
+        ),
+      );
+      await vi.runAllTimersAsync();
+
+      expect((await done)[2]).toHaveLength(1);
+      expect(sentAt - start).toBeGreaterThanOrEqual(1_000);
+    });
+  });
+
+  describe("cache", () => {
+    test("asks Zerion once per wallet, then serves from storage", async () => {
+      mockOk([pos()]);
+
+      const first = await discoverZerionTokens(WALLET);
+      const second = await discoverZerionTokens(WALLET);
+
+      expect(second).toEqual(first);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    test("cache is per address, case-insensitive", async () => {
+      mockOk([pos()]);
+      await discoverZerionTokens(WALLET);
+      await discoverZerionTokens(WALLET.toLowerCase());
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      mockOk([]);
+      await discoverZerionTokens("0x1111111111111111111111111111111111111111");
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    test("refetches once the entry is older than the TTL", async () => {
+      vi.useFakeTimers();
+      mockOk([pos()]);
+      await discoverZerionTokens(WALLET);
+
+      vi.setSystemTime(Date.now() + DISCOVERY_TTL_MS + 1);
+      mockOk([]);
+      expect(await discoverZerionTokens(WALLET)).toEqual([]);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    test("does not cache failures", async () => {
+      mockFail(503, "Service Unavailable");
+      await expect(discoverZerionTokens(WALLET)).rejects.toThrow();
+
+      mockOk([pos()]);
+      expect(await discoverZerionTokens(WALLET)).toHaveLength(1);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    test("ignores a corrupt cache entry", async () => {
+      localStorage.setItem(`octocash:zerion-discovery:v1:${WALLET.toLowerCase()}`, "{not json");
+      mockOk([pos()]);
+      expect(await discoverZerionTokens(WALLET)).toHaveLength(1);
     });
   });
 
@@ -412,11 +272,11 @@ describe("zerion", () => {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(res([pos()])) });
       });
 
-      const promise = fetchZerionTokenBalances(addresses);
+      const promise = Promise.all(addresses.map((a) => discoverZerionTokens(a)));
       await vi.runAllTimersAsync();
       const result = await promise;
 
-      expect(result).toHaveLength(5);
+      expect(result.flat()).toHaveLength(5);
       expect(callTimes).toHaveLength(5);
       // First two go out immediately, then pairs once per second.
       expect(callTimes[1] - callTimes[0]).toBe(0);
@@ -442,11 +302,10 @@ describe("zerion", () => {
         return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(res([pos()])) });
       });
 
-      const promise = fetchZerionTokenBalances([WALLET]);
+      const promise = discoverZerionTokens(WALLET);
       await vi.runAllTimersAsync();
-      const result = await promise;
 
-      expect(result).toHaveLength(1);
+      expect(await promise).toHaveLength(1);
       expect(mockFetch).toHaveBeenCalledTimes(2);
       expect(callTimes[1] - callTimes[0]).toBeGreaterThanOrEqual(3_000);
     });
@@ -464,30 +323,23 @@ describe("zerion", () => {
         return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(res([pos()])) });
       });
 
-      const promise = fetchZerionTokenBalances([WALLET]);
+      const promise = discoverZerionTokens(WALLET);
       await vi.runAllTimersAsync();
-      const result = await promise;
 
-      expect(result).toHaveLength(1);
+      expect(await promise).toHaveLength(1);
       expect(callTimes[1] - callTimes[0]).toBeGreaterThanOrEqual(1_000);
       expect(callTimes[2] - callTimes[1]).toBeGreaterThanOrEqual(2_000);
     });
 
-    test("gives up after max retries and returns no tokens", async () => {
+    test("gives up after max retries", async () => {
       vi.useFakeTimers();
       mockFetch.mockResolvedValue({ ok: false, status: 429, statusText: "Too Many Requests", headers: new Headers() });
 
-      const promise = fetchZerionTokenBalances([WALLET]);
+      const promise = discoverZerionTokens(WALLET);
+      const assertion = expect(promise).rejects.toThrow(/429/);
       await vi.runAllTimersAsync();
-
-      expect(await promise).toEqual([]);
+      await assertion;
       expect(mockFetch).toHaveBeenCalledTimes(5); // 1 attempt + 4 retries
-    });
-
-    test("does not retry other errors", async () => {
-      mockFail(500, "Internal Server Error");
-      expect(await fetchZerionTokenBalances([WALLET])).toEqual([]);
-      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -1,11 +1,54 @@
-import { type Address, formatUnits, getAddress, parseUnits, zeroAddress } from "viem";
-import { chainIdToZerionId, chains } from "~/data/supported-chains";
-import { getPublicClient } from "../public-client";
-import type { TokenAmount } from "../types";
+import { type Address, getAddress, zeroAddress } from "viem";
+import { chainIdToZerionId } from "~/data/supported-chains";
 
-function isEffectivelyZero(balance: number): boolean {
-  return balance < 0.01; // Consider anything less than $0.01 as effectively zero
+/**
+ * Zerion is used for token *discovery* only: which tokens a wallet holds,
+ * including ones outside Delora's catalog. Balances themselves are always
+ * read over RPC (see ./token-balances.ts), so each wallet costs one Zerion
+ * request per {@link DISCOVERY_TTL_MS}, not one per refresh.
+ */
+
+/** A token Zerion reports the wallet holding. No amount: balances come from RPC. */
+export interface DiscoveredToken {
+  chainId: number;
+  token: Address;
+  symbol: string;
+  name: string;
+  decimals: number;
 }
+
+/** How long a wallet's discovery result is reused, across reloads. */
+export const DISCOVERY_TTL_MS = 24 * 60 * 60 * 1_000;
+const STORAGE_PREFIX = "octocash:zerion-discovery:v1:";
+
+interface CachedDiscovery {
+  fetchedAt: number;
+  tokens: DiscoveredToken[];
+}
+
+function readCache(address: string): DiscoveredToken[] | null {
+  try {
+    const raw = globalThis.localStorage?.getItem(STORAGE_PREFIX + address.toLowerCase());
+    if (!raw) return null;
+    const cached = JSON.parse(raw) as CachedDiscovery;
+    if (!Array.isArray(cached.tokens) || Date.now() - cached.fetchedAt > DISCOVERY_TTL_MS) return null;
+    return cached.tokens;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(address: string, tokens: DiscoveredToken[]): void {
+  try {
+    const entry: CachedDiscovery = { fetchedAt: Date.now(), tokens };
+    globalThis.localStorage?.setItem(STORAGE_PREFIX + address.toLowerCase(), JSON.stringify(entry));
+  } catch {
+    // Storage full or blocked: discovery still works, it just isn't reused.
+  }
+}
+
+/** Tokens below this Zerion-reported USD value aren't worth watching. */
+const DISCOVERY_DUST_USD = 0.01;
 
 // Zerion API Types
 interface ZerionFungibleInfo {
@@ -68,6 +111,8 @@ const ZERION_WINDOW_MS = 1_000;
 const ZERION_MAX_RETRIES = 4;
 const ZERION_BASE_BACKOFF_MS = 1_000;
 const ZERION_MAX_BACKOFF_MS = 30_000;
+/** Per-attempt cap, so a hung Zerion request fails instead of pending forever. */
+export const ZERION_TIMEOUT_MS = 10_000;
 
 // Start times of the most recently reserved request slots, in order.
 let reservedSlots: number[] = [];
@@ -105,7 +150,21 @@ function parseRetryAfter(header: string | null): number | null {
 async function zerionFetch(url: string, init: RequestInit): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
     await acquireZerionSlot();
-    const response = await fetch(url, init);
+    // Timer starts once the slot is ours, so queueing behind the rate limiter
+    // doesn't eat into the attempt's budget.
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(new Error(`Zerion request timed out after ${ZERION_TIMEOUT_MS}ms`)),
+      ZERION_TIMEOUT_MS,
+    );
+    let response: Response;
+    try {
+      response = await fetch(url, { ...init, signal: controller.signal });
+    } catch (error) {
+      throw controller.signal.aborted ? controller.signal.reason : error;
+    } finally {
+      clearTimeout(timer);
+    }
     if (response.status !== 429 || attempt >= ZERION_MAX_RETRIES) return response;
 
     const backoff = Math.min(ZERION_BASE_BACKOFF_MS * 2 ** attempt, ZERION_MAX_BACKOFF_MS);
@@ -114,165 +173,74 @@ async function zerionFetch(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
-/** Fallback: fetch native coin balances via RPC for local testing without a Zerion API key. */
-async function fetchNativeBalances(addresses: string[]): Promise<TokenAmount[]> {
-  const supportedChainIds = Object.keys(chainIdToZerionId).map(Number);
-
-  const results = await Promise.all(
-    addresses.flatMap((walletAddress) =>
-      supportedChainIds.map(async (chainId): Promise<TokenAmount | null> => {
-        try {
-          const publicClient = getPublicClient(chainId);
-          const balance = await publicClient.getBalance({ address: walletAddress as Address });
-          if (balance === 0n) return null;
-          const chain = chains[chainId as keyof typeof chains];
-          return {
-            token: zeroAddress,
-            amount: balance,
-            chainId,
-            walletAddress: walletAddress as Address,
-            symbol: chain.nativeCurrency.symbol,
-            decimals: chain.nativeCurrency.decimals,
-            name: chain.nativeCurrency.name,
-          };
-        } catch (error) {
-          console.error(`Failed to fetch native balance for ${walletAddress} on chain ${chainId}:`, error);
-          return null;
-        }
-      }),
-    ),
-  );
-
-  return results.filter((t): t is TokenAmount => t !== null);
-}
-
-/** Fetch token balances from Zerion (fast, indexed data) */
-export async function fetchZerionTokenBalances(addresses: string[]): Promise<TokenAmount[]> {
-  if (addresses.length === 0) return [];
-
+/**
+ * Discover which tokens `walletAddress` holds on our supported chains.
+ *
+ * Served from a per-address localStorage cache for {@link DISCOVERY_TTL_MS};
+ * otherwise one rate-limited Zerion request. Returns `[]` without a request
+ * when no API key is configured. Throws on HTTP errors (nothing is cached),
+ * so the caller can retry later.
+ */
+export async function discoverZerionTokens(walletAddress: string): Promise<DiscoveredToken[]> {
   const apiKey = import.meta.env.VITE_ZERION_API_KEY;
-  if (!apiKey) {
-    console.warn("VITE_ZERION_API_KEY is not set; falling back to native coin balances via RPC");
-    return fetchNativeBalances(addresses);
+  if (!apiKey) return [];
+
+  const cached = readCache(walletAddress);
+  if (cached) return cached;
+
+  const url = new URL(`https://cors.blossom.deno.net/v0/https://api.zerion.io/v1/wallets/${walletAddress}/positions/`);
+  url.searchParams.append("filter[chain_ids]", Object.values(chainIdToZerionId).join(","));
+  url.searchParams.append("filter[positions]", "only_simple");
+  url.searchParams.append("currency", "usd");
+
+  const response = await zerionFetch(url.toString(), {
+    headers: {
+      // Basic auth: "API_KEY:" base64-encoded.
+      Authorization: `Basic ${btoa(`${apiKey}:`)}`,
+      accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Zerion API error: ${response.status} ${response.statusText}`);
   }
 
-  // Get all Zerion chain identifiers
-  const zerionChainIds = Object.values(chainIdToZerionId).join(",");
+  const data: ZerionPositionsResponse = await response.json();
+  const tokens = new Map<string, DiscoveredToken>();
 
-  const results = await Promise.all(
-    addresses.map(async (walletAddress) => {
-      try {
-        // Zerion API endpoint with filters for simple positions only
-        const url = new URL(
-          `https://cors.blossom.deno.net/v0/https://api.zerion.io/v1/wallets/${walletAddress}/positions/`,
-        );
-        url.searchParams.append("filter[chain_ids]", zerionChainIds);
-        url.searchParams.append("filter[positions]", "only_simple");
-        url.searchParams.append("currency", "usd");
+  for (const position of data.data ?? []) {
+    try {
+      const { attributes } = position;
+      if (!attributes.flags.displayable) continue;
+      if ((attributes.value ?? 0) < DISCOVERY_DUST_USD) continue;
 
-        // Encode API key for Basic authentication (API_KEY: format, then base64)
-        const encodedAuth = btoa(`${apiKey}:`);
+      const zerionChainId = position.relationships?.chain?.data?.id || attributes.chain;
+      if (!zerionChainId) continue;
+      const chainId = Number(Object.entries(chainIdToZerionId).find(([, id]) => id === zerionChainId)?.[0]);
+      if (!chainId) continue; // not one of our chains
 
-        const response = await zerionFetch(url.toString(), {
-          headers: {
-            Authorization: `Basic ${encodedAuth}`,
-            accept: "application/json",
-          },
-        });
+      const implementation = attributes.fungible_info.implementations.find((impl) => impl.chain_id === zerionChainId);
+      if (!implementation) continue;
 
-        if (!response.ok) {
-          throw new Error(`Zerion API error: ${response.status} ${response.statusText}`);
-        }
+      // Zerion reports Polygon's native POL as 0x…1010; we use zeroAddress.
+      const token =
+        implementation.address &&
+        !(chainId === 137 && implementation.address === "0x0000000000000000000000000000000000001010")
+          ? getAddress(implementation.address)
+          : zeroAddress;
 
-        const data: ZerionPositionsResponse = await response.json();
-        const tokens: TokenAmount[] = [];
+      tokens.set(`${chainId}:${token.toLowerCase()}`, {
+        chainId,
+        token,
+        symbol: attributes.fungible_info.symbol,
+        name: attributes.fungible_info.name,
+        decimals: implementation.decimals,
+      });
+    } catch (error) {
+      console.error(`Error processing Zerion position ${position.id}:`, error);
+    }
+  }
 
-        for (const position of data.data) {
-          try {
-            const { attributes } = position;
-
-            // Skip non-displayable positions
-            if (!attributes.flags.displayable) {
-              continue;
-            }
-
-            // Determine which chain this position belongs to
-            const positionChainId =
-              position.relationships?.chain?.data?.id || // From relationships (JSON:API standard)
-              attributes.chain; // Or from attributes directly
-
-            if (!positionChainId) {
-              console.warn("Position missing chain identifier:", position.id);
-              continue;
-            }
-
-            // Find the numeric chain ID from Zerion's chain identifier
-            const chainId = Object.entries(chainIdToZerionId).find(([, zerionId]) => zerionId === positionChainId)?.[0];
-
-            if (!chainId) {
-              // This chain is not in our supported list, skip it
-              continue;
-            }
-
-            // Get the implementation for THIS specific chain only
-            const implementation = attributes.fungible_info.implementations.find(
-              (impl) => impl.chain_id === positionChainId,
-            );
-
-            if (!implementation) {
-              console.warn(`No implementation found for chain ${positionChainId} on position ${position.id}`);
-              continue;
-            }
-
-            // Get quantity - this is specific to THIS chain for THIS position
-            const quantity = attributes.quantity.numeric;
-
-            // Normalize token address
-            // Zerion uses 0x0000000000000000000000000000000000001010 for Polygon native token (POL)
-            // but we use zeroAddress (0x0000000000000000000000000000000000000000)
-            const tokenAddress =
-              implementation.address &&
-              !(Number(chainId) === 137 && implementation.address === "0x0000000000000000000000000000000000001010")
-                ? getAddress(implementation.address)
-                : zeroAddress;
-
-            const decimals = implementation.decimals;
-            const amount = parseUnits(quantity, decimals);
-
-            // Drop dust against Zerion's own price — this is a conservative
-            // pre-filter to keep the response small. Live USD values are
-            // sourced from the Delora-backed price context downstream; we
-            // don't propagate Zerion's price onto the returned token.
-            const zerionPrice = attributes.price ?? 0;
-            const zerionUsd = Number(formatUnits(amount, decimals)) * zerionPrice;
-            if (isEffectivelyZero(zerionUsd)) {
-              continue;
-            }
-
-            const tokenAmount: TokenAmount = {
-              token: tokenAddress,
-              amount,
-              chainId: Number(chainId),
-              walletAddress: walletAddress as Address,
-              symbol: attributes.fungible_info.symbol,
-              decimals,
-              name: attributes.fungible_info.name,
-            };
-
-            tokens.push(tokenAmount);
-          } catch (error) {
-            console.error(`Error processing token ${position.id}:`, error);
-          }
-        }
-
-        return tokens;
-      } catch (error) {
-        console.error(`Error fetching Zerion tokens for ${walletAddress}:`, error);
-        return [] as TokenAmount[];
-      }
-    }),
-  );
-
-  // Flatten results from all addresses (sorting happens in the UI)
-  return results.flat();
+  const result = [...tokens.values()];
+  writeCache(walletAddress, result);
+  return result;
 }

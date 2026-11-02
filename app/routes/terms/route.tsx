@@ -111,7 +111,7 @@ export default function TermsOfService() {
               <strong>WalletConnect</strong> — wallet connection relay protocol used for connecting compatible wallets;
             </li>
             <li>
-              <strong>Zerion</strong> — portfolio data provider used to retrieve token balances and positions;
+              <strong>Zerion</strong> — portfolio data provider used to discover which tokens your wallets hold;
             </li>
             <li>
               <strong>Delora</strong> — a token routing and swap protocol used for token swaps;

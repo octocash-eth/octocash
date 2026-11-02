@@ -118,8 +118,9 @@ export default function PrivacyPolicy() {
           <h3>Data services</h3>
           <ul>
             <li>
-              <strong>Zerion</strong> — a portfolio data provider used to fetch your token balances and positions across
-              supported chains. Receives your wallet address(es) and IP address.
+              <strong>Zerion</strong> — a portfolio data provider used to discover which tokens your wallets hold across
+              supported chains (balances themselves are read directly from the blockchain). Queried at most once a day
+              per wallet; receives your wallet address(es) and IP address.
             </li>
           </ul>
           <p>
