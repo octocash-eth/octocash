@@ -52,6 +52,16 @@ export function omnibridgeStageMessage(direction: "exit" | "enter", ready: numbe
 }
 
 /**
+ * Friendly line for a cross-chain swap delivery wait: Delora's adapter mints
+ * or transfers the output on the destination chain, and delivery is confirmed
+ * by the receiver's token balance — ground truth, no provider status API.
+ */
+export function crosschainStageMessage(chainId: number, ready: number, total: number): string {
+  if (total <= 1) return `Waiting for delivery on ${chainNameOf(chainId)}…`;
+  return `Deliveries received ${ready}/${total}`;
+}
+
+/**
  * Friendly line for the Safe submission lifecycle. The confirmations phase is
  * the long-lived one — it names how many co-signers have approved so the user
  * knows who they're waiting on (the plan pauses recoverable if it outlasts

@@ -197,6 +197,47 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
         </>
       );
     }
+    case "crosschain-swap": {
+      const outputToken = result?.actualOutput ?? step.outputToken;
+      const destChainId = step.outputToken.chainId;
+      const destChainName = chains[destChainId as keyof typeof chains]?.name || `Chain ${destChainId}`;
+      const inputWallets = [...new Set(step.inputTokens.map((t) => t.walletAddress))];
+      const consolidatedInputs = consolidateTokenAmounts(step.inputTokens);
+
+      return (
+        <>
+          <span className="text-foreground">{isPast ? "Swapped" : isExecuting ? "Swapping" : "Swap"}</span>{" "}
+          {consolidatedInputs.map((token, index) => {
+            const key = `${token.token}`;
+            return (
+              <span key={key}>
+                {index > 0 && <span className="text-muted-foreground"> + </span>}
+                <TokenAmountInlineFor token={token} />
+              </span>
+            );
+          })}{" "}
+          <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />{" "}
+          <span className="text-muted-foreground">→</span> <TokenAmountInlineFor token={outputToken} />{" "}
+          <span className="text-muted-foreground">on</span> <ChainBadge chainId={destChainId} name={destChainName} />{" "}
+          <span className="text-xs text-muted-foreground/80 inline-flex items-center gap-1">
+            (
+            {inputWallets.map((wallet) => (
+              <span key={wallet}>
+                {inputWallets.indexOf(wallet) > 0 && ","}
+                <AddressInline address={wallet} />
+              </span>
+            ))}
+            {!inputWallets.includes(outputToken.walletAddress) && (
+              <>
+                {" → "}
+                <AddressInline address={outputToken.walletAddress} />
+              </>
+            )}
+            )
+          </span>
+        </>
+      );
+    }
     // A gnosis-bridge renders exactly like a CCTP bridge: source/destination
     // chains and wallets are read from the step itself.
     case "gnosis-bridge":
@@ -241,6 +282,15 @@ function ActionContent({ step, result }: { step: TransactionStep; result?: StepR
         <>
           <span className="text-foreground">
             {isPast ? "Waited for" : isExecuting ? "Waiting for" : "Wait for"} the Omnibridge
+          </span>{" "}
+          <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />
+        </>
+      );
+    case "crosschain-wait":
+      return (
+        <>
+          <span className="text-foreground">
+            {isPast ? "Waited for" : isExecuting ? "Waiting for" : "Wait for"} delivery
           </span>{" "}
           <span className="text-muted-foreground">on</span> <ChainBadge chainId={step.chainId} name={chainName} />
         </>

@@ -4,16 +4,29 @@ import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ETH_ADDRESS, makeToken, WALLET } from "../../test/test-helpers";
 
-import { buildDeloraCalls, clearSwapQuoteCache, executeDeloraSwap, getSwapQuote } from "./delora";
+import {
+  buildDeloraCalls,
+  type CrossChainDeliveryRecord,
+  clearSwapQuoteCache,
+  executeDeloraCrossChainSwap,
+  executeDeloraSwap,
+  getCrossChainSwapQuoteWithLegs,
+  getSwapQuote,
+  waitForCrossChainDelivery,
+} from "./delora";
 
 type SendCallsReturn = [Hex, Log[][]];
 type SendCallsFn = Mock<(...args: unknown[]) => Promise<SendCallsReturn>>;
 
-// Mock the public-client module
+// Mock the public-client module. `retryOnRateLimit` must ride along: the
+// delivery wait reads balances through tokens.ts, which wraps ERC20 reads in
+// it — the mock replaces the whole module, so a missing export would make
+// every balance read throw.
 vi.mock("./public-client", () => ({
   getPublicClient: vi.fn(() => ({
     readContract: vi.fn().mockResolvedValue(0n), // Default: no allowance
   })),
+  retryOnRateLimit: vi.fn((fn: () => unknown) => fn()),
 }));
 
 const DELORA_ENTRYPOINT = "0x0000000000000000000000000000000000000e01" as const;
@@ -925,6 +938,265 @@ describe("delora", () => {
       await executeDeloraSwap([mockTokenUSDC], mockTokenNative, mockSendCalls);
 
       expect(mockSendCalls).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("getCrossChainSwapQuoteWithLegs", () => {
+    const RECEIVER = "0x0000000000000000000000000000000000000909" as Address;
+    const outputOnPolygon = {
+      token: mockTokenUSDT.token,
+      chainId: 137,
+      symbol: mockTokenUSDT.symbol,
+      decimals: mockTokenUSDT.decimals,
+      walletAddress: RECEIVER,
+    };
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.clearAllMocks();
+    });
+
+    test("quotes with the destination chain and receiver, returning output and floor", async () => {
+      const fetchMock = stubQuoteFetch();
+
+      const { output, legs, minOutputAmount } = await getCrossChainSwapQuoteWithLegs(
+        mockTokenUSDC,
+        outputOnPolygon,
+        RECEIVER,
+      );
+
+      const params = quoteParams(fetchMock);
+      expect(params.get("originChainId")).toBe("1");
+      expect(params.get("destinationChainId")).toBe("137");
+      expect(params.get("receiverAddress")).toBe(RECEIVER);
+      expect(output.amount).toBe(3000000n);
+      expect(output.chainId).toBe(137);
+      expect(minOutputAmount).toBe(2985000n);
+      expect(legs).toHaveLength(1);
+    });
+
+    test("sums outputs and floors across input tokens", async () => {
+      stubQuoteFetch();
+
+      const { output, minOutputAmount } = await getCrossChainSwapQuoteWithLegs(
+        [mockTokenUSDC, mockTokenUSDT],
+        { ...outputOnPolygon, token: "0x0000000000000000000000000000000000000007" as Address },
+        RECEIVER,
+      );
+
+      expect(output.amount).toBe(6000000n);
+      expect(minOutputAmount).toBe(2n * 2985000n);
+    });
+
+    test("caches like the planning path — identical inputs issue one request", async () => {
+      const fetchMock = stubQuoteFetch();
+
+      await getCrossChainSwapQuoteWithLegs(mockTokenUSDC, outputOnPolygon, RECEIVER);
+      await getCrossChainSwapQuoteWithLegs(mockTokenUSDC, outputOnPolygon, RECEIVER);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    test("rejects same-chain requests", async () => {
+      stubQuoteFetch();
+
+      await expect(
+        getCrossChainSwapQuoteWithLegs(mockTokenUSDC, { ...outputOnPolygon, chainId: 1 }, RECEIVER),
+      ).rejects.toThrow("Cross-chain swap requires different origin and destination chains");
+    });
+
+    test("wraps API errors with ExternalAPIError", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({
+          ok: false,
+          status: 500,
+          text: async () => "Internal Server Error",
+        })),
+      );
+
+      await expect(getCrossChainSwapQuoteWithLegs(mockTokenUSDC, outputOnPolygon, RECEIVER)).rejects.toThrow(
+        "ExternalAPIError:",
+      );
+    });
+  });
+
+  describe("executeDeloraCrossChainSwap", () => {
+    const RECEIVER = "0x0000000000000000000000000000000000000909" as Address;
+    const outputOnPolygon = makeToken(USDT_TOKEN, 0n, 137, { walletAddress: RECEIVER, symbol: "USDT" });
+    let mockPublicClient: { readContract: Mock; simulateCalls: Mock };
+    let mockSendCalls: SendCallsFn;
+
+    beforeEach(async () => {
+      const { getPublicClient } = await import("./public-client");
+      mockPublicClient = {
+        readContract: vi.fn().mockResolvedValue(0n), // Default: no allowance
+        simulateCalls: vi.fn().mockRejectedValue(new Error("the method eth_simulateV1 does not exist")),
+      };
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient as Partial<PublicClient> as PublicClient);
+      mockSendCalls = vi.fn(async () => ["0xtxhash" as Hex, [[]]]) as unknown as SendCallsFn;
+      stubQuoteFetch();
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.clearAllMocks();
+    });
+
+    test("sends fresh receiver-tagged quotes and returns the quoted amounts", async () => {
+      const fetchMock = stubQuoteFetch();
+
+      const result = await executeDeloraCrossChainSwap([mockTokenUSDC], outputOnPolygon, RECEIVER, mockSendCalls);
+
+      const params = quoteParams(fetchMock);
+      expect(params.get("destinationChainId")).toBe("137");
+      expect(params.get("receiverAddress")).toBe(RECEIVER);
+      expect(result.expectedAmount).toBe(3000000n);
+      expect(result.minDeliveredAmount).toBe(2985000n);
+      expect(result.transactionHash).toBe("0xtxhash");
+      expect(mockSendCalls).toHaveBeenCalledWith(
+        "crosschain-swap",
+        mockTokenUSDC.chainId,
+        mockTokenUSDC.walletAddress,
+        expect.any(Array),
+        "atomic-steps",
+        undefined,
+      );
+    });
+
+    test("throws when the destination chain equals the source chain", async () => {
+      await expect(
+        executeDeloraCrossChainSwap([mockTokenUSDC], { ...outputOnPolygon, chainId: 1 }, RECEIVER, mockSendCalls),
+      ).rejects.toThrow("Cross-chain swap destination chain must differ from the source chain");
+      expect(mockSendCalls).not.toHaveBeenCalled();
+    });
+
+    test("pre-flight simulation is revert-check only — no delivery assertion cross-chain", async () => {
+      // A same-chain swap simulating zero Transfer logs to the wallet would
+      // abort "below the quoted minimum". Cross-chain, the output lands later
+      // on another chain, so a successful simulation with no local delivery
+      // must still send.
+      mockPublicClient.simulateCalls.mockResolvedValue({
+        results: [makeSimResult(), makeSimResult()],
+      });
+
+      const result = await executeDeloraCrossChainSwap([mockTokenUSDC], outputOnPolygon, RECEIVER, mockSendCalls);
+
+      expect(mockSendCalls).toHaveBeenCalledTimes(1);
+      expect(result.transactionHash).toBe("0xtxhash");
+    });
+
+    test("still aborts when the origin-side simulation reverts", async () => {
+      mockPublicClient.simulateCalls.mockResolvedValue({
+        results: [
+          makeSimResult(),
+          { status: "failure" as const, error: new Error("SlippageExceeded"), data: "0x" as Hex, gasUsed: 0n },
+        ],
+      });
+
+      await expect(
+        executeDeloraCrossChainSwap([mockTokenUSDC], outputOnPolygon, RECEIVER, mockSendCalls),
+      ).rejects.toThrow("Swap simulation reverted: SlippageExceeded");
+      expect(mockSendCalls).not.toHaveBeenCalled();
+    });
+
+    test("fails open when the RPC lacks eth_simulateV1 support", async () => {
+      // beforeEach default: simulateCalls rejects with method-not-found.
+      const result = await executeDeloraCrossChainSwap([mockTokenUSDC], outputOnPolygon, RECEIVER, mockSendCalls);
+
+      expect(mockSendCalls).toHaveBeenCalledTimes(1);
+      expect(result.transactionHash).toBe("0xtxhash");
+    });
+  });
+
+  describe("waitForCrossChainDelivery", () => {
+    const RECEIVER = "0x0000000000000000000000000000000000000909" as Address;
+    let mockPublicClient: { readContract: Mock };
+
+    const makeRecord = (overrides?: Partial<CrossChainDeliveryRecord>): CrossChainDeliveryRecord => ({
+      txHash: "0xaaa",
+      fromChainId: 1,
+      toChainId: 137,
+      toAddress: RECEIVER,
+      tokenAddress: USDT_TOKEN,
+      baselineUnits: "1000",
+      minDeliveredUnits: "2985000",
+      expectedUnits: "3000000",
+      ...overrides,
+    });
+
+    beforeEach(async () => {
+      const { getPublicClient } = await import("./public-client");
+      mockPublicClient = { readContract: vi.fn() };
+      vi.mocked(getPublicClient).mockReturnValue(mockPublicClient as Partial<PublicClient> as PublicClient);
+    });
+
+    afterEach(() => {
+      vi.clearAllMocks();
+    });
+
+    test("resolves with the measured delta once the balance crosses baseline + min", async () => {
+      mockPublicClient.readContract.mockResolvedValue(1000n + 2990000n);
+
+      const delivered = await waitForCrossChainDelivery([makeRecord()], 1_000, 5);
+
+      expect(delivered).toBe(2990000n);
+    });
+
+    test("clamps the reported delta to the expected amount (unrelated inflows discarded)", async () => {
+      mockPublicClient.readContract.mockResolvedValue(1000n + 50_000_000n);
+
+      const delivered = await waitForCrossChainDelivery([makeRecord()], 1_000, 5);
+
+      expect(delivered).toBe(3000000n);
+    });
+
+    test("groups records on one destination balance: earliest baseline + summed thresholds", async () => {
+      // Two origin legs converge on the same (chain, receiver, token). The
+      // second record's baseline (5000) already contains the first delivery,
+      // so the group must measure from the EARLIEST baseline (1000) — else
+      // the first delivery would be double-counted into the threshold.
+      const records = [
+        makeRecord({ baselineUnits: "1000", minDeliveredUnits: "100", expectedUnits: "110" }),
+        makeRecord({ txHash: "0xbbb", baselineUnits: "5000", minDeliveredUnits: "200", expectedUnits: "220" }),
+      ];
+
+      // Below combined threshold (1000 + 300) on the first poll, above on the second.
+      mockPublicClient.readContract.mockResolvedValueOnce(1250n).mockResolvedValue(1330n);
+
+      const delivered = await waitForCrossChainDelivery(records, 1_000, 5);
+
+      expect(delivered).toBe(330n);
+    });
+
+    test("keeps polling through transient RPC errors", async () => {
+      mockPublicClient.readContract.mockRejectedValueOnce(new Error("rpc down")).mockResolvedValue(1000n + 2985000n);
+
+      const delivered = await waitForCrossChainDelivery([makeRecord()], 1_000, 5);
+
+      expect(delivered).toBe(2985000n);
+    });
+
+    test("reports progress per poll and resolves instantly on a retry after delivery", async () => {
+      mockPublicClient.readContract.mockResolvedValue(1000n + 3000000n);
+      const onProgress = vi.fn();
+
+      await waitForCrossChainDelivery([makeRecord()], 1_000, 5, onProgress);
+
+      expect(onProgress).toHaveBeenCalledWith(1, 1);
+    });
+
+    test("throws CROSSCHAIN_DELIVERY_TIMEOUT when the deadline passes", async () => {
+      mockPublicClient.readContract.mockResolvedValue(1000n);
+
+      await expect(waitForCrossChainDelivery([makeRecord()], 30, 5)).rejects.toThrow("CROSSCHAIN_DELIVERY_TIMEOUT");
+    });
+
+    test("returns zero immediately for an empty record set", async () => {
+      const delivered = await waitForCrossChainDelivery([], 1_000, 5);
+
+      expect(delivered).toBe(0n);
+      expect(mockPublicClient.readContract).not.toHaveBeenCalled();
     });
   });
 });

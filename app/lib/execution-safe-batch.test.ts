@@ -119,6 +119,7 @@ beforeEach(() => {
       { to: "0x00000000000000000000000000000000000000ff" as Address, data: "0x12345678" as const }, // swap stand-in
     ],
     minOutputAmount: 1n,
+    expectedOutputAmount: 1n,
   }));
   vi.mocked(simulateSwapDelivery).mockResolvedValue(undefined);
   sendCallsMock.mockResolvedValue(["0xgrouptx", [[]]]);

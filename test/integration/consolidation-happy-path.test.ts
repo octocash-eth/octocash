@@ -28,10 +28,26 @@ vi.mock("../../app/lib/public-client", () => ({
 vi.mock("../../app/lib/gas", () => ({
   getNativeBalance: vi.fn().mockResolvedValue(2n ** 128n),
 }));
+// The route comparison prices its candidates through the Delora oracle; keep
+// it deterministic (and offline) here. Tests that exercise the direct route
+// override the price map per-test.
+vi.mock("../../app/lib/api/delora", () => ({
+  fetchDeloraPrices: vi.fn().mockResolvedValue(new Map()),
+  deloraPriceKey: (chainId: number, address: string) => `${chainId}:${address.toLowerCase()}`,
+}));
 
+import { zeroAddress } from "viem";
 import { planConsolidation } from "../../app/lib/planning";
 import { executeConsolidationPlan } from "../../app/lib/execution";
-import { executeDeloraSwap, getSwapQuote, getSwapQuoteWithLegs } from "../../app/lib/delora";
+import {
+  executeDeloraCrossChainSwap,
+  executeDeloraSwap,
+  getCrossChainSwapQuoteWithLegs,
+  getSwapQuote,
+  getSwapQuoteWithLegs,
+  waitForCrossChainDelivery,
+} from "../../app/lib/delora";
+import { fetchDeloraPrices } from "../../app/lib/api/delora";
 import { getBridgeFee, executeCCTPBurn, retrieveAttestations, executeCCTPMint } from "../../app/lib/cctp";
 import { stringify, parse } from "superjson";
 
@@ -326,5 +342,124 @@ describe("Scenario 1: Happy Path - Multi-Chain Consolidation", () => {
       const successIndex = states.indexOf(successState!);
       expect(executingIndex).toBeLessThan(successIndex);
     }
+  });
+});
+
+/**
+ * Direct cross-chain route: when a single Delora cross-chain swap nets more
+ * than swap → CCTP → claim → swap, the planner emits crosschain-swap +
+ * crosschain-wait and execution delivers straight to the destination wallet.
+ */
+describe("Direct cross-chain route - plan then execute", () => {
+  let mockWalletClient: WalletClient<HttpTransport, Chain, Account>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    mockWalletClient = {
+      account: { address: WALLET } as Account,
+      chain: { id: 1 } as Chain,
+    } as WalletClient<HttpTransport, Chain, Account>;
+
+    vi.mocked(getSwapQuoteWithLegs).mockImplementation(async (input, outputToken) => ({
+      output: await getSwapQuote(input, outputToken),
+      legs: [],
+    }));
+    // Conversion probe / bridged final swap: ~999 USDC → 0.00985 WBTC (~$985).
+    vi.mocked(getSwapQuote).mockResolvedValue({
+      token: WBTC_ADDRESS,
+      amount: 985_000n,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    });
+    vi.mocked(getBridgeFee).mockResolvedValue(1_000_000n); // $1 CCTP fee
+    vi.mocked(fetchDeloraPrices).mockResolvedValue(
+      new Map<`${number}:${string}`, number>([
+        [`1:${WBTC_ADDRESS.toLowerCase()}`, 100_000],
+        [`1:${zeroAddress}`, 3_000],
+        [`10:${zeroAddress}`, 3_000],
+      ]),
+    );
+    // The direct quote nets ~$999 — beats the bridged ~$985.
+    vi.mocked(getCrossChainSwapQuoteWithLegs).mockResolvedValue({
+      output: {
+        token: WBTC_ADDRESS,
+        amount: 999_000n,
+        chainId: 1,
+        walletAddress: WALLET,
+        symbol: "WBTC",
+        decimals: 8,
+      },
+      legs: [],
+      minOutputAmount: 994_000n,
+    });
+    vi.mocked(executeDeloraCrossChainSwap).mockResolvedValue({
+      expectedAmount: 999_000n,
+      minDeliveredAmount: 994_000n,
+      transactionHash: "0xdirectswap",
+    });
+    vi.mocked(waitForCrossChainDelivery).mockResolvedValue(998_500n);
+  });
+
+  test("plans a direct route and executes it end-to-end with a persisted delivery record", async () => {
+    const sourceTokens: TokenAmount[] = [
+      makeToken(USDC_OPTIMISM, 1_000_000_000n, 10, { walletAddress: WALLET }), // 1000 USDC on Optimism
+    ];
+    const destinationToken = {
+      token: WBTC_ADDRESS,
+      chainId: 1,
+      walletAddress: WALLET,
+      symbol: "WBTC",
+      decimals: 8,
+    };
+
+    const plan = await planConsolidation(sourceTokens, destinationToken, [WALLET]);
+    expect(plan.map((s) => s.type)).toEqual(["crosschain-swap", "crosschain-wait"]);
+
+    const state: ConsolidationState = {
+      id: "direct-happy-path",
+      plan,
+      currentStepIndex: 0,
+      status: "ready",
+      results: {},
+      sourceTokens,
+      destinationToken,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+
+    const { finalValue: finalState } = await consumeGenerator(executeConsolidationPlan(state, mockWalletClient));
+
+    expect(finalState.status).toBe("completed");
+
+    const swapResult = finalState.results[plan[0].id];
+    expect(swapResult.status).toBe("success");
+    expect(swapResult.transactionHash).toBe("0xdirectswap");
+    expect(swapResult.actualOutput?.amount).toBe(999_000n); // quoted, pre-delivery
+
+    // The delivery record survived into metadata for the wait step / reloads.
+    const deliveries = finalState.metadata?.crosschain?.deliveries;
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries?.[0]).toMatchObject({
+      txHash: "0xdirectswap",
+      fromChainId: 10,
+      toChainId: 1,
+      toAddress: WALLET,
+      tokenAddress: WBTC_ADDRESS,
+      minDeliveredUnits: "994000",
+      expectedUnits: "999000",
+    });
+
+    // The wait adopted the measured delivery.
+    const waitResult = finalState.results[plan[1].id];
+    expect(waitResult.status).toBe("success");
+    expect(waitResult.actualOutput?.amount).toBe(998_500n);
+
+    // Nothing CCTP-related ever ran.
+    expect(executeCCTPBurn).not.toHaveBeenCalled();
+    expect(retrieveAttestations).not.toHaveBeenCalled();
+    expect(executeCCTPMint).not.toHaveBeenCalled();
   });
 });

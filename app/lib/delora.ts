@@ -16,7 +16,7 @@ import type { SendCallsFn } from "~/lib/send-calls";
 import type { TokenAmount } from "~/lib/types";
 import { deloraBaseUrl, deloraHeaders } from "./api/delora-client";
 import { getPublicClient } from "./public-client";
-import { buildERC20ApprovalCalls } from "./tokens";
+import { buildERC20ApprovalCalls, getTokenBalance } from "./tokens";
 
 /**
  * Response of Delora's `GET /v1/quotes`. The quote is the executable
@@ -176,19 +176,25 @@ function dedupeSwapInputs(inputTokens: TokenAmount[]): TokenAmount[] {
  * bursting Delora's per-IP rate limit.
  *
  * `minOutputAmount` is the sum of the per-quote on-chain slippage floors —
- * the least the wallet should receive across all swap calls combined. It
- * feeds the pre-flight delivery check in {@link simulateSwapDelivery}.
+ * the least the receiver should get across all swap calls combined. It feeds
+ * the pre-flight delivery check in {@link simulateSwapDelivery} (same-chain)
+ * and the delivery record's landed threshold (cross-chain, where
+ * `receiverAddress` names the destination-chain recipient and
+ * `expectedOutputAmount` — the sum of quoted outputs — is the amount the
+ * plan carries forward, since origin receipts can't reveal it).
  */
 export async function buildDeloraCalls(
   tokensToSwap: TokenAmount[],
   tokenOut: TokenAmount,
-): Promise<{ calls: Call[]; minOutputAmount: bigint }> {
+  receiverAddress?: Address,
+): Promise<{ calls: Call[]; minOutputAmount: bigint; expectedOutputAmount: bigint }> {
   const calls: Call[] = [];
   let minOutputAmount = 0n;
+  let expectedOutputAmount = 0n;
   for (const input of dedupeSwapInputs(tokensToSwap)) {
     // Nothing to swap for this address; a zero-amount quote would be rejected.
     if (input.amount <= 0n) continue;
-    const { quote } = await fetchSwapQuote(input, tokenOut);
+    const { quote } = await fetchSwapQuote(input, tokenOut, receiverAddress);
     // The integrator fee is already baked into this calldata by Delora (see
     // `fetchSwapQuote`), so the swap is sent verbatim. The spender for the
     // approval is Delora's per-chain entrypoint; `calldata.to` can differ
@@ -203,8 +209,9 @@ export async function buildDeloraCalls(
     // A quote missing its floor contributes 0 rather than failing the swap —
     // the delivery check just gets weaker for that leg.
     minOutputAmount += BigInt(quote.minOutputAmount ?? "0");
+    expectedOutputAmount += BigInt(quote.outputAmount);
   }
-  return { calls, minOutputAmount };
+  return { calls, minOutputAmount, expectedOutputAmount };
 }
 
 /**
@@ -241,6 +248,13 @@ interface SimulatedCallResult {
  *
  * This is a point-in-time check — pool state can move between simulation and
  * inclusion — so it complements the on-chain floor rather than replacing it.
+ *
+ * Cross-chain quotes (`tokenOut.chainId !== chainId`) get a revert check
+ * only: the output lands later on the destination chain, so neither Transfer
+ * logs nor the origin wallet's balance delta can verify delivery here. The
+ * quote's `minOutputAmount` floor (enforced by the adapter's settlement) and
+ * the destination-side balance wait ({@link waitForCrossChainDelivery})
+ * carry the delivery guarantee instead.
  */
 export async function simulateSwapDelivery(
   chainId: number,
@@ -250,6 +264,21 @@ export async function simulateSwapDelivery(
   minOutputAmount: bigint,
 ): Promise<void> {
   if (calls.length === 0 || minOutputAmount <= 0n) return;
+
+  if (tokenOut.chainId !== chainId) {
+    try {
+      const client = getPublicClient(chainId);
+      const { results } = await client.simulateCalls({ account: wallet, calls });
+      const failed = (results as readonly SimulatedCallResult[]).find((r) => r.status === "failure");
+      if (failed) {
+        throw new Error(`Swap simulation reverted: ${failed.error?.message ?? "execution reverted"}`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Swap simulation reverted:")) throw error;
+      console.warn("[delora] Pre-flight simulation unavailable; relying on on-chain minOutputAmount.", error);
+    }
+    return;
+  }
 
   const isNativeOut = isAddressEqual(tokenOut.token, zeroAddress);
   let outcome: { simulatedOutput: bigint } | { revertReason: string } | undefined;
@@ -342,6 +371,46 @@ export async function executeDeloraSwap(
   const amount = deriveSwapOutputAmount(flattenedLogs as Log[], tokenOut);
 
   return { amount, transactionHash };
+}
+
+/**
+ * Executes a Delora cross-chain swap: origin-chain `[approval?, swap]` calls
+ * whose output is delivered by Delora's adapter to `receiver` on
+ * `tokenOut.chainId`. Cross-chain sibling of {@link executeDeloraSwap}, with
+ * two deliberate differences:
+ * - the pre-flight simulation is a revert check only (delivery happens later
+ *   on another chain — see {@link simulateSwapDelivery});
+ * - the origin receipt carries no output Transfer, so the returned
+ *   `expectedAmount`/`minDeliveredAmount` come from the fresh quotes; actual
+ *   delivery is confirmed by {@link waitForCrossChainDelivery} against a
+ *   {@link CrossChainDeliveryRecord}.
+ */
+export async function executeDeloraCrossChainSwap(
+  tokensIn: TokenAmount[],
+  tokenOut: TokenAmount,
+  receiver: Address,
+  sendCalls: SendCallsFn,
+  retryHints?: Parameters<SendCallsFn>[5],
+): Promise<{ expectedAmount: bigint; minDeliveredAmount: bigint; transactionHash: string }> {
+  const chainId = tokensIn[0].chainId;
+  const wallet = tokensIn[0].walletAddress;
+
+  for (const t of tokensIn) {
+    // All tokens must be on the same chain and come from the same wallet
+    if (t.chainId !== chainId || t.walletAddress !== wallet) {
+      throw new Error("Tokens are not on the same chain or do not come from the same wallet");
+    }
+  }
+
+  if (tokenOut.chainId === chainId) {
+    throw new Error("Cross-chain swap destination chain must differ from the source chain");
+  }
+
+  const { calls, minOutputAmount, expectedOutputAmount } = await buildDeloraCalls(tokensIn, tokenOut, receiver);
+  await simulateSwapDelivery(chainId, wallet, calls, tokenOut, minOutputAmount);
+  const [transactionHash] = await sendCalls("crosschain-swap", chainId, wallet, calls, "atomic-steps", retryHints);
+
+  return { expectedAmount: expectedOutputAmount, minDeliveredAmount: minOutputAmount, transactionHash };
 }
 
 /**
@@ -440,6 +509,46 @@ export async function getSwapQuoteWithLegs(
     }
   }
 
+  return quoteSwapLegs(inputTokens, outputToken);
+}
+
+/**
+ * Cross-chain sibling of {@link getSwapQuoteWithLegs}: quote each input token
+ * on its origin chain directly into `outputToken` on a different chain, with
+ * Delora delivering to `receiverAddress` there. Planning-only (cached, like
+ * the same-chain path); execution re-quotes via
+ * {@link executeDeloraCrossChainSwap}.
+ *
+ * Also returns the summed `minOutputAmount` slippage floor — the landed
+ * threshold a `crosschain-swap` step's delivery record is built from.
+ */
+export async function getCrossChainSwapQuoteWithLegs(
+  input: TokenAmount | TokenAmount[],
+  outputToken: Omit<TokenAmount, "amount">,
+  receiverAddress: Address,
+): Promise<{ output: TokenAmount; legs: DeloraSwapLeg[]; minOutputAmount: bigint }> {
+  const inputTokens = Array.isArray(input) ? input : [input];
+
+  for (const token of inputTokens) {
+    if (token.chainId === outputToken.chainId) {
+      throw new Error("Cross-chain swap requires different origin and destination chains");
+    }
+  }
+
+  return quoteSwapLegs(inputTokens, outputToken, receiverAddress);
+}
+
+/**
+ * Shared body of the planning-time quote entry points. Chain-shape
+ * validation stays in the public wrappers; this handles the same-wallet
+ * check, per-address dedupe, sequential cached quoting, and the
+ * RateLimitError/ExternalAPIError classification.
+ */
+async function quoteSwapLegs(
+  inputTokens: TokenAmount[],
+  outputToken: Omit<TokenAmount, "amount">,
+  receiverAddress?: Address,
+): Promise<{ output: TokenAmount; legs: DeloraSwapLeg[]; minOutputAmount: bigint }> {
   // Validate all inputs are from the same wallet
   const firstWallet = inputTokens[0].walletAddress;
   for (const token of inputTokens) {
@@ -450,6 +559,7 @@ export async function getSwapQuoteWithLegs(
 
   try {
     let outputAmount = 0n;
+    let minOutputAmount = 0n;
     const legs: DeloraSwapLeg[] = [];
     for (const token of dedupeSwapInputs(inputTokens)) {
       // Nothing to swap for this address; a zero-amount quote would be rejected.
@@ -458,8 +568,9 @@ export async function getSwapQuoteWithLegs(
       // integrator fee (deducted from the input side), so it's used as-is.
       // Planning-only, so cached: an auto-retried plan reuses quotes that
       // already succeeded instead of re-sweeping every token.
-      const { quote, fetchedAt } = await fetchSwapQuote(token, outputToken, undefined, { cache: true });
+      const { quote, fetchedAt } = await fetchSwapQuote(token, outputToken, receiverAddress, { cache: true });
       outputAmount += BigInt(quote.outputAmount);
+      minOutputAmount += BigInt(quote.minOutputAmount ?? "0");
       legs.push({
         input: token,
         call: {
@@ -478,6 +589,7 @@ export async function getSwapQuoteWithLegs(
         amount: outputAmount,
       },
       legs,
+      minOutputAmount,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Delora quote failed";
@@ -568,4 +680,110 @@ export async function getDeloraRefuelQuote(
 function isRateLimitError(error: unknown): boolean {
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
   return msg.includes("(429)") || msg.includes("rate_limit");
+}
+
+/**
+ * A sent cross-chain swap, persisted in
+ * `ConsolidationState.metadata.crosschain.deliveries` so the `crosschain-wait`
+ * step can confirm delivery (including across a page reload or retry — the
+ * pre-send baseline makes the check idempotent). The token-flavored sibling
+ * of {@link import("./gas-refuel").GasRefuelRecord}.
+ */
+export interface CrossChainDeliveryRecord {
+  txHash: string;
+  fromChainId: number;
+  toChainId: number;
+  toAddress: Address;
+  /** Destination token delivered; zeroAddress = native. */
+  tokenAddress: Address;
+  /** Receiver's destination-token balance BEFORE the origin tx was sent (base units, as string for persistence). */
+  baselineUnits: string;
+  /** Delivery threshold: landed when balance ≥ baseline + minDelivered (base units, as string). */
+  minDeliveredUnits: string;
+  /** Sum of the quotes' `outputAmount`s — the amount the plan carries forward. */
+  expectedUnits: string;
+}
+
+/**
+ * Wait until every sent cross-chain swap visibly lands on its destination
+ * chain. Records are grouped by (chain, receiver, token) — several origin
+ * legs typically converge on one destination balance — and a group counts as
+ * delivered when `balance ≥ min(baselines) + Σ minDelivered`. The earliest
+ * baseline is the reference: a delivery that landed before a later record's
+ * baseline was captured is already inside that later baseline, so summing
+ * per-record thresholds against it can't double-count.
+ *
+ * Returns the total delivered amount: per group, the measured balance delta
+ * clamped to `[Σ min, Σ expected]` (clamping discards unrelated inflows and
+ * floors transient RPC under-reads), summed across groups.
+ *
+ * Provider-agnostic and idempotent — a retry after the funds arrived
+ * resolves on the first poll.
+ *
+ * @param onProgress - invoked on every poll with (deliveredGroups, totalGroups)
+ * @throws `CROSSCHAIN_DELIVERY_TIMEOUT: ...` when the deadline passes (funds
+ *   may still arrive later — the caller's retry path re-enters this wait)
+ */
+export async function waitForCrossChainDelivery(
+  records: CrossChainDeliveryRecord[],
+  timeoutMs = 600_000,
+  pollIntervalMs = 5_000,
+  onProgress?: (delivered: number, total: number) => void,
+): Promise<bigint> {
+  interface DeliveryGroup {
+    toChainId: number;
+    toAddress: Address;
+    tokenAddress: Address;
+    baseline: bigint;
+    minDelivered: bigint;
+    expected: bigint;
+  }
+  const groups = new Map<string, DeliveryGroup>();
+  for (const record of records) {
+    const key = `${record.toChainId}:${getAddress(record.toAddress)}:${getAddress(record.tokenAddress)}`;
+    const existing = groups.get(key);
+    if (existing === undefined) {
+      groups.set(key, {
+        toChainId: record.toChainId,
+        toAddress: record.toAddress,
+        tokenAddress: record.tokenAddress,
+        baseline: BigInt(record.baselineUnits),
+        minDelivered: BigInt(record.minDeliveredUnits),
+        expected: BigInt(record.expectedUnits),
+      });
+    } else {
+      const baseline = BigInt(record.baselineUnits);
+      if (baseline < existing.baseline) existing.baseline = baseline;
+      existing.minDelivered += BigInt(record.minDeliveredUnits);
+      existing.expected += BigInt(record.expectedUnits);
+    }
+  }
+  if (groups.size === 0) return 0n;
+
+  const deadline = Date.now() + timeoutMs;
+  const landedDelta = new Map<string, bigint>();
+
+  while (Date.now() < deadline) {
+    for (const [key, group] of groups) {
+      if (landedDelta.has(key)) continue;
+      try {
+        const balance = await getTokenBalance(group.toChainId, group.toAddress, group.tokenAddress);
+        const delta = balance - group.baseline;
+        if (delta >= group.minDelivered) {
+          landedDelta.set(key, delta < group.expected ? delta : group.expected);
+        }
+      } catch {
+        // Transient RPC error — keep polling until the deadline.
+      }
+    }
+    onProgress?.(landedDelta.size, groups.size);
+    if (landedDelta.size === groups.size) {
+      let total = 0n;
+      for (const delta of landedDelta.values()) total += delta;
+      return total;
+    }
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
+  }
+
+  throw new Error("CROSSCHAIN_DELIVERY_TIMEOUT: Cross-chain swap delivery confirmation timed out");
 }

@@ -474,6 +474,35 @@ describe("gas-estimation", () => {
       expect(steps[0].estimatedGas).toBeUndefined();
     });
 
+    test("skips crosschain-wait steps and budgets crosschain-swap like a swap", async () => {
+      const steps: TransactionStep[] = [
+        {
+          id: "cx",
+          type: "crosschain-swap",
+          status: "pending",
+          chainId: 1,
+          inputTokens: [baseToken()],
+          outputToken: baseToken({ chainId: 137 }),
+        },
+        {
+          id: "cx-wait",
+          type: "crosschain-wait",
+          status: "pending",
+          chainId: 137,
+          inputTokens: [baseToken({ chainId: 137 })],
+          outputToken: baseToken({ chainId: 137 }),
+        },
+      ];
+
+      await attachGasEstimates(steps, ctx);
+
+      // Same origin-side shape as a one-token ERC20 swap:
+      // (erc20-approval 65k + swap 500k) × 1.3.
+      expect(steps[0].estimatedGas?.gasUnits).toBe(734_500n);
+      // The wait costs nothing — no estimate at all.
+      expect(steps[1].estimatedGas).toBeUndefined();
+    });
+
     test("uses default fee/price/symbol when chain missing from context", async () => {
       const steps: TransactionStep[] = [
         {
